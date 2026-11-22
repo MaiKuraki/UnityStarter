@@ -74,10 +74,10 @@ Message ids are `17000` to `17999`, inside the shared module range `1000` to `29
 `RegisterMessageCatalog` submits it through `TryRegisterProtocolManifest`. Registration commits the
 range and every descriptor together or rejects the manifest, so a partial catalog cannot appear.
 
-Protocol values are `public static readonly` rather than `const`: contract ids and version
-constants are read at runtime instead of being inlined across assembly boundaries, and payload
+Protocol values are `public static readonly` rather than `const`: contract ids and schema
+hashes are read at runtime instead of being inlined across assembly boundaries, and payload
 defaults stay visible to consumers without recompiling literals. Changing a contract still needs a
-new `:vN` identity and a coordinated version window.
+new `:vN` identity and a coordinated protocol fingerprint.
 
 The schema fingerprint covers field names and types, not binary layout, so a serializer may change
 padding without breaking the handshake. Both peers exchange fingerprints before anything else. A

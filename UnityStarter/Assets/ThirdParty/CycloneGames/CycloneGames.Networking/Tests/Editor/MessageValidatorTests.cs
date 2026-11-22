@@ -273,9 +273,8 @@ namespace CycloneGames.Networking.Tests.Editor
 
             Assert.AreEqual((byte)'C', frame[NetworkWireProtocol.MagicOffset]);
             Assert.AreEqual((byte)'N', frame[NetworkWireProtocol.MagicOffset + 1]);
-            Assert.AreEqual(NetworkWireProtocol.CurrentVersion, frame[NetworkWireProtocol.VersionOffset]);
             Assert.AreEqual(NetworkWireProtocol.HeaderLength, frame[NetworkWireProtocol.HeaderLengthOffset]);
-            Assert.AreEqual(22, NetworkWireProtocol.HeaderLength);
+            Assert.AreEqual(21, NetworkWireProtocol.HeaderLength);
         }
 
         [Test]
@@ -293,16 +292,6 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.AreEqual(NetworkFrameResult.InvalidChecksum, NetworkFrameCodec.ValidateChecksum(readHeader, new ReadOnlySpan<byte>(readPayload.Array, readPayload.Offset, readPayload.Count)));
         }
 
-        [Test]
-        public void NetworkFrameCodec_Rejects_Unsupported_Version()
-        {
-            byte[] frame = new byte[NetworkWireProtocol.HeaderLength];
-            var header = new NetworkEnvelopeHeader(1200, NetworkChannel.Reliable, 0, 1, 0);
-            NetworkFrameCodec.WriteHeader(frame, 0, header);
-            frame[NetworkWireProtocol.VersionOffset] = unchecked((byte)(NetworkWireProtocol.CurrentVersion + 1));
-
-            Assert.AreEqual(NetworkFrameResult.UnsupportedVersion, NetworkFrameCodec.TryReadHeader(new ArraySegment<byte>(frame), out _));
-        }
 
         [Test]
         public void NetworkFrameCodec_Rejects_Trailing_Bytes()

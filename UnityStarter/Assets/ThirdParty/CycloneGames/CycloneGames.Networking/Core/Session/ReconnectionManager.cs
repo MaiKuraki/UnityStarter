@@ -19,7 +19,7 @@ namespace CycloneGames.Networking.Session
 
         bool HasReservation(int connectionId);
 
-        void OnClientDisconnected(int connectionId, double disconnectTime, ulong playerId, int protocolVersion,
+        void OnClientDisconnected(int connectionId, double disconnectTime, ulong playerId,
             out ReconnectToken token);
         bool TryReconnect(INetConnection newConnection, int originalConnectionId, in ReconnectToken token, double currentTime);
         void CancelReservation(int connectionId);
@@ -80,7 +80,7 @@ namespace CycloneGames.Networking.Session
             _maxReservations = maxReservations;
         }
 
-        public void OnClientDisconnected(int connectionId, double disconnectTime, ulong playerId, int protocolVersion,
+        public void OnClientDisconnected(int connectionId, double disconnectTime, ulong playerId,
             out ReconnectToken token)
         {
             if (connectionId <= 0)
@@ -100,12 +100,11 @@ namespace CycloneGames.Networking.Session
                 if (disconnectTime - existingSlot.DisconnectTime < ReconnectWindow)
                 {
                     if (existingSlot.State != ReconnectState.WaitingForReconnect
-                        || existingSlot.PlayerId != playerId
-                        || existingSlot.ProtocolVersion != protocolVersion)
+                        || existingSlot.PlayerId != playerId)
                     {
                         token = default;
                         throw new InvalidOperationException(
-                            "An active reconnect reservation already exists with different ownership, protocol, or state.");
+                            "An active reconnect reservation already exists with different ownership or state.");
                     }
 
                     token = existingSlot.Token;
@@ -124,12 +123,11 @@ namespace CycloneGames.Networking.Session
                 throw new InvalidOperationException("Reconnect reservation capacity is exhausted.");
             }
 
-            token = ReconnectToken.Create(connectionId, playerId, protocolVersion, GenerateNonce());
+            token = ReconnectToken.Create(connectionId, playerId, GenerateNonce());
             _reservedSlots[connectionId] = new ReconnectSlot
             {
                 OriginalConnectionId = connectionId,
                 PlayerId = playerId,
-                ProtocolVersion = protocolVersion,
                 Token = token,
                 DisconnectTime = disconnectTime,
                 State = ReconnectState.WaitingForReconnect
@@ -329,8 +327,6 @@ namespace CycloneGames.Networking.Session
                 return ReconnectRejectReason.InvalidToken;
             if (token.PlayerId != slot.PlayerId)
                 return ReconnectRejectReason.PlayerMismatch;
-            if (token.ProtocolVersion != slot.ProtocolVersion)
-                return ReconnectRejectReason.ProtocolMismatch;
             if (token.Nonce != slot.Token.Nonce)
                 return ReconnectRejectReason.InvalidToken;
             if (slot.PlayerId != 0UL && newConnection.PlayerId != slot.PlayerId)
@@ -360,7 +356,6 @@ namespace CycloneGames.Networking.Session
         {
             public int OriginalConnectionId;
             public ulong PlayerId;
-            public int ProtocolVersion;
             public ReconnectToken Token;
             public double DisconnectTime;
             public ReconnectState State;
@@ -401,29 +396,26 @@ namespace CycloneGames.Networking.Session
     {
         public readonly int OriginalConnectionId;
         public readonly ulong PlayerId;
-        public readonly int ProtocolVersion;
         public readonly ulong Nonce;
 
         public bool IsValid => Nonce != 0UL;
 
-        private ReconnectToken(int originalConnectionId, ulong playerId, int protocolVersion, ulong nonce)
+        private ReconnectToken(int originalConnectionId, ulong playerId, ulong nonce)
         {
             OriginalConnectionId = originalConnectionId;
             PlayerId = playerId;
-            ProtocolVersion = protocolVersion;
             Nonce = nonce;
         }
 
-        public static ReconnectToken Create(int originalConnectionId, ulong playerId, int protocolVersion, ulong nonce)
+        public static ReconnectToken Create(int originalConnectionId, ulong playerId, ulong nonce)
         {
-            return new ReconnectToken(originalConnectionId, playerId, protocolVersion, nonce);
+            return new ReconnectToken(originalConnectionId, playerId, nonce);
         }
 
         public bool Equals(ReconnectToken other)
         {
             return OriginalConnectionId == other.OriginalConnectionId
                    && PlayerId == other.PlayerId
-                   && ProtocolVersion == other.ProtocolVersion
                    && Nonce == other.Nonce;
         }
 
@@ -435,7 +427,6 @@ namespace CycloneGames.Networking.Session
             {
                 int hash = OriginalConnectionId;
                 hash = (hash * 397) ^ PlayerId.GetHashCode();
-                hash = (hash * 397) ^ ProtocolVersion;
                 hash = (hash * 397) ^ Nonce.GetHashCode();
                 return hash;
             }
@@ -451,7 +442,6 @@ namespace CycloneGames.Networking.Session
         Unauthenticated,
         InvalidToken,
         PlayerMismatch,
-        ProtocolMismatch,
         WindowExpired
     }
 }

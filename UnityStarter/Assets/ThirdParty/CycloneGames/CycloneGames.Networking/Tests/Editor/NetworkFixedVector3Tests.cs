@@ -5,13 +5,14 @@ namespace CycloneGames.Networking.Tests.Editor
 {
     public sealed class NetworkFixedVector3Tests
     {
+        private NetworkBufferPoolInstance _bufferPool = new NetworkBufferPoolInstance();
         [Test]
         public void FixedVector_RoundTrips_Exactly()
         {
             var original = new NetworkVector3(123.456f, -0.001f, 99999.5f);
             NetworkFixedVector3 fixedVector = NetworkFixedVector3.FromNetworkVector3(original);
 
-            NetworkBuffer buffer = NetworkBufferPool.Get();
+            NetworkBuffer buffer = _bufferPool.Get();
             try
             {
                 fixedVector.WriteTo(buffer);
@@ -43,7 +44,7 @@ namespace CycloneGames.Networking.Tests.Editor
         {
             var original = new NetworkVector3(10.0004f, -2.9996f, 0.5f);
 
-            NetworkBuffer buffer = NetworkBufferPool.Get();
+            NetworkBuffer buffer = _bufferPool.Get();
             try
             {
                 NetworkVector3Quantization.WriteQuantized(buffer, original);
@@ -65,7 +66,7 @@ namespace CycloneGames.Networking.Tests.Editor
         {
             var extreme = new NetworkVector3(3e10f, -3e10f, 0f);
 
-            NetworkBuffer buffer = NetworkBufferPool.Get();
+            NetworkBuffer buffer = _bufferPool.Get();
             try
             {
                 NetworkVector3Quantization.WriteQuantized(buffer, extreme);

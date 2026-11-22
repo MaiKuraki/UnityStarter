@@ -119,8 +119,7 @@ namespace CycloneGames.Networking.Security
                 envelope.PayloadLength,
                 envelope.Sequence,
                 envelope.Checksum,
-                envelope.Flags,
-                envelope.Version);
+                envelope.Flags);
             if (!header.IsSupported)
             {
                 writtenBytes = 0;

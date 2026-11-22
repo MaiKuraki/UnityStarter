@@ -527,8 +527,7 @@ namespace CycloneGames.GameplayAbilities.Networking
 
         private static bool MatchesBatch(in GASStateBatchChunk expected, in GASStateBatchChunk actual)
         {
-            return expected.ProtocolVersion == actual.ProtocolVersion &&
-                   expected.StreamEpoch == actual.StreamEpoch &&
+            return expected.StreamEpoch == actual.StreamEpoch &&
                    expected.BatchSequence == actual.BatchSequence &&
                    expected.Entity == actual.Entity &&
                    expected.Kind == actual.Kind &&

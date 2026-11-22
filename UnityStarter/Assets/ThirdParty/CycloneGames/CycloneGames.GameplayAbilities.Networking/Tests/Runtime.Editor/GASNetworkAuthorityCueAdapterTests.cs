@@ -67,7 +67,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
             Assert.That(
                 withoutIdentity.AuthoritativeStateVersion,
                 Is.EqualTo(state.StateVersion),
-                "Cue and full-state publishing must share the same local-to-wire version domain.");
+                "Cue and full-state publishing must share the same local-to-wire state sequence domain.");
             Assert.That(
                 identityMap.TryGetEffectId(
                     application.ActiveEffect.ReconciliationId,

@@ -7,7 +7,6 @@ namespace CycloneGames.GameplayAbilities.Networking
     public static class GameplayAbilitiesNetworkProtocol
     {
         public const string MessageOwner = "CycloneGames.GameplayAbilities";
-        public const byte ProtocolVersion = 1;
         public const ushort MessageIdBase = 10000;
         public const ushort MessageIdMax = 10999;
 
@@ -40,39 +39,39 @@ namespace CycloneGames.GameplayAbilities.Networking
             GASNetworkFeatureFlags.PredictionReconciliation |
             GASNetworkFeatureFlags.GameplayCues;
 
-        private const string HandshakeContractId = "GASNetworkHandshake:v1";
-        private const string AbilityCommandContractId = "GASAbilityCommand:v1";
-        private const string CommandResultContractId = "GASCommandResult:v1";
-        private const string StateBatchChunkContractId = "GASStateBatchChunk:v1";
-        private const string StateAcknowledgementContractId = "GASStateAcknowledgement:v1";
-        private const string ResyncRequestContractId = "GASResyncRequest:v1";
-        private const string CueExecutedContractId = "GASCueExecuted:v1";
+        private const string HandshakeContractId = "GASNetworkHandshake";
+        private const string AbilityCommandContractId = "GASAbilityCommand";
+        private const string CommandResultContractId = "GASCommandResult";
+        private const string StateBatchChunkContractId = "GASStateBatchChunk";
+        private const string StateAcknowledgementContractId = "GASStateAcknowledgement";
+        private const string ResyncRequestContractId = "GASResyncRequest";
+        private const string CueExecutedContractId = "GASCueExecuted";
 
         private const string HandshakeWireSchema =
-            "GASNetworkHandshake:v1|ProtocolFingerprint:u64le|WireSchemaFingerprint:u64le|" +
-            "ContentCatalogHash:u64le|GameplayTagManifestHash:u64le|Features:u16le|MinVersion:u8|Version:u8|size:36";
+            "GASNetworkHandshake|ProtocolFingerprint:u64le|WireSchemaFingerprint:u64le|" +
+            "ContentCatalogHash:u64le|GameplayTagManifestHash:u64le|Features:u16le|Reserved:u8|Reserved:u8|size:36";
         private const string AbilityCommandWireSchema =
-            "GASAbilityCommand:v1|Version:u8|Epoch:u32le|Sequence:u32le|Entity:u64le|Grant:u64le|" +
+            "GASAbilityCommand|Reserved:u8|Epoch:u32le|Sequence:u32le|Entity:u64le|Grant:u64le|" +
             "Kind:u8|TargetKind:u8|TargetCount:u8|" +
             "ActorList:TargetCount*u64le|SingleHit:Entity:u64le,Point:3*f32le,Normal:3*f32le," +
             "Distance:f32le,Surface:u64le,Flags:u8|base:28|max:284";
         private const string CommandResultWireSchema =
-            "GASCommandResult:v1|Version:u8|Epoch:u32le|Sequence:u32le|Entity:u64le|Grant:u64le|" +
+            "GASCommandResult|Reserved:u8|Epoch:u32le|Sequence:u32le|Entity:u64le|Grant:u64le|" +
             "CommandKind:u8|Status:u8|StateVersion:u64le|size:35";
         private const string StateBatchWireSchema =
-            "GASStateBatchChunk:v1|Version:u8|Epoch:u32le|BatchSequence:u32le|Entity:u64le|Kind:u8|" +
+            "GASStateBatchChunk|Reserved:u8|Epoch:u32le|BatchSequence:u32le|Entity:u64le|Kind:u8|" +
             "BaseVersion:u64le|StateVersion:u64le|LastCommand:u32le|ChunkIndex:u16le|ChunkCount:u16le|" +
             "Counts:6*u16le|Checksum:u64le|header:62|Ability:GrantingEffect:u64le,size:30|Attribute:25|" +
             "Effect:SourceEntity:u64le,SourceEpoch:u32le,SourceGrant:u64le,size:74|" +
             "EffectTag:18|EffectMagnitude:26|LooseTag:13,countMax:4096|max:1200";
         private const string StateAcknowledgementWireSchema =
-            "GASStateAcknowledgement:v1|Version:u8|Epoch:u32le|BatchSequence:u32le|Entity:u64le|" +
+            "GASStateAcknowledgement|Reserved:u8|Epoch:u32le|BatchSequence:u32le|Entity:u64le|" +
             "AppliedVersion:u64le|Checksum:u64le|size:33";
         private const string ResyncRequestWireSchema =
-            "GASResyncRequest:v1|Version:u8|Epoch:u32le|RequestSequence:u32le|Entity:u64le|" +
+            "GASResyncRequest|Reserved:u8|Epoch:u32le|RequestSequence:u32le|Entity:u64le|" +
             "ObservedVersion:u64le|ExpectedBatch:u32le|ObservedChecksum:u64le|Reason:u8|size:38";
         private const string CueExecutedWireSchema =
-            "GASCueExecuted:v1|Version:u8|Epoch:u32le|CueSequence:u32le|Entity:u64le|CueTag:u64le|" +
+            "GASCueExecuted|Reserved:u8|Epoch:u32le|CueSequence:u32le|Entity:u64le|CueTag:u64le|" +
             "Instigator:u64le|SourceEffect:u64le|SourceCommand:u32le|StateVersion:u64le|Event:u8|" +
             "Flags:u8|Magnitude:f32le|Location:3*f32le|Normal:3*f32le|size:83";
         private const string EnumWireSchema =
@@ -87,7 +86,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         public static readonly ulong ProtocolFingerprint = Module.Fingerprint;
 
         public static bool IsGameplayAbilitiesMessageId(ushort messageId) => Module.ContainsMessageId(messageId);
-        public static bool IsSupportedProtocolVersion(byte protocolVersion) => Module.IsSupportedProtocolVersion(protocolVersion);
+
         public static void RegisterMessageCatalog(INetworkMessageCatalog catalog) => Module.Register(catalog);
 
         public static GASNetworkHandshake CreateHandshake(ulong contentCatalogHash, ulong gameplayTagManifestHash)
@@ -107,9 +106,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 WireSchemaFingerprint,
                 contentCatalogHash,
                 gameplayTagManifestHash,
-                SupportedFeatures,
-                ProtocolVersion,
-                ProtocolVersion);
+                SupportedFeatures);
         }
 
         public static bool IsWellFormed(in GASNetworkHandshake handshake)
@@ -153,11 +150,6 @@ namespace CycloneGames.GameplayAbilities.Networking
                 return GASNetworkHandshakeResult.ProtocolFingerprintMismatch;
             }
 
-            if (protocol == NetworkHandshakeResult.VersionIncompatible)
-            {
-                return GASNetworkHandshakeResult.ProtocolVersionMismatch;
-            }
-
             if (protocol != NetworkHandshakeResult.Compatible)
             {
                 return GASNetworkHandshakeResult.Malformed;
@@ -188,8 +180,6 @@ namespace CycloneGames.GameplayAbilities.Networking
             var builder = new NetworkProtocolManifestBuilder(MessageOwner, MessageIdBase, MessageIdMax)
             {
                 ProtocolId = "CycloneGames.GameplayAbilities.Networking",
-                CurrentVersion = ProtocolVersion,
-                MinimumSupportedVersion = ProtocolVersion
             };
 
             builder

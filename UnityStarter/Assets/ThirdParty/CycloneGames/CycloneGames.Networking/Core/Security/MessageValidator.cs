@@ -115,18 +115,15 @@ namespace CycloneGames.Networking.Security
         public const byte MagicByte0 = (byte)'C';
         public const byte MagicByte1 = (byte)'N';
         public const ushort Magic = (ushort)(MagicByte0 | (MagicByte1 << 8));
-        public const byte CurrentVersion = 1;
-        public const byte MinSupportedVersion = 1;
         public const int MagicOffset = 0;
-        public const int VersionOffset = 2;
-        public const int HeaderLengthOffset = 3;
-        public const int FlagsOffset = 4;
-        public const int MessageIdOffset = 6;
-        public const int ChannelOffset = 8;
-        public const int ReservedOffset = 9;
-        public const int SequenceOffset = 10;
-        public const int PayloadLengthOffset = 14;
-        public const int ChecksumOffset = 18;
+        public const int HeaderLengthOffset = 2;
+        public const int FlagsOffset = 3;
+        public const int MessageIdOffset = 5;
+        public const int ChannelOffset = 7;
+        public const int ReservedOffset = 8;
+        public const int SequenceOffset = 9;
+        public const int PayloadLengthOffset = 13;
+        public const int ChecksumOffset = 17;
         public const int HeaderLength = ChecksumOffset + UInt32Size;
         public const NetworkMessageFlags KnownFlags = NetworkMessageFlags.Reliable
                                                        | NetworkMessageFlags.Ordered
@@ -142,7 +139,6 @@ namespace CycloneGames.Networking.Security
     /// </summary>
     public readonly struct NetworkEnvelopeHeader
     {
-        public readonly byte Version;
         public readonly byte HeaderLength;
         public readonly NetworkMessageFlags Flags;
         public readonly ushort MessageId;
@@ -158,7 +154,6 @@ namespace CycloneGames.Networking.Security
             uint sequence,
             uint checksum,
             NetworkMessageFlags flags = NetworkMessageFlags.None,
-            byte version = NetworkWireProtocol.CurrentVersion,
             byte headerLength = NetworkWireProtocol.HeaderLength)
         {
             if (payloadLength < 0)
@@ -166,7 +161,6 @@ namespace CycloneGames.Networking.Security
             if (headerLength < NetworkWireProtocol.HeaderLength)
                 throw new ArgumentOutOfRangeException(nameof(headerLength));
 
-            Version = version;
             HeaderLength = headerLength;
             Flags = flags;
             MessageId = messageId;
@@ -177,9 +171,7 @@ namespace CycloneGames.Networking.Security
         }
 
         public bool IsSupported =>
-            Version >= NetworkWireProtocol.MinSupportedVersion
-            && Version <= NetworkWireProtocol.CurrentVersion
-            && HeaderLength == NetworkWireProtocol.HeaderLength
+            HeaderLength == NetworkWireProtocol.HeaderLength
             && PayloadLength >= 0
             && (Flags & ~NetworkWireProtocol.KnownFlags) == 0
             && Channel >= NetworkChannel.Reliable
@@ -194,8 +186,7 @@ namespace CycloneGames.Networking.Security
                 PayloadLength,
                 Sequence,
                 Checksum,
-                Flags,
-                Version);
+                Flags);
         }
     }
 
@@ -206,7 +197,6 @@ namespace CycloneGames.Networking.Security
         BufferTooSmall = 2,
         InvalidBufferRange = 3,
         InvalidMagic = 4,
-        UnsupportedVersion = 5,
         InvalidHeaderLength = 6,
         InvalidFlags = 7,
         InvalidChannel = 8,
@@ -277,10 +267,6 @@ namespace CycloneGames.Networking.Security
             if (magic != NetworkWireProtocol.Magic)
                 return NetworkFrameResult.InvalidMagic;
 
-            byte version = frame[NetworkWireProtocol.VersionOffset];
-            if (version < NetworkWireProtocol.MinSupportedVersion || version > NetworkWireProtocol.CurrentVersion)
-                return NetworkFrameResult.UnsupportedVersion;
-
             byte headerLength = frame[NetworkWireProtocol.HeaderLengthOffset];
             if (headerLength != NetworkWireProtocol.HeaderLength)
                 return NetworkFrameResult.InvalidHeaderLength;
@@ -313,7 +299,6 @@ namespace CycloneGames.Networking.Security
                 sequence,
                 checksum,
                 flags,
-                version,
                 headerLength);
             return NetworkFrameResult.Valid;
         }
@@ -351,7 +336,6 @@ namespace CycloneGames.Networking.Security
                 throw new ArgumentException("Network frame header contains unsupported values.", nameof(header));
 
             WriteUShort(buffer, offset + NetworkWireProtocol.MagicOffset, NetworkWireProtocol.Magic);
-            buffer[offset + NetworkWireProtocol.VersionOffset] = header.Version;
             buffer[offset + NetworkWireProtocol.HeaderLengthOffset] = header.HeaderLength;
             WriteUShort(buffer, offset + NetworkWireProtocol.FlagsOffset, (ushort)header.Flags);
             WriteUShort(buffer, offset + NetworkWireProtocol.MessageIdOffset, header.MessageId);
@@ -435,7 +419,6 @@ namespace CycloneGames.Networking.Security
 
     public readonly struct NetworkMessageEnvelope
     {
-        public readonly byte Version;
         public readonly ushort MessageId;
         public readonly NetworkMessageDirection Direction;
         public readonly NetworkChannel Channel;
@@ -451,10 +434,8 @@ namespace CycloneGames.Networking.Security
             int payloadLength,
             uint sequence = 0u,
             uint checksum = 0u,
-            NetworkMessageFlags flags = NetworkMessageFlags.None,
-            byte version = NetworkWireProtocol.CurrentVersion)
+            NetworkMessageFlags flags = NetworkMessageFlags.None)
         {
-            Version = version;
             MessageId = messageId;
             Direction = direction;
             Channel = channel;
@@ -464,7 +445,7 @@ namespace CycloneGames.Networking.Security
             Checksum = checksum;
         }
 
-        public bool IsValid => Version != 0 && Direction != NetworkMessageDirection.Unknown && PayloadLength >= 0;
+        public bool IsValid => Direction != NetworkMessageDirection.Unknown && PayloadLength >= 0;
     }
 
     public readonly struct MessageSecurityPolicy
@@ -581,7 +562,6 @@ namespace CycloneGames.Networking.Security
         Invalid = 0,
         Valid = 1,
         MalformedEnvelope = 2,
-        UnsupportedVersion = 3,
         DirectionRejected = 4,
         PayloadTooLarge = 5,
         AuthenticationRequired = 6,

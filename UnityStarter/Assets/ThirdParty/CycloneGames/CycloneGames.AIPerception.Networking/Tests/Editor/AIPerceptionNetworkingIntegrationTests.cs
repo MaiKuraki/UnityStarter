@@ -20,37 +20,37 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
             AssertDescriptor(
                 catalog,
                 AIPerceptionNetworkProtocol.MSG_MANIFEST_HANDSHAKE,
-                "AIPerceptionManifestHandshakeMessage:v1",
+                "AIPerceptionManifestHandshakeMessage",
                 NetworkChannel.Reliable,
                 AIPerceptionNetworkWireCodec.HandshakePayloadBytes);
             AssertDescriptor(
                 catalog,
                 AIPerceptionNetworkProtocol.MSG_DETECTION_EVENT,
-                "AIPerceptionDetectionEventMessage:v1",
+                "AIPerceptionDetectionEventMessage",
                 NetworkChannel.UnreliableSequenced,
                 AIPerceptionNetworkWireCodec.DetectionEventPayloadBytes);
             AssertDescriptor(
                 catalog,
                 AIPerceptionNetworkProtocol.MSG_DETECTION_SNAPSHOT,
-                "AIPerceptionDetectionSnapshotMessage:v1",
+                "AIPerceptionDetectionSnapshotMessage",
                 NetworkChannel.UnreliableSequenced,
                 AIPerceptionNetworkProtocol.DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE);
             AssertDescriptor(
                 catalog,
                 AIPerceptionNetworkProtocol.MSG_MEMORY_SNAPSHOT,
-                "AIPerceptionMemorySnapshotMessage:v1",
+                "AIPerceptionMemorySnapshotMessage",
                 NetworkChannel.Reliable,
                 AIPerceptionNetworkProtocol.DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE);
             AssertDescriptor(
                 catalog,
                 AIPerceptionNetworkProtocol.MSG_AUTHORITY_TRANSFER,
-                "AIPerceptionAuthorityTransferMessage:v1",
+                "AIPerceptionAuthorityTransferMessage",
                 NetworkChannel.Reliable,
                 AIPerceptionNetworkWireCodec.AuthorityTransferPayloadBytes);
             AssertDescriptor(
                 catalog,
                 AIPerceptionNetworkProtocol.MSG_FULL_STATE_REQUEST,
-                "AIPerceptionFullStateRequestMessage:v1",
+                "AIPerceptionFullStateRequestMessage",
                 NetworkChannel.Reliable,
                 AIPerceptionNetworkWireCodec.FullStateRequestPayloadBytes);
             Assert.That(catalog.MessageCount, Is.EqualTo(6));
@@ -58,20 +58,20 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
         }
 
         [Test]
-        public void ProtocolManifest_FreezesV1ContractHashesAndFingerprint()
+        public void ProtocolManifest_FreezesContractHashesAndFingerprint()
         {
             NetworkProtocolManifest manifest = AIPerceptionNetworkProtocol.CreateProtocolManifest();
             ulong[] expectedSchemaHashes =
             {
-                0xE24FD3DF9C74AB1CUL,
-                0x7FB1540691D2B0BFUL,
-                0xA9F15D28F3BC339DUL,
-                0xE163CF3EDDDC2E25UL,
-                0xDD0A7C2010BB2D4CUL,
-                0xF715DC535205849DUL
+                0x9CE592CBAE108BD1UL,
+                0x385B23646DDC7EB4UL,
+                0x0D52F063C83E2E0EUL,
+                0x013A4547E6E41496UL,
+                0x3714E559D1084EC1UL,
+                0xB319FA2CDAE6210EUL
             };
 
-            Assert.That(manifest.Fingerprint, Is.EqualTo(0x574265EF59340254UL));
+            Assert.That(manifest.Fingerprint, Is.EqualTo(0x3A7EF26BC5BCBFF8UL));
             Assert.That(AIPerceptionNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
             Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));
             for (int i = 0; i < expectedSchemaHashes.Length; i++)
@@ -88,9 +88,7 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 0x1817161514131211UL,
                 AIPerceptionNetworkFeatureFlags.DetectionEvents |
                 AIPerceptionNetworkFeatureFlags.DetectionSnapshots,
-                AIPerceptionNetworkFeatureFlags.DetectionSnapshots,
-                1,
-                1);
+                AIPerceptionNetworkFeatureFlags.DetectionSnapshots);
             byte[] payload = new byte[AIPerceptionNetworkWireCodec.HandshakePayloadBytes];
             byte[] expected =
             {
@@ -98,7 +96,7 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
                 0x03, 0x00, 0x00, 0x00,
                 0x02, 0x00, 0x00, 0x00,
-                0x01, 0x01
+                0x00, 0x00
             };
 
             AIPerceptionNetworkWireCodecResult writeResult = AIPerceptionNetworkWireCodec.TryWriteHandshake(
@@ -130,7 +128,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
         {
             AIPerceptionDetectionEntry entry = CreateEntry(10u, AIPerceptionNetworkSensorKind.Sight, tick: 40);
             var detectionEvent = new AIPerceptionDetectionEventMessage(
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION,
                 99u,
                 7,
                 40,
@@ -157,7 +154,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
             AssertEntryEqual(in entry, in decodedEvent.Entry);
 
             var transfer = new AIPerceptionAuthorityTransferMessage(
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION,
                 99u,
                 1,
                 2,
@@ -184,7 +180,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
             Assert.That(decodedTransfer.SnapshotStateHash, Is.EqualTo(transfer.SnapshotStateHash));
 
             var request = new AIPerceptionFullStateRequestMessage(
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION,
                 99u,
                 9,
                 42,
@@ -217,7 +212,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 CreateEntry(20u, AIPerceptionNetworkSensorKind.Hearing, tick: 49)
             };
             var message = new AIPerceptionDetectionSnapshotMessage(
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION,
                 77u,
                 12,
                 50,
@@ -250,7 +244,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
             AssertEntryEqual(in source[1], in destination[1]);
 
             var mismatchedSensor = new AIPerceptionDetectionSnapshotMessage(
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION,
                 77u,
                 12,
                 50,
@@ -276,7 +269,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 CreateEntry(20u, AIPerceptionNetworkSensorKind.Hearing, tick: 50)
             };
             var message = new AIPerceptionDetectionSnapshotMessage(
-                1,
                 77u,
                 12,
                 50,
@@ -312,7 +304,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 ReadOnlySpan<AIPerceptionDetectionEntry>.Empty;
             ulong emptyHash = AIPerceptionNetworkHash.Compute(noEntries);
             var message = new AIPerceptionDetectionSnapshotMessage(
-                1,
                 7u,
                 1,
                 10,
@@ -350,7 +341,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 AIPerceptionNetworkSensorKind.Sight,
                 tick: 10);
             var perTargetClear = new AIPerceptionDetectionEventMessage(
-                1,
                 5u,
                 2,
                 10,
@@ -359,7 +349,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 AIPerceptionNetworkHash.Compute(in entry),
                 in entry);
             var invalidGlobalClear = new AIPerceptionDetectionEventMessage(
-                1,
                 5u,
                 2,
                 10,
@@ -379,7 +368,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
             AIPerceptionDetectionEntry second = CreateEntry(20u, AIPerceptionNetworkSensorKind.Hearing, tick: 50);
             AIPerceptionDetectionEntry[] canonical = { first, second };
             var message = new AIPerceptionDetectionSnapshotMessage(
-                1,
                 77u,
                 12,
                 50,
@@ -430,7 +418,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
 
             AIPerceptionDetectionEntry[] reversed = { second, first };
             var reversedHeader = new AIPerceptionDetectionSnapshotMessage(
-                1,
                 77u,
                 12,
                 50,
@@ -466,7 +453,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
         {
             AIPerceptionDetectionEntry entry = CreateEntry(10u, AIPerceptionNetworkSensorKind.Sight, tick: 10);
             var message = new AIPerceptionDetectionEventMessage(
-                1,
                 5u,
                 2,
                 10,
@@ -548,9 +534,7 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 handshake.ProtocolFingerprint,
                 handshake.PerceptionProfileHash,
                 AIPerceptionNetworkFeatureFlags.TeamShared,
-                AIPerceptionNetworkFeatureFlags.TeamShared,
-                1,
-                1);
+                AIPerceptionNetworkFeatureFlags.TeamShared);
             Assert.That(
                 unsupportedRemote.Negotiate(local),
                 Is.EqualTo(AIPerceptionNetworkHandshakeResult.RemoteRequirementsUnsupported));
@@ -559,9 +543,7 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 handshake.ProtocolFingerprint,
                 handshake.PerceptionProfileHash,
                 AIPerceptionNetworkFeatureFlags.None,
-                AIPerceptionNetworkFeatureFlags.None,
-                1,
-                1);
+                AIPerceptionNetworkFeatureFlags.None);
             Assert.That(
                 missingLocalRequirement.Negotiate(local),
                 Is.EqualTo(AIPerceptionNetworkHandshakeResult.LocalRequirementsUnsupported));
@@ -713,7 +695,6 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 CreateEntry(10u, AIPerceptionNetworkSensorKind.Sight, 20)
             };
             var snapshot = new AIPerceptionDetectionSnapshotMessage(
-                1,
                 100u,
                 8,
                 20,

@@ -9,7 +9,6 @@ namespace CycloneGames.AIPerception.Networking
         Valid = 1,
         MalformedHandshake = 2,
         InvalidFeatureFlags = 3,
-        UnsupportedProtocolVersion = 4,
         InvalidObserverId = 5,
         InvalidSequence = 6,
         InvalidTick = 7,
@@ -100,7 +99,6 @@ namespace CycloneGames.AIPerception.Networking
             in AIPerceptionDetectionEventMessage message)
         {
             AIPerceptionNetworkMessageValidationResult common = ValidateCommon(
-                message.ProtocolVersion,
                 message.ObserverNetworkId,
                 message.Sequence,
                 message.Tick,
@@ -135,7 +133,6 @@ namespace CycloneGames.AIPerception.Networking
             in AIPerceptionDetectionSnapshotMessage message)
         {
             AIPerceptionNetworkMessageValidationResult common = ValidateCommon(
-                message.ProtocolVersion,
                 message.ObserverNetworkId,
                 message.Sequence,
                 message.Tick,
@@ -208,10 +205,6 @@ namespace CycloneGames.AIPerception.Networking
         public static AIPerceptionNetworkMessageValidationResult Validate(
             in AIPerceptionAuthorityTransferMessage message)
         {
-            if (!AIPerceptionNetworkProtocol.IsSupportedProtocolVersion(message.ProtocolVersion))
-            {
-                return AIPerceptionNetworkMessageValidationResult.UnsupportedProtocolVersion;
-            }
 
             if (message.ObserverNetworkId == 0u)
             {
@@ -234,7 +227,6 @@ namespace CycloneGames.AIPerception.Networking
             in AIPerceptionFullStateRequestMessage message)
         {
             AIPerceptionNetworkMessageValidationResult common = ValidateCommon(
-                message.ProtocolVersion,
                 message.ObserverNetworkId,
                 message.Sequence,
                 message.Tick,
@@ -274,16 +266,11 @@ namespace CycloneGames.AIPerception.Networking
         }
 
         private static AIPerceptionNetworkMessageValidationResult ValidateCommon(
-            byte protocolVersion,
             uint observerNetworkId,
             ushort sequence,
             int tick,
             uint authorityGeneration)
         {
-            if (!AIPerceptionNetworkProtocol.IsSupportedProtocolVersion(protocolVersion))
-            {
-                return AIPerceptionNetworkMessageValidationResult.UnsupportedProtocolVersion;
-            }
 
             if (observerNetworkId == 0u)
             {

@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.md)
 
-CycloneGames.Networking 是一个 transport-neutral 底层模块，提供版本化 message protocol、transport integration、有界内存所有权、replication planning、确定性模拟协调、session recovery、security policy 和 diagnostics。纯 C# 契约位于 Core；Unity 行为、Editor 工具、serializer 和第三方 SDK bridge 位于独立 assembly。Topology、authority、authentication、key management、matchmaking、backend deployment、schema rollout 和 content compatibility 由产品负责。
+CycloneGames.Networking 是一个 transport-neutral 底层模块，提供 fingerprint 化 message protocol、transport integration、有界内存所有权、replication planning、确定性模拟协调、session recovery、security policy 和 diagnostics。纯 C# 契约位于 Core；Unity 行为、Editor 工具、serializer 和第三方 SDK bridge 位于独立 assembly。Topology、authority、authentication、key management、matchmaking、backend deployment、schema rollout 和 content compatibility 由产品负责。
 
 ## 目录
 
@@ -21,14 +21,14 @@ CycloneGames.Networking 是一个 transport-neutral 底层模块，提供版本�
 
 ## 概述
 
-本模块提供 transport、connection、runtime-context、serializer 和 canonical message-endpoint 契约。Protocol 注册仅通过 manifest 完成，具有显式 ID range、contract identity、payload budget、channel、version window 和 fingerprint。有界 buffer、queue、rate-limit state、sequence window、reconnection reservation 和 simulation history 由产品 composition root 或相应 subsystem 显式持有。Replication、interest、prediction、lockstep、rollback、session 和 host-handoff primitive 是供产品显式组合的基础能力。Unity runtime bridge、LAN host permission 指引、Editor diagnostics 以及可选 backend/serializer integration 共同构成完整 package。
+本模块提供 transport、connection、runtime-context、serializer 和 canonical message-endpoint 契约。Protocol 注册仅通过 manifest 完成，具有显式 ID range、contract identity、payload budget、channel、protocol fingerprint 和 fingerprint。有界 buffer、queue、rate-limit state、sequence window、reconnection reservation 和 simulation history 由产品 composition root 或相应 subsystem 显式持有。Replication、interest、prediction、lockstep、rollback、session 和 host-handoff primitive 是供产品显式组合的基础能力。Unity runtime bridge、LAN host permission 指引、Editor diagnostics 以及可选 backend/serializer integration 共同构成完整 package。
 
-RPC framework、通用 Service Locator 与自动 state-variable replication 不在本模块范围内。Request、response、command 和 notification 语义由产品自有的版本化 message 表达。Composition 必须显式且由 instance 持有。
+RPC framework、通用 Service Locator 与自动 state-variable replication 不在本模块范围内。Request、response、command 和 notification 语义由产品自有的契约化 message 表达。Composition 必须显式且由 instance 持有。
 
 ### 主要特性
 
 - Transport、connection、runtime-context、serializer 和 canonical message-endpoint 契约。
-- 仅通过 manifest 的 protocol 注册，具有显式 ID range、contract identity、payload budget、channel、version window 和 fingerprint。
+- 仅通过 manifest 的 protocol 注册，具有显式 ID range、contract identity、payload budget、channel、protocol fingerprint 和 fingerprint。
 - 有界 buffer、queue、rate-limit state、sequence window、reconnection reservation 和 simulation history。
 - Replication、interest、prediction、lockstep、rollback、session 和 host-handoff primitive。
 - Unity runtime bridge、LAN host permission 指引、Editor diagnostics 和可选 backend/serializer integration。
@@ -109,17 +109,15 @@ using System;
 using CycloneGames.Networking;
 
 private const ushort MoveCommandId = NetworkConstants.UserMsgIdMin;
-private const string MoveCommandContract = "MyGame.MoveCommand:v1";
-private const ulong MoveCommandSchema = 0xAEF19F1ABB555DB0UL;
+private const string MoveCommandContract = "MyGame.MoveCommand";
+private const ulong MoveCommandSchema = 0x40F83747A60877A5UL;
 
 var manifest = new NetworkProtocolManifestBuilder(
     "MyGame",
     MoveCommandId,
     (ushort)(MoveCommandId + 31))
 {
-    ProtocolId = "com.mycompany.mygame.networking",
-    CurrentVersion = 1,
-    MinimumSupportedVersion = 1
+    ProtocolId = "com.mycompany.mygame.networking"
 }
 .AddMessage(
     MoveCommandContract,
@@ -151,13 +149,13 @@ if (!catalog.TryRegisterProtocolManifest(manifest))
 
 `NetworkMessageCatalog` 只接收完整的 `NetworkProtocolManifest`。注册会在修改前验证 manifest，拒绝 range overlap 或 ID conflict，并在同一个 lock 内提交 range 和全部 descriptor。重复注册相同 protocol definition 是幂等操作。`MessageCount`、`ManifestCount`、`TryGet`、`TryGetRegisteredRange` 和 `ProtocolFingerprint` 用于读取最终 catalog state。
 
-Manifest 与 catalog fingerprint 只基于稳定 contract fact 计算。Version window 与 free-form metadata 单独协商或报告。Fingerprint 一致只能证明 schema agreement，不能证明 peer identity。
+Manifest 与 catalog fingerprint 只基于稳定 contract fact 计算。Free-form metadata 单独报告；兼容性由 fingerprint 精确相等决定。Fingerprint 一致只能证明 schema agreement，不能证明 peer identity。
 
 ### 固定 Frame
 
-`NetworkFrameCodec` 定义 22-byte little-endian header，后接 payload byte。Parser 会拒绝非法 segment、错误 magic、不支持的 version、异常 header length、非法 flag/channel、非零 reserved byte、负数/truncated/trailing payload，以及在请求校验时出现的 checksum mismatch。
+`NetworkFrameCodec` 定义 21-byte little-endian header，后接 payload byte。Parser 会拒绝非法 segment、错误 magic、异常 header length、非法 flag/channel、非零 reserved byte、负数/truncated/trailing payload，以及在请求校验时出现的 checksum mismatch。
 
-FNV-1a checksum 只检测偶发损坏和 parser 分歧，不是 MAC。必须先校验 frame 与 descriptor payload budget，再执行 deserialize。Serializer setting、compression rule、quantization range 和 baseline 都是版本化 protocol state。
+FNV-1a checksum 只检测偶发损坏和 parser 分歧，不是 MAC。必须先校验 frame 与 descriptor payload budget，再执行 deserialize。Serializer setting、compression rule、quantization range 和 baseline 都是契约钉住的 protocol state。
 
 ## 性能分级与会话规模
 
@@ -217,7 +215,7 @@ var hardware = new NetworkHardwareInfo(
 NetworkPerformanceTier tier2 = NetworkDeviceProfiles.Classify(hardware);
 ```
 
-阈值表是数据，不是代码。`NetworkTierThresholds.CreateStandard()` 适合内存和散热宽裕的设备；`CreateConstrained()` 适合内存/热受限的设备。选哪张表由平台层决定；Core 不编码任何设备类别假设。可以在 composition 阶段通过 `NetworkDeviceProfiles.DefaultThresholds` 全局替换，也可以按调用传入。
+阈值表是数据，不是代码。`NetworkTierThresholds.CreateStandard()` 适合内存和散热宽裕的设备；`CreateConstrained()` 适合内存/热受限的设备。选哪张表由平台层决定；Core 不编码任何设备类别假设。可以按调用显式传入 `NetworkTierThresholds`，或让每个 `NetworkTierRegistry` 实例持有自己的阈值表。
 
 ### 第三步：用 tier + 会话规模 + 角色合成 profile
 
@@ -270,17 +268,23 @@ NetworkRuntimeProfile tuned = tuning.ApplyTo(localProfile);
 
 `ApplyTo` 采用上限（ceiling）语义：每个旋钮的有效速率为 `min(local, server)`。上行弱的 client 可以比上限更慢，但任何端点都不能比上限更快，因此会话节奏保持单源。本地容量预算（pool、buffer）永不被覆盖。
 
+### 协议不变量与部署默认值
+
+`NetworkConstants` 只包含协议不变量与基准值：message-id range、MTU 上限、tick rate 边界、基准默认值。它们是编译期常量，因为改动它们等于改动 wire contract。部署预算（连接数、tick/send rate、MTU、buffer/pool 大小、超时）属于 `NetworkDeploymentDefaults` 实例，传给 `NetworkRuntimeProfileBuilder`；每个 composition root 可以使用不同预算，无需修改进程级常量。
+
 ### 第六步：不改核心代码完成定制
 
 系统里每张表都是可替换的数据。游戏在 composition/bootstrap 阶段、任何 profile 被消费之前完成覆盖：
 
 ```csharp
 // 为本产品重调某一档 tier：
-NetworkDeviceProfiles.RegisterTierOverride(NetworkPerformanceTier.Low,
+NetworkTierRegistry tiers = NetworkTierRegistry.CreateStandard();
+tiers.RegisterTierOverride(NetworkPerformanceTier.Low,
     new NetworkTierSpec("tier-low", "Studio Low", maxConnections: 8, sendRate: 10));
 
-// 重调某一档会话规模：
-NetworkSessionScaleTable.RegisterScaleOverride(
+// 重调某一档会话规模（该 composition root 独占自己的 override）：
+var scales = new NetworkSessionScaleRegistry();
+scales.RegisterScaleOverride(
     NetworkSessionScale.Coop, new NetworkScaleSpec(4, maxConnections: 4));
 
 // 或者完全绕过表：
@@ -345,7 +349,7 @@ Nakama 可能返回 authoritative `MatchId`、relayed-match `Token`，或同时�
 | `NewtonsoftJsonSerializerAdapter` | 显式 opt-in assembly；依赖 `com.unity.nuget.newtonsoft-json`。 | 会产生 managed string；默认关闭 type-name handling。Polymorphism 必须使用显式 allow-list binder。 |
 | `MessagePackSerializerAdapter` | 显式 opt-in assembly；依赖 `com.github.messagepack-csharp`。 | 使用 pooled/thread-local scratch storage，但必须验证 formatter registration、AOT 和 stripping。 |
 
-Serializer choice 属于每个版本化 domain protocol 或产品 codec，并在调用 canonical byte endpoint 前完成。没有 ambient registration，也不会根据已安装 package 自动选择。Serializer type、option、generated formatter、compression 和 message schema 都是必须在 peer 间一致的 protocol fact。
+Serializer choice 属于每个 domain protocol 或产品 codec，并在调用 canonical byte endpoint 前完成。没有 ambient registration，也不会根据已安装 package 自动选择。Serializer type、option、generated formatter、compression 和 message schema 都是必须在 peer 间一致的 protocol fact。
 
 ### Editor 工作流
 
@@ -410,8 +414,8 @@ coordinator.ReleaseConnection(connectionId);  // 断线时
 
 ### Contract 与发布规则
 
-- Protocol compatibility 由显式 manifest、contract identity、fingerprint 和 version window 决定，不依赖 CLR type name。
-- 全部通信 endpoint 必须使用互相支持的 manifest window。Fingerprint 或 version 不匹配时应拒绝连接，不能为了继续通信而压制错误。
+- Protocol compatibility 由显式 manifest、contract identity、fingerprint 和 protocol fingerprint 决定，不依赖 CLR type name。
+- 全部通信 endpoint 必须使用互相支持的 manifest window。Fingerprint 不匹配时应拒绝连接，不能为了继续通信而压制错误。
 - Serializer setting、numeric unit、quantization、compression、channel semantic、authority 和 maximum payload 都属于 protocol fact。
 - Core 必须保持 genre-neutral。类型专用行为位于可选 domain package，不能反向改变依赖方向。
 - Client、server 和 service 的回滚必须协调，使其回到同一套兼容 protocol。Source rollback 不会撤销 firewall rule 或 remote backend state。
@@ -512,7 +516,7 @@ if (!pipeline.ValidateIncoming(connectionId, messageId, frameHeader, payload, ou
 
 | 能力 | Owner 与生命周期 | 并发规则 | 容量与失败行为 |
 | --- | --- | --- | --- |
-| `NetworkBufferPool` | 进程级 pool；每次 `Get` 返回一个只能正确 dispose 一次的 lease。 | Pool bookkeeping 已同步；buffer content 仍为 single-owner。 | Retention 有界且可配置。Stale/default/double return 显式失败；清理敏感 byte 会增加 CPU 成本。 |
+| `NetworkBufferPoolInstance` | 每个 composition root 独占的 pool；每次 `Get` 返回一个只能正确 dispose 一次的 lease。 | Pool bookkeeping 已同步；buffer content 仍为 single-owner。 | Retention 有界且可配置。Stale/default/double return 显式失败；清理敏感 byte 会增加 CPU 成本。 |
 | `NetworkBuffer` | 带 generation check 的 `readonly struct` lease；复制值共享同一个 token。 | 禁止并发读写同一个 lease。 | Dispose 任意副本会使全部副本失效；borrowed span/segment 与 lease 同寿命。 |
 | `NetworkMessageCatalog` | Composition root 在冷启动阶段注册 manifest。 | Catalog mutation/query 使用 lock；禁止每 tick 注册。 | Conflict 返回 `false`，且不会部分发布。 |
 | `LocalLoopTransport` | 一组进程内开发 server/client；caller 负责 stop/dispose。 | 单一 caller-selected owner thread；Core 不要求 Unity main-thread polling。 | 单 peer、reliable channel、有界 queue 和有界 dispatch；release build 不可用。 |
@@ -554,7 +558,7 @@ if (!pipeline.ValidateIncoming(connectionId, messageId, frameHeader, payload, ou
 | Protocol manifest 注册失败 | ID range 重叠或 descriptor 冲突 | 验证 range 边界和 contract identity；每个 ID 与 contract pair 在全部 manifest 中必须唯一 |
 | Handler 注册报告重复 | 同一 message ID 注册两次 | 注册同一 ID 的新 handler 前，先取消注册并释放旧的 handler 与 lease |
 | `NetworkBuffer` span 在 dispose 后无效 | Lease 在 span 消费前被 dispose | 在 dispose 或移交 lease 所有权前先复制所需字节 |
-| Frame parsing 拒绝看似合法的 payload | 错误的 magic、version 或 checksum | 验证两端 codec 配置一致；检查 byte-order 或 alignment 问题 |
+| Frame parsing 拒绝看似合法的 payload | 错误的 magic、reserved byte 或 checksum | 验证两端 codec 配置一致；检查 byte-order 或 alignment 问题 |
 | 主机迁移期间 backend 连接中断 | 迁移前未捕获 reconnection state | 在开始 handoff 前捕获所有 pending send、sequence window 和 replication state |
 | 密钥 rotation 后 signing 验证失败 | Signer 未对新 session 更换 key | 派生新 session key、创建新的 signer instance，并确认 key exchange 在两端完成 |
 | Rate limiter 拦截合法流量 | Token budget 耗尽或 peer 未正确注册 | 检查 per-connection token 补充速率和 connection 注册顺序；移除过期的 peer |
@@ -587,6 +591,6 @@ if (!pipeline.ValidateIncoming(connectionId, messageId, frameHeader, payload, ou
 
 ## 内存诊断与有界维护
 
-`NetworkBufferPool.GetMemorySnapshot()` 公开固定 pool count、capacity、admission 与 reuse counter；`TrimIdleStep(targetIdleCount, maxWork)` 只释放 idle buffer，并保证工作量有界。`RateLimiter.GetMemorySnapshot()` 公开当前/容量 count、expiry 与 rejection 统计，但不枚举 client key。
+`NetworkBufferPoolInstance.GetMemorySnapshot()` 公开固定 pool count、capacity、admission 与 reuse counter；`TrimIdleStep(targetIdleCount, maxWork)` 只释放 idle buffer，并保证工作量有界。`RateLimiter.GetMemorySnapshot()` 公开当前/容量 count、expiry 与 rejection 统计，但不枚举 client key。
 
 Networking owner 暴露本地 snapshot，以及有界 idle-buffer 或 expired-rate-entry maintenance。Component-local maintenance 必须显式调用，不能充当通用 package responder。Replication 与 acknowledgement retention 仍由协议专用 integration 拥有，必须在提供 confirmed watermark 后才能执行 expiry；通用 diagnostics 不得推测这些数值。

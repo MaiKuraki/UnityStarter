@@ -24,11 +24,11 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
             {
                 var stateVersion = new GASNetworkStateVersion(abilitySystem, Epoch);
                 ulong localVersion = abilitySystem.StateVersion;
-                Assert.That(stateVersion.CurrentVersion, Is.EqualTo(localVersion + 1UL));
+                Assert.That(stateVersion.CurrentSequence, Is.EqualTo(localVersion + 1UL));
 
                 Assert.That(stateVersion.MarkExternalIdentityChanged(), Is.True);
                 Assert.That(abilitySystem.StateVersion, Is.EqualTo(localVersion));
-                Assert.That(stateVersion.CurrentVersion, Is.EqualTo(localVersion + 2UL));
+                Assert.That(stateVersion.CurrentSequence, Is.EqualTo(localVersion + 2UL));
 
                 Exception offThreadFailure = null;
                 var worker = new Thread(() =>
@@ -49,7 +49,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
                 stateVersion.ResetEpoch(Epoch + 1u);
                 Assert.That(stateVersion.StreamEpoch, Is.EqualTo(Epoch + 1u));
                 Assert.That(stateVersion.IsExhausted, Is.False);
-                Assert.That(stateVersion.CurrentVersion, Is.EqualTo(abilitySystem.StateVersion + 1UL));
+                Assert.That(stateVersion.CurrentSequence, Is.EqualTo(abilitySystem.StateVersion + 1UL));
             }
             finally
             {
@@ -1183,7 +1183,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor
         }
 
         [Test]
-        public void AuthorityCommandProcessor_PartialCommitFailurePublishesCurrentVersionAndFailsClosed()
+        public void AuthorityCommandProcessor_PartialCommitFailurePublishesStateSequenceAndFailsClosed()
         {
             var context = new GASRuntimeContext(GASRuntimeAuthorityMode.Authority);
             var abilitySystem = new AbilitySystemComponent(

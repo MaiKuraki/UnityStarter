@@ -16,7 +16,7 @@ namespace CycloneGames.Networking.DOD
     /// are long-lived and reused across frames; steady-state PreUpdate work is allocation-free
     /// on both the managed and native side. Capacity growth during warmup allocates once.
     ///
-    /// Visibility rules (same as OOP version):
+    /// Visibility rules (same as OOP implementation):
     ///   1. AlwaysRelevant → visible to all
     ///   2. Same team → always visible
     ///   3. Hidden enemy → visible only via deep-reveal zones
@@ -82,7 +82,7 @@ namespace CycloneGames.Networking.DOD
             _teamIndices = new NativeHashMap<int, int>(8, Allocator.Persistent);
         }
 
-        // --- Configuration API (same as OOP version) ---
+        // --- Configuration API (same as OOP implementation) ---
 
         public void SetConnectionTeam(int connectionId, int teamId)
             => _connectionTeams[connectionId] = teamId;

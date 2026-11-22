@@ -25,7 +25,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
             Assert.That(catalog.TryGetRegisteredRange(descriptor.MessageId, out NetworkMessageIdRange protocolRange), Is.True);
             Assert.That(protocolRange.Name, Is.EqualTo(MovementNetworkProtocol.MessageOwner));
             Assert.That(descriptor.Owner, Is.EqualTo(MovementNetworkProtocol.MessageOwner));
-            Assert.That(descriptor.ContractId, Is.EqualTo("MovementNetworkSnapshotMessage:v1"));
+            Assert.That(descriptor.ContractId, Is.EqualTo("MovementNetworkSnapshotMessage"));
             Assert.That(descriptor.DefaultChannel, Is.EqualTo(NetworkChannel.UnreliableSequenced));
         }
 
@@ -42,31 +42,31 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
         }
 
         [Test]
-        public void ProtocolManifest_UsesFrozenV1SchemasAndFingerprint()
+        public void ProtocolManifest_UsesFrozenSchemasAndFingerprint()
         {
             NetworkProtocolManifest manifest = MovementNetworkProtocol.CreateProtocolManifest();
             string[] canonicalSchemaLiterals =
             {
-                "MovementManifestHandshakeMessage:v1",
-                "MovementInputCommandMessage:v1",
-                "MovementNetworkSnapshotMessage:v1",
-                "MovementCorrectionMessage:v1",
-                "MovementFullStateRequestMessage:v1",
-                "MovementAuthorityTransferMessage:v1",
-                "MovementTeleportMessage:v1"
+                "MovementManifestHandshakeMessage",
+                "MovementInputCommandMessage",
+                "MovementNetworkSnapshotMessage",
+                "MovementCorrectionMessage",
+                "MovementFullStateRequestMessage",
+                "MovementAuthorityTransferMessage",
+                "MovementTeleportMessage"
             };
             ulong[] expectedSchemaHashes =
             {
-                0x0DD5DE0CCEFCE7E8UL,
-                0xAA87AB05419B69EFUL,
-                0x2BE4EE685C0790F4UL,
-                0x758234C52F9A9A0EUL,
-                0xE17B11E352C841E9UL,
-                0xA29871158FF1EDD8UL,
-                0xCBBC9E08374EA4B9UL
+                0xF9DBBF4DFD6A2DBDUL,
+                0xED5685E0364FD524UL,
+                0x290EAF94DF7CAE29UL,
+                0x1849CCF7502F53FFUL,
+                0x8BED532024596AFAUL,
+                0x04340E944DE5396DUL,
+                0x2DA340ABAE23680AUL
             };
 
-            Assert.That(manifest.Fingerprint, Is.EqualTo(0xC3ABA4C56241EB7BUL));
+            Assert.That(manifest.Fingerprint, Is.EqualTo(0x645204EE064F9CE3UL));
             Assert.That(MovementNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
             Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
             Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));

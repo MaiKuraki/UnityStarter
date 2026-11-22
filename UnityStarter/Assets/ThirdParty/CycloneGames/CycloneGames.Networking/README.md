@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Networking is a transport-neutral foundation for versioned message protocols, transport integration, bounded memory ownership, replication planning, deterministic-simulation coordination, session recovery, security policy, and diagnostics. Pure C# contracts stay in Core; Unity behavior, Editor tooling, serializers, and third-party SDK bridges stay in separate assemblies. Topology, authority, authentication, key management, matchmaking, backend deployment, schema rollout, and content compatibility remain product-owned.
+CycloneGames.Networking is a transport-neutral foundation for fingerprinted message protocols, transport integration, bounded memory ownership, replication planning, deterministic-simulation coordination, session recovery, security policy, and diagnostics. Pure C# contracts stay in Core; Unity behavior, Editor tooling, serializers, and third-party SDK bridges stay in separate assemblies. Topology, authority, authentication, key management, matchmaking, backend deployment, schema rollout, and content compatibility remain product-owned.
 
 ## Table of Contents
 
@@ -21,14 +21,14 @@ If you are new to this module, read Overview, Quick Start, then Steps 1 through 
 
 ## Overview
 
-The module provides transport, connection, runtime-context, serializer, and canonical message-endpoint contracts. Protocol registration is manifest-only, with explicit ID ranges, contract identities, payload budgets, channels, version windows, and fingerprints. Bounded buffers, queues, rate-limit state, sequence windows, reconnection reservations, and simulation histories are owned explicitly by the product composition root or its subsystems. Replication, interest, prediction, lockstep, rollback, session, and host-handoff primitives are building blocks for explicit product composition. Unity runtime bridges, LAN-host permission guidance, Editor diagnostics, and optional backend/serializer integrations complete the package.
+The module provides transport, connection, runtime-context, serializer, and canonical message-endpoint contracts. Protocol registration is manifest-only, with explicit ID ranges, contract identities, payload budgets, channels, contract identities and fingerprints. Bounded buffers, queues, rate-limit state, sequence windows, reconnection reservations, and simulation histories are owned explicitly by the product composition root or its subsystems. Replication, interest, prediction, lockstep, rollback, session, and host-handoff primitives are building blocks for explicit product composition. Unity runtime bridges, LAN-host permission guidance, Editor diagnostics, and optional backend/serializer integrations complete the package.
 
-RPC frameworks, generic Service Locators, and automatic state-variable replication stay outside the module. Request, response, command, and notification semantics are product-owned versioned messages. Composition is explicit and instance-owned.
+RPC frameworks, generic Service Locators, and automatic state-variable replication stay outside the module. Request, response, command, and notification semantics are product-owned contract-identified messages. Composition is explicit and instance-owned.
 
 ### Key Features
 
 - Transport, connection, runtime-context, serializer, and canonical message-endpoint contracts.
-- Manifest-only protocol registration with explicit ID ranges, contract identities, payload budgets, channels, version windows, and fingerprints.
+- Manifest-only protocol registration with explicit ID ranges, contract identities, payload budgets, channels, contract identities and fingerprints.
 - Bounded buffers, queues, rate-limit state, sequence windows, reconnection reservations, and simulation histories.
 - Replication, interest, prediction, lockstep, rollback, session, and host-handoff primitives.
 - Unity runtime bridges, LAN-host permission guidance, Editor diagnostics, and optional backend/serializer integrations.
@@ -109,17 +109,15 @@ using System;
 using CycloneGames.Networking;
 
 private const ushort MoveCommandId = NetworkConstants.UserMsgIdMin;
-private const string MoveCommandContract = "MyGame.MoveCommand:v1";
-private const ulong MoveCommandSchema = 0xAEF19F1ABB555DB0UL;
+private const string MoveCommandContract = "MyGame.MoveCommand";
+private const ulong MoveCommandSchema = 0x40F83747A60877A5UL;
 
 var manifest = new NetworkProtocolManifestBuilder(
     "MyGame",
     MoveCommandId,
     (ushort)(MoveCommandId + 31))
 {
-    ProtocolId = "com.mycompany.mygame.networking",
-    CurrentVersion = 1,
-    MinimumSupportedVersion = 1
+    ProtocolId = "com.mycompany.mygame.networking"
 }
 .AddMessage(
     MoveCommandContract,
@@ -151,13 +149,13 @@ The global message space has three ranges:
 
 `NetworkMessageCatalog` accepts complete `NetworkProtocolManifest` instances only. Registration validates the manifest before mutation, rejects overlapping ranges or conflicting IDs, and commits the range and all descriptors under one lock. Registering the same protocol definition again is idempotent. `MessageCount`, `ManifestCount`, `TryGet`, `TryGetRegisteredRange`, and `ProtocolFingerprint` expose the resulting catalog state.
 
-The manifest and catalog fingerprints are deterministic over the stable contract facts. Version windows and free-form metadata are negotiated or reported separately. A fingerprint match proves schema agreement only; it does not authenticate a peer.
+The manifest and catalog fingerprints are deterministic over the stable contract facts. Free-form metadata is reported separately; compatibility is decided by exact fingerprint equality. A fingerprint match proves schema agreement only; it does not authenticate a peer.
 
 ### Fixed frame
 
-`NetworkFrameCodec` defines a 22-byte little-endian header followed by payload bytes. Parsing rejects invalid segments, wrong magic, unsupported versions, unexpected header lengths, invalid flags/channels, non-zero reserved bytes, negative/truncated/trailing payloads, and checksum mismatch when requested.
+`NetworkFrameCodec` defines a 21-byte little-endian header followed by payload bytes. Parsing rejects invalid segments, wrong magic, unexpected header lengths, invalid flags/channels, non-zero reserved bytes, negative/truncated/trailing payloads, and checksum mismatch when requested.
 
-The FNV-1a checksum detects accidental corruption and parser disagreement; it is not a MAC. Validate the frame and descriptor payload budget before deserialization. Serializer settings, compression rules, quantization ranges, and baselines are versioned protocol state.
+The FNV-1a checksum detects accidental corruption and parser disagreement; it is not a MAC. Validate the frame and descriptor payload budget before deserialization. Serializer settings, compression rules, quantization ranges, and baselines are contract-pinned protocol state.
 
 ## Performance Tiers and Session Scaling
 
@@ -217,7 +215,7 @@ var hardware = new NetworkHardwareInfo(
 NetworkPerformanceTier tier2 = NetworkDeviceProfiles.Classify(hardware);
 ```
 
-Threshold tables are data, not code. `NetworkTierThresholds.CreateStandard()` fits devices with generous memory and cooling; `CreateConstrained()` fits memory/thermally constrained devices. The platform layer picks the table; core code encodes no device-category assumptions. Replace the global table at composition time via `NetworkDeviceProfiles.DefaultThresholds`, or pass one per call.
+Threshold tables are data, not code. `NetworkTierThresholds.CreateStandard()` fits devices with generous memory and cooling; `CreateConstrained()` fits memory/thermally constrained devices. The platform layer picks the table; core code encodes no device-category assumptions. Pass an explicit `NetworkTierThresholds` per call, or give each `NetworkTierRegistry` instance its own thresholds.
 
 ### Step 3: Compose tier with session scale and role
 
@@ -270,17 +268,23 @@ NetworkRuntimeProfile tuned = tuning.ApplyTo(localProfile);
 
 `ApplyTo` clamps with ceiling semantics: effective rates are `min(local, server)` per knob. A client on a weak uplink may run slower than the ceiling, but no endpoint may run faster, so session cadence stays single-sourced. Local capacity budgets (pools, buffers) are never overridden.
 
+### Protocol invariants vs deployment defaults
+
+`NetworkConstants` contains only protocol invariants and baseline values: message-id ranges, MTU limits, tick-rate bounds and baseline defaults. These are compile-time constants because changing them changes the wire contract. Deployment budgets — connection count, tick/send rate, MTU, buffer and pool sizes, timeouts — belong to an instance of `NetworkDeploymentDefaults` passed to `NetworkRuntimeProfileBuilder`. Each composition root can use different budgets without mutating a process-wide constant.
+
 ### Step 6: Customize without touching core code
 
 Every table in the system is replaceable data. Games override at composition/bootstrap time, before any profile is consumed:
 
 ```csharp
 // Retune one tier for this product:
-NetworkDeviceProfiles.RegisterTierOverride(NetworkPerformanceTier.Low,
+NetworkTierRegistry tiers = NetworkTierRegistry.CreateStandard();
+tiers.RegisterTierOverride(NetworkPerformanceTier.Low,
     new NetworkTierSpec("tier-low", "Studio Low", maxConnections: 8, sendRate: 10));
 
-// Retune one session scale:
-NetworkSessionScaleTable.RegisterScaleOverride(
+// Retune one session scale (this root owns its overrides):
+var scales = new NetworkSessionScaleRegistry();
+scales.RegisterScaleOverride(
     NetworkSessionScale.Coop, new NetworkScaleSpec(4, maxConnections: 4));
 
 // Or bypass the tables entirely:
@@ -345,7 +349,7 @@ Before shipping, verify the installed SDK version, native/browser transport, cal
 | `NewtonsoftJsonSerializerAdapter` | Explicit opt-in assembly; requires `com.unity.nuget.newtonsoft-json`. | Managed string work; default type-name handling is disabled. Polymorphism requires an explicit allow-list binder. |
 | `MessagePackSerializerAdapter` | Explicit opt-in assembly; requires `com.github.messagepack-csharp`. | Pooled/thread-local scratch storage, but requires verified formatter registration, AOT, and stripping behavior. |
 
-Serializer choice belongs to each versioned domain protocol or product codec and occurs before calling the canonical byte endpoint. There is no ambient registration or automatic selection based on installed packages. Serializer type, options, generated formatters, compression, and message schema remain protocol facts that must agree across peers.
+Serializer choice belongs to each domain protocol or product codec and occurs before calling the canonical byte endpoint. There is no ambient registration or automatic selection based on installed packages. Serializer type, options, generated formatters, compression, and message schema remain protocol facts that must agree across peers.
 
 ### Editor workflow
 
@@ -410,8 +414,8 @@ coordinator.ReleaseConnection(connectionId);  // on disconnect
 
 ### Contract and release rules
 
-- Protocol compatibility is governed by explicit manifests, contract identities, fingerprints, and version windows rather than CLR type names.
-- Ship all communicating endpoints with a mutually supported manifest window. Reject fingerprint or version mismatch; never suppress it to keep incompatible peers connected.
+- Protocol compatibility is governed by explicit manifests, contract identities, fingerprints, and protocol fingerprints rather than CLR type names.
+- Ship all communicating endpoints with a mutually supported manifest window. Reject fingerprint mismatch; never suppress it to keep incompatible peers connected.
 - Treat serializer settings, numeric units, quantization, compression, channel semantics, authority, and maximum payload as protocol facts.
 - Keep Core genre-neutral. Genre-specific behavior belongs in optional domain packages and cannot reverse the dependency direction.
 - Coordinate rollback across client, server, and services so they return to one compatible protocol set. Source rollback does not undo firewall rules or remote backend state.
@@ -518,7 +522,7 @@ if (!pipeline.ValidateIncoming(connectionId, messageId, frameHeader, payload, ou
 
 | Facility | Owner and lifetime | Concurrency rule | Capacity and failure |
 | --- | --- | --- | --- |
-| `NetworkBufferPool` | Process pool; each `Get` returns one lease disposed exactly once. | Pool bookkeeping is synchronized; buffer contents remain single-owner. | Retention is bounded and configurable. Stale/default/double return fails explicitly; clearing sensitive bytes costs CPU. |
+| `NetworkBufferPoolInstance` | Per-composition-root pool; each `Get` returns one lease disposed exactly once. | Pool bookkeeping is synchronized; buffer contents remain single-owner. | Retention is bounded and configurable. Stale/default/double return fails explicitly; clearing sensitive bytes costs CPU. |
 | `NetworkBuffer` | Generation-checked `readonly struct` lease. Copies share the same token. | Never read/write one lease concurrently. | Disposing one copy invalidates all copies. Borrowed spans/segments expire with the lease. |
 | `NetworkMessageCatalog` | Composition root registers cold-start manifests. | Catalog mutation/query is locked; do not register per tick. | Conflicts return `false` without partial publication. |
 | `LocalLoopTransport` | One in-process development pair; caller stops/disposes it. | Single caller-selected owner thread; Core does not require Unity main-thread polling. | One peer, reliable channel, bounded queues and bounded dispatch; unavailable in release builds. |
@@ -560,7 +564,7 @@ Platform support depends on the selected transport, backend, serializer, build b
 | Protocol manifest registration fails | Overlapping ID range or conflicting descriptor | Verify range boundaries and contract identities; each ID and contract pair must be unique across manifests |
 | Handler registration fails on duplicate | Same message ID registered twice | Unregister the previous handler and lease before registering a new handler for the same ID |
 | `NetworkBuffer` span is invalid after disposal | Lease was disposed before the span was consumed | Copy required bytes before disposing or passing ownership of the lease |
-| Frame parsing rejects a valid-looking payload | Incorrect magic, version, or checksum | Validate the codec configuration matches on both endpoints; check for byte-order or alignment issues |
+| Frame parsing rejects a valid-looking payload | Incorrect magic, reserved byte, or checksum | Validate the codec configuration matches on both endpoints; check for byte-order or alignment issues |
 | Backend connection drops during host migration | Reconnection state not captured before migration | Capture all pending sends, sequence windows, and replication state before starting the handoff |
 | Signing verification fails after key rotation | Signer not re-keyed for the new session | Derive new session keys, create a fresh signer instance, and validate the key exchange completed on both ends |
 | Rate limiter blocks legitimate traffic | Token budget exhausted or peer not properly registered | Check per-connection token replenishment rate and connection registration order; remove stale peers |
@@ -593,6 +597,6 @@ Run the following checks for every shipping configuration:
 
 ## Memory Diagnostics and Bounded Maintenance
 
-`NetworkBufferPool.GetMemorySnapshot()` exposes fixed pool counts, capacities, admissions, and reuse counters; `TrimIdleStep(targetIdleCount, maxWork)` releases only idle buffers and performs bounded work. `RateLimiter.GetMemorySnapshot()` exposes current/capacity counts plus expiry and rejection statistics without enumerating client keys.
+`NetworkBufferPoolInstance.GetMemorySnapshot()` exposes fixed pool counts, capacities, admissions, and reuse counters; `TrimIdleStep(targetIdleCount, maxWork)` releases only idle buffers and performs bounded work. `RateLimiter.GetMemorySnapshot()` exposes current/capacity counts plus expiry and rejection statistics without enumerating client keys.
 
 Networking owners expose local snapshots and bounded idle-buffer or expired-rate-entry maintenance. Component-local maintenance is explicit and never acts as a universal package responder. Replication and acknowledgement retention remain owned by protocol-specific integrations, which must supply a confirmed watermark before expiry; generic diagnostics must not infer those values.

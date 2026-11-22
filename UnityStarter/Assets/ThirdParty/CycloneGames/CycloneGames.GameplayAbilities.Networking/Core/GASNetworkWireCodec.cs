@@ -56,8 +56,8 @@ namespace CycloneGames.GameplayAbilities.Networking
             WriteUInt64(destination, 16, message.ContentCatalogHash);
             WriteUInt64(destination, 24, message.GameplayTagManifestHash);
             WriteUInt16(destination, 32, (ushort)message.SupportedFeatures);
-            destination[34] = message.MinimumSupportedProtocolVersion;
-            destination[35] = message.CurrentProtocolVersion;
+            destination[34] = 0;
+            destination[35] = 0;
             bytesWritten = HandshakePayloadBytes;
             return GASNetworkWireCodecResult.Success;
         }
@@ -77,9 +77,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 ReadUInt64(payload, 8),
                 ReadUInt64(payload, 16),
                 ReadUInt64(payload, 24),
-                (GASNetworkFeatureFlags)ReadUInt16(payload, 32),
-                payload[34],
-                payload[35]);
+                (GASNetworkFeatureFlags)ReadUInt16(payload, 32));
             if (!candidate.IsWellFormed)
             {
                 return GASNetworkWireCodecResult.MalformedMessage;
@@ -148,7 +146,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 return GASNetworkWireCodecResult.DestinationTooSmall;
             }
 
-            destination[0] = message.ProtocolVersion;
+            destination[0] = 0;
             WriteUInt32(destination, 1, message.StreamEpoch);
             WriteUInt32(destination, 5, message.CommandSequence);
             WriteUInt64(destination, 9, message.Entity.Value);
@@ -214,7 +212,6 @@ namespace CycloneGames.GameplayAbilities.Networking
             }
 
             var candidate = new GASAbilityCommand(
-                payload[0],
                 ReadUInt32(payload, 1),
                 ReadUInt32(payload, 5),
                 new GASNetworkEntityId(ReadUInt64(payload, 9)),
@@ -282,7 +279,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 return GASNetworkWireCodecResult.DestinationTooSmall;
             }
 
-            destination[0] = message.ProtocolVersion;
+            destination[0] = 0;
             WriteUInt32(destination, 1, message.StreamEpoch);
             WriteUInt32(destination, 5, message.CommandSequence);
             WriteUInt64(destination, 9, message.Entity.Value);
@@ -305,7 +302,6 @@ namespace CycloneGames.GameplayAbilities.Networking
             }
 
             var candidate = new GASCommandResult(
-                payload[0],
                 ReadUInt32(payload, 1),
                 ReadUInt32(payload, 5),
                 new GASNetworkEntityId(ReadUInt64(payload, 9)),
@@ -516,7 +512,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             bytesWritten = 0;
             if (!message.IsValid) return GASNetworkWireCodecResult.MalformedMessage;
             if (destination.Length < StateAcknowledgementPayloadBytes) return GASNetworkWireCodecResult.DestinationTooSmall;
-            destination[0] = message.ProtocolVersion;
+            destination[0] = 0;
             WriteUInt32(destination, 1, message.StreamEpoch);
             WriteUInt32(destination, 5, message.BatchSequence);
             WriteUInt64(destination, 9, message.Entity.Value);
@@ -533,7 +529,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             message = default;
             if (payload.Length != StateAcknowledgementPayloadBytes) return GASNetworkWireCodecResult.InvalidPayloadLength;
             var candidate = new GASStateAcknowledgement(
-                payload[0], ReadUInt32(payload, 1), ReadUInt32(payload, 5),
+                ReadUInt32(payload, 1), ReadUInt32(payload, 5),
                 new GASNetworkEntityId(ReadUInt64(payload, 9)), ReadUInt64(payload, 17), ReadUInt64(payload, 25));
             if (!candidate.IsValid) return GASNetworkWireCodecResult.MalformedMessage;
             message = candidate;
@@ -548,7 +544,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             bytesWritten = 0;
             if (!message.IsValid) return GASNetworkWireCodecResult.MalformedMessage;
             if (destination.Length < ResyncRequestPayloadBytes) return GASNetworkWireCodecResult.DestinationTooSmall;
-            destination[0] = message.ProtocolVersion;
+            destination[0] = 0;
             WriteUInt32(destination, 1, message.StreamEpoch);
             WriteUInt32(destination, 5, message.RequestSequence);
             WriteUInt64(destination, 9, message.Entity.Value);
@@ -567,7 +563,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             message = default;
             if (payload.Length != ResyncRequestPayloadBytes) return GASNetworkWireCodecResult.InvalidPayloadLength;
             var candidate = new GASResyncRequest(
-                payload[0], ReadUInt32(payload, 1), ReadUInt32(payload, 5),
+                ReadUInt32(payload, 1), ReadUInt32(payload, 5),
                 new GASNetworkEntityId(ReadUInt64(payload, 9)), ReadUInt64(payload, 17),
                 ReadUInt32(payload, 25), ReadUInt64(payload, 29), (GASResyncReason)payload[37]);
             if (!candidate.IsValid) return GASNetworkWireCodecResult.MalformedMessage;
@@ -583,7 +579,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             bytesWritten = 0;
             if (!message.IsValid) return GASNetworkWireCodecResult.MalformedMessage;
             if (destination.Length < CueExecutedPayloadBytes) return GASNetworkWireCodecResult.DestinationTooSmall;
-            destination[0] = message.ProtocolVersion;
+            destination[0] = 0;
             WriteUInt32(destination, 1, message.StreamEpoch);
             WriteUInt32(destination, 5, message.CueSequence);
             WriteUInt64(destination, 9, message.Entity.Value);
@@ -608,7 +604,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             message = default;
             if (payload.Length != CueExecutedPayloadBytes) return GASNetworkWireCodecResult.InvalidPayloadLength;
             var candidate = new GASCueExecuted(
-                payload[0], ReadUInt32(payload, 1), ReadUInt32(payload, 5),
+                ReadUInt32(payload, 1), ReadUInt32(payload, 5),
                 new GASNetworkEntityId(ReadUInt64(payload, 9)), new GASNetworkTagId(ReadUInt64(payload, 17)),
                 new GASNetworkEntityId(ReadUInt64(payload, 25)), new GASNetworkEffectId(ReadUInt64(payload, 33)),
                 ReadUInt32(payload, 41), ReadUInt64(payload, 45), (GASCueEvent)payload[53],
@@ -620,7 +616,7 @@ namespace CycloneGames.GameplayAbilities.Networking
 
         private static void WriteStateBatchHeader(Span<byte> destination, in GASStateBatchChunk message)
         {
-            destination[0] = message.ProtocolVersion;
+            destination[0] = 0;
             WriteUInt32(destination, 1, message.StreamEpoch);
             WriteUInt32(destination, 5, message.BatchSequence);
             WriteUInt64(destination, 9, message.Entity.Value);
@@ -642,7 +638,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         private static GASStateBatchChunk ReadStateBatchHeader(ReadOnlySpan<byte> payload)
         {
             return new GASStateBatchChunk(
-                payload[0], ReadUInt32(payload, 1), ReadUInt32(payload, 5),
+                ReadUInt32(payload, 1), ReadUInt32(payload, 5),
                 new GASNetworkEntityId(ReadUInt64(payload, 9)), (GASStateBatchKind)payload[17],
                 ReadUInt64(payload, 18), ReadUInt64(payload, 26), ReadUInt32(payload, 34),
                 ReadUInt16(payload, 38), ReadUInt16(payload, 40), ReadUInt16(payload, 42),

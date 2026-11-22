@@ -6,7 +6,6 @@ namespace CycloneGames.GameplayAbilities.Networking
     {
         Invalid = 0,
         Valid = 1,
-        UnsupportedProtocolVersion = 2,
         InvalidStreamEpoch = 3,
         InvalidSequence = 4,
         InvalidEntityId = 5,
@@ -33,7 +32,6 @@ namespace CycloneGames.GameplayAbilities.Networking
         public static GASNetworkMessageValidationResult ValidateHeader(in GASAbilityCommand message)
         {
             GASNetworkMessageValidationResult common = ValidateCommon(
-                message.ProtocolVersion,
                 message.StreamEpoch,
                 message.CommandSequence,
                 message.Entity);
@@ -147,7 +145,6 @@ namespace CycloneGames.GameplayAbilities.Networking
         public static GASNetworkMessageValidationResult Validate(in GASCommandResult message)
         {
             GASNetworkMessageValidationResult common = ValidateCommon(
-                message.ProtocolVersion,
                 message.StreamEpoch,
                 message.CommandSequence,
                 message.Entity);
@@ -179,7 +176,6 @@ namespace CycloneGames.GameplayAbilities.Networking
         public static GASNetworkMessageValidationResult Validate(in GASStateBatchChunk message)
         {
             GASNetworkMessageValidationResult common = ValidateCommon(
-                message.ProtocolVersion,
                 message.StreamEpoch,
                 message.BatchSequence,
                 message.Entity);
@@ -229,7 +225,6 @@ namespace CycloneGames.GameplayAbilities.Networking
         public static GASNetworkMessageValidationResult Validate(in GASStateAcknowledgement message)
         {
             GASNetworkMessageValidationResult common = ValidateCommon(
-                message.ProtocolVersion,
                 message.StreamEpoch,
                 message.BatchSequence,
                 message.Entity);
@@ -246,7 +241,6 @@ namespace CycloneGames.GameplayAbilities.Networking
         public static GASNetworkMessageValidationResult Validate(in GASResyncRequest message)
         {
             GASNetworkMessageValidationResult common = ValidateCommon(
-                message.ProtocolVersion,
                 message.StreamEpoch,
                 message.RequestSequence,
                 message.Entity);
@@ -269,7 +263,6 @@ namespace CycloneGames.GameplayAbilities.Networking
         public static GASNetworkMessageValidationResult Validate(in GASCueExecuted message)
         {
             GASNetworkMessageValidationResult common = ValidateCommon(
-                message.ProtocolVersion,
                 message.StreamEpoch,
                 message.CueSequence,
                 message.Entity);
@@ -453,15 +446,10 @@ namespace CycloneGames.GameplayAbilities.Networking
         }
 
         private static GASNetworkMessageValidationResult ValidateCommon(
-            byte protocolVersion,
             uint streamEpoch,
             uint sequence,
             GASNetworkEntityId entity)
         {
-            if (!GameplayAbilitiesNetworkProtocol.IsSupportedProtocolVersion(protocolVersion))
-            {
-                return GASNetworkMessageValidationResult.UnsupportedProtocolVersion;
-            }
 
             if (streamEpoch == 0u)
             {

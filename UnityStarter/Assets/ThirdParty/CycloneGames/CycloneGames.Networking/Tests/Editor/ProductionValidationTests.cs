@@ -12,28 +12,28 @@ namespace CycloneGames.Networking.Tests.Editor
                 .CreateMassiveShardBuilder()
                 .Build();
             var input = new NetworkProductionValidationInput()
-                .AddEvidence(NetworkValidationEvidenceFactory.Passed(
+                .AddEvidence(TrustedEvidence(
                     NetworkValidationIds.LoadSimulation,
                     connectionCount: 10000,
                     sameAreaConnectionCount: 10000,
                     iterations: 100000))
-                .AddEvidence(NetworkValidationEvidenceFactory.Passed(
+                .AddEvidence(TrustedEvidence(
                     NetworkValidationIds.GcBudget,
                     allocatedBytesPerTick: 0L,
                     iterations: 100000))
-                .AddEvidence(NetworkValidationEvidenceFactory.Passed(
+                .AddEvidence(TrustedEvidence(
                     NetworkValidationIds.ProtocolFuzz,
                     iterations: 1000,
                     rejectedRatio: 1d))
-                .AddEvidence(NetworkValidationEvidenceFactory.Passed(
+                .AddEvidence(TrustedEvidence(
                     NetworkValidationIds.AdapterContract,
                     connectionCount: 10000,
                     iterations: 10000))
-                .AddEvidence(NetworkValidationEvidenceFactory.Passed(
+                .AddEvidence(TrustedEvidence(
                     NetworkValidationIds.ReconnectStorm,
                     connectionCount: 10000,
                     iterations: 100))
-                .AddEvidence(NetworkValidationEvidenceFactory.Passed(
+                .AddEvidence(TrustedEvidence(
                     NetworkValidationIds.Soak,
                     connectionCount: 10000,
                     durationSeconds: 3600d));
@@ -123,5 +123,23 @@ namespace CycloneGames.Networking.Tests.Editor
 
             Assert.IsTrue(report.Passed);
         }
+        private static NetworkValidationEvidence TrustedEvidence(
+            NetworkValidationId id,
+            int connectionCount = 0,
+            int sameAreaConnectionCount = 0,
+            int iterations = 0,
+            double durationSeconds = 0d,
+            long allocatedBytesPerTick = -1L,
+            double rejectedRatio = -1d)
+        {
+            var context = new NetworkValidationExecutionContext(
+                "audit-build", "Editor", "ProductionValidationTests",
+                System.DateTime.UtcNow.Ticks, 42UL, 0xA5A5UL);
+            return NetworkValidationEvidenceFactory.FromExecution(
+                id, in context, true, connectionCount, sameAreaConnectionCount,
+                iterations, durationSeconds, allocatedBytesPerTick, rejectedRatio);
+        }
+
+
     }
 }

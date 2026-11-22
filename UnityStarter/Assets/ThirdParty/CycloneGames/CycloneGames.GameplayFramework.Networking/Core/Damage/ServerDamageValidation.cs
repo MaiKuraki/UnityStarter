@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using CycloneGames.Networking.Transports;
 using CycloneGames.Networking;
 
 namespace CycloneGames.GameplayFramework.Networking
@@ -272,13 +273,15 @@ namespace CycloneGames.GameplayFramework.Networking
         public const int DefaultMaximumTrackedInstigators = 65_536;
 
         private readonly Dictionary<int, double> _lastAcceptedByInstigator;
+        private readonly INetworkMonotonicTimeProvider _timeProvider;
         private readonly int _maximumTrackedInstigators;
         private readonly int _ownerThreadId;
         private long _rejectedAdmissionCount;
 
         public DamageCooldownTracker(
             int initialCapacity = 64,
-            int maximumTrackedInstigators = DefaultMaximumTrackedInstigators)
+            int maximumTrackedInstigators = DefaultMaximumTrackedInstigators,
+            INetworkMonotonicTimeProvider timeProvider = null)
         {
             if (maximumTrackedInstigators < 0
                 || maximumTrackedInstigators > MaximumSupportedTrackedInstigators)
@@ -294,6 +297,7 @@ namespace CycloneGames.GameplayFramework.Networking
             _maximumTrackedInstigators = maximumTrackedInstigators;
             _ownerThreadId = Thread.CurrentThread.ManagedThreadId;
             _lastAcceptedByInstigator = new Dictionary<int, double>(initialCapacity);
+            _timeProvider = timeProvider ?? new NetworkStopwatchTimeProvider();
         }
 
         public int TrackedCount
@@ -306,6 +310,10 @@ namespace CycloneGames.GameplayFramework.Networking
         }
 
         public int MaximumTrackedInstigators => _maximumTrackedInstigators;
+
+        /// <summary>Monotonic seconds from the injected clock; never steps backwards.</summary>
+        public double CurrentMonotonicSeconds =>
+            _timeProvider.GetMonotonicTicks() / (double)_timeProvider.TicksPerSecond;
 
         public DamageCooldownTrackerSnapshot GetAdmissionSnapshot()
         {
@@ -390,11 +398,10 @@ namespace CycloneGames.GameplayFramework.Networking
         /// <paramref name="maxWork"/> entries per call so periodic pruning never spikes the frame.
         /// Actors destroyed without an explicit <see cref="Remove"/> are reclaimed here.
         /// </summary>
-        public int PruneIdle(double currentTimeSeconds, double idleTimeoutSeconds, int maxWork = 256)
+        public int PruneIdle(double idleTimeoutSeconds, int maxWork = 256)
         {
             AssertOwnerThread();
-            if (currentTimeSeconds < 0d || double.IsNaN(currentTimeSeconds) || double.IsInfinity(currentTimeSeconds))
-                throw new ArgumentOutOfRangeException(nameof(currentTimeSeconds));
+            double currentTimeSeconds = CurrentMonotonicSeconds;
             if (idleTimeoutSeconds <= 0d || double.IsNaN(idleTimeoutSeconds) || double.IsInfinity(idleTimeoutSeconds))
                 throw new ArgumentOutOfRangeException(nameof(idleTimeoutSeconds));
             if (maxWork < 0)
@@ -456,15 +463,19 @@ namespace CycloneGames.GameplayFramework.Networking
     {
         private readonly IServerDamageValidator _customValidator;
         private readonly DamageCooldownTracker _cooldownTracker;
+        private readonly INetworkMonotonicTimeProvider _timeProvider;
 
         public ServerAuthoritativeDamageProcessor(
             IServerDamageValidator validator = null,
-            DamageCooldownTracker cooldownTracker = null)
+            DamageCooldownTracker cooldownTracker = null,
+            INetworkMonotonicTimeProvider timeProvider = null)
         {
             _customValidator = ReferenceEquals(validator, DefaultServerDamageValidator.Instance)
                 ? null
                 : validator;
-            _cooldownTracker = cooldownTracker ?? new DamageCooldownTracker();
+            _timeProvider = timeProvider ?? new NetworkStopwatchTimeProvider();
+            _cooldownTracker = cooldownTracker
+                              ?? new DamageCooldownTracker(timeProvider: _timeProvider);
         }
 
         public DamageCooldownTracker CooldownTracker => _cooldownTracker;
@@ -480,9 +491,12 @@ namespace CycloneGames.GameplayFramework.Networking
             double authoritativeLastAcceptedTime = request.InstigatorActorId > 0
                 ? _cooldownTracker.GetLastAcceptedTime(request.InstigatorActorId)
                 : double.NegativeInfinity;
+            double authoritativeTimeSeconds =
+                _timeProvider.GetMonotonicTicks() / (double)_timeProvider.TicksPerSecond;
             ServerDamageValidationRequest authoritativeRequest = WithLastAcceptedTime(
                 in request,
-                authoritativeLastAcceptedTime);
+                authoritativeLastAcceptedTime,
+                authoritativeTimeSeconds);
 
             bool hitLocationIsFinite = hitLocation.IsFinite();
             ServerDamageValidationResult baselineResult = hitLocationIsFinite
@@ -549,7 +563,8 @@ namespace CycloneGames.GameplayFramework.Networking
 
         private static ServerDamageValidationRequest WithLastAcceptedTime(
             in ServerDamageValidationRequest request,
-            double lastAcceptedTimeSeconds)
+            double lastAcceptedTimeSeconds,
+            double currentTimeSeconds)
         {
             return new ServerDamageValidationRequest(
                 request.InstigatorActorId,
@@ -562,7 +577,7 @@ namespace CycloneGames.GameplayFramework.Networking
                 request.RequestedDamage,
                 request.MaxDamage,
                 request.MaxRangeSqr,
-                request.CurrentTimeSeconds,
+                currentTimeSeconds,
                 lastAcceptedTimeSeconds,
                 request.CooldownSeconds);
         }
