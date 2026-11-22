@@ -161,7 +161,7 @@ namespace CycloneGames.InputSystem.Runtime
         public bool WasMigrated { get; }
 
         /// <summary>
-        /// Deep-cloned, migrated DTO suitable for persistence. It is never the caller-owned instance.
+        /// Deep-cloned, normalized DTO suitable for persistence. It is never the caller-owned instance.
         /// </summary>
         public InputConfiguration Configuration { get; }
 
@@ -204,9 +204,8 @@ namespace CycloneGames.InputSystem.Runtime
             JoinAction = source.JoinAction == null ? null : new RuntimeActionBindingConfig(source.JoinAction);
             DefaultControlScheme = source.DefaultControlScheme;
             PairAllMatchingDevices = source.PairAllMatchingDevices;
-            // Both values arrive from an untrusted YAML boundary. Clamp instead of rejecting so that legacy
-            // configurations that omit the keys (zero) keep their previous behaviour, and a hostile value
-            // cannot widen the per-layout scan or the device-switch window.
+            // Both values arrive from an untrusted YAML boundary. Clamp so a hostile value cannot widen
+            // the per-layout scan or the device-switch window.
             MaxDevicesPerLayout = Math.Min(8, Math.Max(1, source.MaxDevicesPerLayout));
             DeviceSwitchDebounceMs = Math.Min(5000, Math.Max(0, source.DeviceSwitchDebounceMs));
 

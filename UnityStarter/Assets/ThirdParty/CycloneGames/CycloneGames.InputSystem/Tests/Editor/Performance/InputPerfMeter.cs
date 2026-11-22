@@ -322,8 +322,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
         };
 
         /// <summary>
-        /// Reports which well known allocation and managed memory statistics can be recorded on this host, so
-        /// that the report can justify the recorder name it relies on instead of assuming availability.
+        /// Reports which allocation and managed memory statistics can be recorded on this host.
         /// </summary>
         internal static List<string> ProbeRecorderNames()
         {
@@ -424,7 +423,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
             if (GC.CollectionCount(0) == baseline)
             {
                 // The probe never reached a collection. Report the full probe volume as a lower bound so that
-                // callers treat the estimate as unusable instead of trusting an optimistic number.
+                // callers treat the estimate as unusable.
                 _thresholdBytes = 0;
             }
             else

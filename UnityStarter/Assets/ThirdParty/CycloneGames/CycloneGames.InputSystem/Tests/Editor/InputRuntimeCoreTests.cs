@@ -1799,16 +1799,9 @@ namespace CycloneGames.InputSystem.Runtime.Tests
             const int PumpsPerFrame = 8;
             const int ControlAllocationBytes = 64 * 1024;
 
-            // The budget is derived from the frame recorder's own differential noise, not from a
-            // per-call allocation target. The residue for identical work measures +772 B in the
-            // interactive editor and -264 B under -batchmode. A negative residue cannot be a real
-            // allocation, so the estimator carries roughly +/-1 KB of symmetric error and any budget
-            // below that is unsatisfiable by construction.
-            //
-            // 4 KiB keeps ~5x margin over the worst observed residue and still catches any real
-            // steady-state allocation: one boxed struct or array header is >= 24 B per pump, which is
-            // >= 17 KiB across the 720 pumps below. The 64 B/pump mutation probe was measured at
-            // 67747 B, so the detection path is intact at this budget.
+            // The frame recorder's differential noise is roughly +/-1 KB. A 4 KiB budget stays above
+            // that noise floor while still catching a real per-pump allocation (>= 17 KiB across the
+            // 720 pumps below).
             const long AllocationBudgetBytes = 4 * 1024;
 
             Gamepad gamepad = UnityEngine.InputSystem.InputSystem.AddDevice<Gamepad>();

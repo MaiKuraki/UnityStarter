@@ -98,13 +98,15 @@ namespace CycloneGames.Networking
             long systemMemoryMB,
             long graphicsMemoryMB = 0,
             double benchmarkScoreMBps = 0,
-            bool isDedicatedServer = false)
+            bool isDedicatedServer = false,
+            ulong benchmarkParametersId = 0UL)
         {
             LogicalProcessorCount = logicalProcessorCount;
             SystemMemoryMB = systemMemoryMB;
             GraphicsMemoryMB = graphicsMemoryMB;
             BenchmarkScoreMBps = benchmarkScoreMBps;
             IsDedicatedServer = isDedicatedServer;
+            BenchmarkParametersId = benchmarkParametersId;
         }
 
         public int LogicalProcessorCount { get; }
@@ -116,6 +118,15 @@ namespace CycloneGames.Networking
         /// in MB/s. 0 means "not measured"; the static heuristics are used instead.
         /// </summary>
         public double BenchmarkScoreMBps { get; }
+
+        /// <summary>
+        /// Identity of the <see cref="NetworkProbeParameters"/> that produced
+        /// BenchmarkScoreMBps. A classification table with a non-zero
+        /// ExpectedProbeParametersId ignores scores that do not match it, rather
+        /// than assigning a tier from an incomparable measurement.
+        /// </summary>
+        public ulong BenchmarkParametersId { get; }
+
         public bool IsDedicatedServer { get; }
     }
 
@@ -125,7 +136,7 @@ namespace CycloneGames.Networking
     /// product scope and measured frame budget. Presets ship as named factories
     /// (<see cref="CreateStandard"/> for devices with generous memory and cooling,
     /// <see cref="CreateConstrained"/> for memory/thermally constrained devices); the
-    /// platform adapter picks the appropriate table — core code encodes no
+    /// platform adapter picks the appropriate table; core code encodes no
     /// assumptions about any device category. Replace globally via
     /// <see cref="NetworkDeviceProfiles.DefaultThresholds"/> at composition time,
     /// or per call via the explicit-threshold overload of
@@ -162,6 +173,14 @@ namespace CycloneGames.Networking
         /// <summary>Benchmark score (MB/s) at or below which the device is at most Medium tier.</summary>
         public double MediumMaxBenchmarkMBps;
 
+        /// <summary>
+        /// Parameter identity a measured benchmark score must carry to be used for
+        /// classification. 0 disables the check. Presets bind to
+        /// NetworkProbeParameters.Standard so ad-hoc probe arguments cannot move
+        /// a device between tiers.
+        /// </summary>
+        public ulong ExpectedProbeParametersId;
+
         /// <summary>Standard preset for devices with generous memory and sustained cooling.</summary>
         public static NetworkTierThresholds CreateStandard()
         {
@@ -173,7 +192,8 @@ namespace CycloneGames.Networking
                 MediumMaxMemoryMB = 16384,
                 MediumMaxGraphicsMemoryMB = 2048,
                 LowMaxBenchmarkMBps = 800,
-                MediumMaxBenchmarkMBps = 2500
+                MediumMaxBenchmarkMBps = 2500,
+                ExpectedProbeParametersId = NetworkProbeParameters.Standard.ParametersId
             };
         }
 
@@ -181,7 +201,7 @@ namespace CycloneGames.Networking
         /// Constrained-device preset: tighter memory ceilings for devices whose RAM
         /// is shared aggressively with the OS/GPU, and lower benchmark ceilings for
         /// devices whose sustained throughput is thermally capped. Named after the
-        /// constraint it models, not any device category — a thin-and-light laptop
+        /// constraint it models, not any device category. A thin-and-light laptop
         /// or handheld can be just as constrained as a phone. The platform adapter
         /// picks the table; core code encodes no category assumptions.
         /// </summary>
@@ -195,7 +215,8 @@ namespace CycloneGames.Networking
                 MediumMaxMemoryMB = 8192,
                 MediumMaxGraphicsMemoryMB = 1024,
                 LowMaxBenchmarkMBps = 500,
-                MediumMaxBenchmarkMBps = 1500
+                MediumMaxBenchmarkMBps = 1500,
+                ExpectedProbeParametersId = NetworkProbeParameters.Standard.ParametersId
             };
         }
 
@@ -222,7 +243,7 @@ namespace CycloneGames.Networking
     /// <see cref="LowTierSpec"/> etc. Games can replace any tier's values via
     /// <see cref="RegisterTierOverride"/> at composition time, or bypass tiers
     /// entirely with <see cref="ForSpec"/>; core code never needs modification.
-    /// Session-size concerns are deliberately NOT modeled here — see
+    /// Session-size concerns are not modeled here; see
     /// <see cref="NetworkSessionScaleTable"/> and <see cref="NetworkProfileComposer"/>.
     /// </summary>
     public static class NetworkDeviceProfiles
@@ -352,7 +373,14 @@ namespace CycloneGames.Networking
             if (hardware.IsDedicatedServer)
                 return NetworkPerformanceTier.Server;
 
-            if (hardware.BenchmarkScoreMBps > 0)
+            // A score without a matching parameter identity is not comparable to
+            // the calibrated thresholds. Fail closed to the static heuristics
+            // instead of assigning a tier from an arbitrary measurement.
+            bool usableScore = hardware.BenchmarkScoreMBps > 0
+                               && (thresholds.ExpectedProbeParametersId == 0UL
+                                   || hardware.BenchmarkParametersId == thresholds.ExpectedProbeParametersId);
+
+            if (usableScore)
             {
                 if (hardware.BenchmarkScoreMBps <= thresholds.LowMaxBenchmarkMBps ||
                     hardware.SystemMemoryMB <= thresholds.LowMaxMemoryMB)

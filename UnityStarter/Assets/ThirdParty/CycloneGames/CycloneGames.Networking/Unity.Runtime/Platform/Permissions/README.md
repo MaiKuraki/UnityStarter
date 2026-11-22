@@ -70,9 +70,9 @@ NetworkLocalAddressUtility.GetLanIPv4Addresses(addresses);
 ## Extensibility
 
 The platform default from `NetworkHostPermissionServiceFactory.CreateDefault` is only a baseline. Implement
-`INetworkHostPermissionService` to add real behavior a platform cannot express here — for example a native iOS
+`INetworkHostPermissionService` to add behavior a platform cannot express here, for example a native iOS
 Local Network permission trigger, an Android nearby/Wi-Fi permission flow, or a Linux service that shells out to
-the distribution firewall — and inject it where it is used:
+the distribution firewall; inject it where it is used:
 
 ```csharp
 var probe = GetComponent<NetworkHostPermissionProbe>();

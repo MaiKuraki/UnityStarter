@@ -8,10 +8,8 @@ using UnityEngine.TestTools;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// Compares every allocation instrument that could plausibly observe managed garbage on this host.
-    /// The module's existing steady-state allocation test depends on
-    /// <see cref="GC.GetAllocatedBytesForCurrentThread"/>, so the accuracy of that counter has direct
-    /// consequences for whether the existing budget assertion can fail at all.
+    /// Compares the allocation instruments available on this host. The steady-state allocation test
+    /// depends on <see cref="GC.GetAllocatedBytesForCurrentThread"/>, so its accuracy is asserted here.
     /// </summary>
     public sealed class InputPerfInstrumentProbeTests
     {

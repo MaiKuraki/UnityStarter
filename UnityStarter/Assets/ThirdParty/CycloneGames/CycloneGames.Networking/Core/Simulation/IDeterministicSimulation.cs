@@ -5,13 +5,13 @@ namespace CycloneGames.Networking.Simulation
     /// <summary>
     /// Genre-agnostic, numeric-agnostic deterministic simulation contract. A game implements this once to
     /// describe how one fixed simulation step advances state from a set of inputs, and can then drive it
-    /// through any networking topology (lockstep, rollback, client prediction) via the matching adapter —
+    /// through any networking topology (lockstep, rollback, client prediction) via the matching adapter;
     /// without rewriting the simulation per topology.
     /// </summary>
     /// <typeparam name="TInput">
     /// Per-peer input for a single step. Must be <c>unmanaged</c> so it can live in the topologies' pre-allocated
     /// ring buffers with zero garbage. If a step needs a timestep, encode a fixed delta inside this struct; the
-    /// contract is deliberately fixed-step and takes no delta-time parameter (variable delta breaks determinism).
+    /// contract is fixed-step and takes no delta-time parameter; variable delta breaks determinism.
     /// </typeparam>
     /// <typeparam name="TState">
     /// Complete simulation state. Must be <c>unmanaged</c> so snapshots are plain value copies the topologies can

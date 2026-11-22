@@ -280,6 +280,43 @@ namespace CycloneGames.Networking
                 description);
         }
 
+        /// <summary>
+        /// Trusted evidence entry point. Binds the reported counters to an explicit
+        /// execution context and derives the run digest from the evidence fields.
+        /// Use <see cref="NetworkValidationProbeRunner"/> instead of calling this
+        /// directly so the counters come from a real probe execution.
+        /// </summary>
+        public static NetworkValidationEvidence FromExecution(
+            NetworkValidationId id,
+            in NetworkValidationExecutionContext context,
+            bool passed,
+            int connectionCount = 0,
+            int sameAreaConnectionCount = 0,
+            int iterations = 0,
+            double durationSeconds = 0d,
+            long allocatedBytesPerTick = -1L,
+            double rejectedRatio = -1d,
+            int failureCount = 0,
+            string description = "")
+        {
+            NetworkValidationEvidenceOrigin origin = new NetworkValidationEvidenceOrigin(
+                context.BuildId, context.Platform, context.RunnerId,
+                context.StartedAtUtcTicks, context.Seed, context.SourceDigest);
+
+            NetworkValidationEvidence draft = new NetworkValidationEvidence(
+                id, passed, connectionCount, sameAreaConnectionCount, iterations,
+                durationSeconds, allocatedBytesPerTick, rejectedRatio, failureCount,
+                description, origin);
+
+            NetworkValidationEvidenceOrigin completed = origin.WithRunDigest(
+                NetworkValidationEvidenceOrigin.ComputeDigest(draft));
+
+            return new NetworkValidationEvidence(
+                id, passed, connectionCount, sameAreaConnectionCount, iterations,
+                durationSeconds, allocatedBytesPerTick, rejectedRatio, failureCount,
+                description, completed);
+        }
+
         public static NetworkValidationEvidence Failed(
             NetworkValidationId id,
             int connectionCount = 0,

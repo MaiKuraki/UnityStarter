@@ -42,7 +42,7 @@ namespace CycloneGames.Networking.Interest
         // Deep-reveal zones that also reveal hidden/cloaked entities
         private readonly List<RevealZone> _deepRevealZones = new List<RevealZone>(8);
 
-        // Entities flagged as hidden — require deep-reveal to become visible
+        // Entities flagged as hidden require deep-reveal to become visible
         private readonly HashSet<uint> _hiddenEntities = new HashSet<uint>();
 
         private static readonly List<DetectionSource> EmptyDetectionList = new List<DetectionSource>(0);
@@ -182,7 +182,7 @@ namespace CycloneGames.Networking.Interest
 
                 _entityTeams.TryGetValue(entity.NetworkId, out int entityTeamId);
 
-                // Rule 2: Same team — always visible
+                // Rule 2: Same team is always visible
                 if (entityTeamId == myTeamId)
                 {
                     results.Add(entity.NetworkId);

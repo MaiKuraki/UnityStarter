@@ -1,6 +1,6 @@
 # Configuration Guide
 
-[English | 简体中文](Configuration.SCH.md)
+English | [简体中文](Configuration.SCH.md)
 
 Related: [Getting started](GettingStarted.md) | [Runtime guide](RuntimeGuide.md) | [Module reference](../README.md)
 
@@ -8,9 +8,9 @@ Related: [Getting started](GettingStarted.md) | [Runtime guide](RuntimeGuide.md)
 
 This guide explains the authoring model shared by YAML, the Input System Editor, and runtime validation. The Editor and YAML represent the same data: the Editor provides discoverable fields, tooltips, validation, safe writes, and code generation; YAML remains the reviewable source format.
 
-## Core Concepts
+## Core concepts
 
-### Configuration Hierarchy
+### Configuration hierarchy
 
 ```mermaid
 flowchart TD
@@ -25,7 +25,7 @@ flowchart TD
     M --> Q["Composite parts"]
 ```
 
-### Root Fields
+### Root fields
 
 | Field | Required | Meaning |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ flowchart TD
 | `joinAction` | No | Shared join action considered for every player slot when lobby listening is active. |
 | `playerSlots` | Yes | Declared local-player configurations. Each `playerId` must be unique. |
 
-### Player Slot
+### Player slot
 
 | Field | Required | Meaning |
 | --- | --- | --- |
@@ -49,9 +49,9 @@ flowchart TD
 
 Player IDs are configuration identities, not list positions. Sparse IDs are accepted when they remain within configured limits.
 
-A locked slot (one that selects a control scheme) narrows both the device whitelist and the binding mask to that scheme. A `pairAllMatchingDevices` slot widens the device whitelist to every referenced layout but keeps the binding mask open, which is how one player answers to a keyboard, a mouse and a gamepad without re-joining. Keep `maxDevicesPerLayout` small in local-multiplayer sessions so spare devices remain claimable by other players. Values outside the documented ranges are clamped, not rejected, so legacy files that omit these keys keep their previous behaviour.
+A locked slot (one that selects a control scheme) narrows both the device whitelist and the binding mask to that scheme. A `pairAllMatchingDevices` slot widens the device whitelist to every referenced layout but keeps the binding mask open, which is how one player answers to a keyboard, a mouse and a gamepad without re-joining. Keep `maxDevicesPerLayout` small in local-multiplayer sessions so spare devices remain claimable by other players. Values outside the documented ranges are clamped, not rejected.
 
-### Control Scheme
+### Control scheme
 
 ```yaml
 controlSchemes:
@@ -90,9 +90,9 @@ Contexts group actions by product state: `Gameplay` for character control, `Vehi
 
 Runtime `InputContext` instances refer to configured context/action-map identities and own command subscriptions. Configuration defines available actions; runtime code decides which contexts are active.
 
-## Usage Guide
+## Usage guide
 
-### Action Binding: Basic Fields
+### Action binding: basic fields
 
 | Field | Required | Meaning | Example |
 | --- | --- | --- | --- |
@@ -107,9 +107,9 @@ Runtime `InputContext` instances refer to configured context/action-map identiti
 
 Direct and composite bindings may coexist. Each direct path must be unique inside one action.
 
-`Device Binding Groups` is optional and additive. When present it must contain exactly one entry per `Device Bindings` entry; each non-empty entry must reference a declared control-scheme `bindingGroup`. Giving each device its own group makes the scheme's `bindingMask` a second, independent defence: a gamepad binding tagged only `Gamepad` stays masked out under a `KeyboardMouse` scheme even if that player's device whitelist is later widened. Configurations that omit the key keep their previous behaviour unchanged.
+`Device Binding Groups` is optional and additive. When present it must contain exactly one entry per `Device Bindings` entry; each non-empty entry must reference a declared control-scheme `bindingGroup`. Giving each device its own group makes the scheme's `bindingMask` a second, independent defence: a gamepad binding tagged only `Gamepad` stays masked out under a `KeyboardMouse` scheme even if that player's device whitelist is later widened. An omitted list or an empty entry falls back to the action-level `Binding Groups`.
 
-#### Choosing `Type`
+#### Choosing an action type
 
 | Type | Typical controls | Runtime access |
 | --- | --- | --- |
@@ -119,7 +119,7 @@ Direct and composite bindings may coexist. Each direct path must be unique insid
 
 Choose the value shape consumed by product code. Validation checks that configured controls and action construction can satisfy the declaration.
 
-### Action Binding: Advanced Fields
+### Action binding: advanced fields
 
 The Editor places optional metadata under `Advanced Options`.
 
@@ -132,7 +132,7 @@ The Editor places optional metadata under `Advanced Options`.
 
 Leave these fields empty when their constraint is not needed. Interactions belong to the action binding. Composite parts can define part-local processors; part-local interactions must remain empty.
 
-### Composite Binding Example
+### Composite binding example
 
 ```yaml
 compositeBindings:
@@ -152,11 +152,11 @@ compositeBindings:
 
 Composite part names must match the selected composite. Validation constructs a temporary action graph against the active Input System registry, so unknown composites, parts, processors, interactions, and paths fail before runtime commit.
 
-### Join Actions
+### Join actions
 
 Join actions are used only when `StartListeningForPlayers` is active. Root join paths are shared candidates. Slot join paths identify slot-specific candidates. Device-locking mode assigns the triggering device to the joined player. Do not duplicate the same direct path inside one join action.
 
-### Editor Commands and File Ownership
+### Editor commands and file ownership
 
 | Command | Writes | Does not write |
 | --- | --- | --- |
@@ -171,7 +171,7 @@ Join actions are used only when `StartListeningForPlayers` is active. Root join 
 
 All writes validate the configuration first. Existing targets use transactional replacement and retain a bounded recovery backup.
 
-### Validation States
+### Validation states
 
 | State | Meaning | Available action |
 | --- | --- | --- |
@@ -181,7 +181,7 @@ All writes validate the configuration first. Existing targets use transactional 
 | `REVIEW` | The document is usable with a review note. | Inspect the message before saving. |
 | `INVALID` | A field, identity, budget, or Input System registration failed validation. | Edit the indicated field; persistence remains blocked. |
 
-### Authoring Checklist
+### Authoring checklist
 
 - Player IDs are unique.
 - Context names are unique per player.

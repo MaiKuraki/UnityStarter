@@ -1,12 +1,12 @@
 # Getting Started
 
-[English | 简体中文](GettingStarted.SCH.md)
+English | [简体中文](GettingStarted.SCH.md)
 
 Related: [Configuration guide](Configuration.md) | [Runtime guide](RuntimeGuide.md) | [Module reference](../README.md)
 
 ## Overview
 
-This guide takes a project from an authored configuration to one active player and one gameplay context. It uses a serialized `TextAsset` to keep the first integration visible before choosing a storage policy.
+This guide takes a project from an authored configuration to one active player and one gameplay context. The first integration reads a serialized `TextAsset`; storage policy is selected later, as described under [Choose the configuration owner](#choose-the-configuration-owner).
 
 ### Prerequisites
 
@@ -15,7 +15,7 @@ This guide takes a project from an authored configuration to one active player a
 - The scene contains the devices required by the selected control scheme.
 - The configuration stays within module validation budgets.
 
-## Core Concepts
+## Core concepts
 
 A usable configuration needs four identities:
 
@@ -26,7 +26,7 @@ A usable configuration needs four identities:
 
 The full runtime identity is `context/actionMap/action`. Generated action IDs are deterministic FNV-1a hashes of this identity.
 
-## Usage Guide
+## Usage guide
 
 ### Create a configuration
 

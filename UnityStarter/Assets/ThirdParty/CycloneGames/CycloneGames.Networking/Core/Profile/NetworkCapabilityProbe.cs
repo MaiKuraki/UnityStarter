@@ -5,54 +5,20 @@ using System.Diagnostics;
 namespace CycloneGames.Networking
 {
     /// <summary>
-    /// Runtime micro-benchmark that measures the machine's actual networking hot
-    /// path (checksum + copy + pool churn) instead of trusting static hardware
-    /// heuristics. Core count is a poor proxy for networking throughput:
-    /// heterogeneous big.LITTLE cores and 2-3x per-core performance spreads across
-    /// architectures make static tables misjudge real devices. A short measurement
-    /// gets all of that right automatically.
+    /// Measures networking hot-path throughput (checksum, copy and pooled buffer
+    /// churn) with fixed-size workloads, high-resolution Stopwatch timing and a
+    /// per-iteration checksum seed that keeps the FNV loop from being folded into
+    /// a constant. The score is the median of per-round scores; each round uses
+    /// the worse of the MTU-sized and 64 KB payload classes.
     ///
-    /// Measurement hardening, based on how real devices behave:
-    /// - Multiple rounds with a per-round warmup phase, so JIT/first-touch costs
-    ///   never pollute a measured window.
-    /// - The final score is the MEDIAN of per-round scores: a single GC pause,
-    ///   scheduler hiccup, VM time-slice gap or thermal blip ruins one round, not
-    ///   the result. Median is robust against exactly this kind of outlier.
-    /// - Each round measures two payload classes: MTU-sized (cache-resident) and
-    ///   64 KB (exceeds L1/L2, stresses the memory subsystem like real reassembly
-    ///   and snapshot copies do). The round score is the WORSE of the two, so a
-    ///   fast-but-cached number cannot mask a weak memory bus.
+    /// Measure returns a NetworkCapabilityScore carrying the ParametersId of the
+    /// configuration that produced it. Classifiers reject scores whose
+    /// ParametersId does not match NetworkTierThresholds.ExpectedProbeParametersId.
     ///
-    /// Environment caveats (documented, not hidden): an x86 emulator on a PC will
-    /// report PC-class scores — truthful for the code that actually runs there,
-    /// but never use emulator numbers to calibrate device threshold tables. In
-    /// virtualized/cloud environments timer and scheduler jitter inflate variance,
-    /// which the median absorbs; if even the median is untrusted (hooked or
-    /// heavily throttled sandboxes), the score is only a default recommendation —
-    /// operators can always override the tier explicitly. The probe can never
-    /// prove its own environment; treat it as the best available default signal.
-    ///
-    /// CRITICAL — scores are only comparable WITHIN the same scripting backend.
-    /// Measured on the same high-end desktop (2026): Unity Editor (Mono JIT)
-    /// ~600 MB/s vs CoreCLR ~1.0-1.7 GB/s — a 2-3x gap on identical hardware;
-    /// IL2CPP player builds land elsewhere again. Consequences:
-    /// - Never classify from an Editor-measured score using player-calibrated
-    ///   threshold tables: in the Editor everything looks ~2-3x slower and even a
-    ///   flagship CPU would be stamped Low. In Editor, prefer static heuristics
-    ///   or an explicitly Editor-calibrated table.
-    /// - Calibrate <see cref="NetworkTierThresholds"/> benchmark ceilings from
-    ///   IL2CPP development builds on real target hardware, per backend.
-    /// - Future Unity runtimes (CoreCLR-based Unity) shift scores again — by
-    ///   design. The probe measures the backend the game actually ships on, so
-    ///   classification stays correct across backend migrations as long as
-    ///   thresholds were calibrated on that same backend. Static heuristics
-    ///   (core/memory tables) are the backend-independent fallback.
-    /// - Cache the measured score per install (e.g. in a save file) rather than
-    ///   re-probing every launch.
-    ///
-    /// The probe is time-bounded, allocates nothing after its pooled buffers, is
-    /// single-threaded by design (the networking hot path is single-threaded),
-    /// and is IL2CPP/AOT-safe (no reflection, no dynamic code).
+    /// Scores are comparable only within the same scripting backend. Calibrate
+    /// threshold tables on target hardware and cache the result per install.
+    /// The inner loop is single-threaded, time-bounded and allocation-free; each
+    /// invocation allocates the per-round score array and rents four buffers.
     /// </summary>
     public static class NetworkCapabilityProbe
     {
@@ -60,62 +26,123 @@ namespace CycloneGames.Networking
         public const int DefaultRoundBudgetMilliseconds = 8;
         public const int DefaultWarmupMilliseconds = 3;
 
-        private const int SmallPayloadSize = NetworkConstants.DefaultMTU;
-        private const int LargePayloadSize = 64 * 1024;
+        private const int DefaultMinIterationsPerWindow = 64;
+
+        // Warm both payload classes past tiered-JIT promotion, then score a
+        // fixed number of iterations per window so the result does not depend on
+        // the caller's time budget.
+        private const int GlobalWarmupSmallIterations = 20000;
+        private const int GlobalWarmupLargeIterations = 512;
+        private const int SmallWindowIterationMultiplier = 128;
+        private const int LargeWindowIterationMultiplier = 4;
+        private const int ProbeWarmupRounds = 2;
+        private const int MinScoredRounds = 5;
 
         /// <summary>
-        /// Runs the probe and returns the median per-round throughput in MB/s.
-        /// Total wall time is bounded by
-        /// rounds * (roundBudget + warmup) milliseconds plus small constant costs.
-        /// Returns 0 if no round produced a usable measurement (caller should then
-        /// fall back to static heuristics).
+        /// Compatibility overload. Prefer <see cref="Measure(in NetworkProbeParameters)"/>,
+        /// which returns a score carrying its parameter identity.
         /// </summary>
         public static double MeasureThroughputMBps(
             int rounds = DefaultRoundCount,
             int roundBudgetMilliseconds = DefaultRoundBudgetMilliseconds,
             int warmupMilliseconds = DefaultWarmupMilliseconds)
         {
-            if (rounds <= 0)
-                throw new ArgumentOutOfRangeException(nameof(rounds));
-            if (roundBudgetMilliseconds <= 0)
-                throw new ArgumentOutOfRangeException(nameof(roundBudgetMilliseconds));
-            if (warmupMilliseconds < 0)
-                throw new ArgumentOutOfRangeException(nameof(warmupMilliseconds));
+            NetworkProbeParameters parameters = new NetworkProbeParameters(
+                rounds,
+                roundBudgetMilliseconds,
+                warmupMilliseconds,
+                DefaultMinIterationsPerWindow,
+                NetworkConstants.DefaultMTU,
+                64 * 1024);
 
-            byte[] smallSource = ArrayPool<byte>.Shared.Rent(SmallPayloadSize);
-            byte[] smallDestination = ArrayPool<byte>.Shared.Rent(SmallPayloadSize);
-            byte[] largeSource = ArrayPool<byte>.Shared.Rent(LargePayloadSize);
-            byte[] largeDestination = ArrayPool<byte>.Shared.Rent(LargePayloadSize);
+            return Measure(parameters).ThroughputMBps;
+        }
+
+        public static NetworkCapabilityScore Measure(in NetworkProbeParameters parameters)
+        {
+            byte[] smallSource = ArrayPool<byte>.Shared.Rent(parameters.SmallPayloadSize);
+            byte[] smallDestination = ArrayPool<byte>.Shared.Rent(parameters.SmallPayloadSize);
+            byte[] largeSource = ArrayPool<byte>.Shared.Rent(parameters.LargePayloadSize);
+            byte[] largeDestination = ArrayPool<byte>.Shared.Rent(parameters.LargePayloadSize);
+
             try
             {
-                FillPattern(smallSource, SmallPayloadSize, 17);
-                FillPattern(largeSource, LargePayloadSize, 29);
+                FillPattern(smallSource, parameters.SmallPayloadSize, 17);
+                FillPattern(largeSource, parameters.LargePayloadSize, 29);
 
-                // Global warmup: get JIT/first-touch/page-fault costs out of the
-                // way before any timed window exists.
-                ulong sink = RunIteration(smallSource, smallDestination, SmallPayloadSize);
-                sink ^= RunIteration(largeSource, largeDestination, LargePayloadSize);
-
-                double[] roundScores = new double[rounds];
-                for (int round = 0; round < rounds; round++)
+                // Global warmup: JIT tier promotion, first-touch and page-fault
+                // costs for BOTH payload classes. The iteration counts are fixed,
+                // so they do not depend on the caller's budget arguments.
+                ulong sink = 0UL;
+                for (int i = 0; i < GlobalWarmupSmallIterations; i++)
                 {
-                    // Per-round warmup keeps each window on equally warm code paths.
-                    sink ^= RunFor(smallSource, smallDestination, SmallPayloadSize, warmupMilliseconds);
-
-                    double smallMBps = Measure(smallSource, smallDestination, SmallPayloadSize, roundBudgetMilliseconds, ref sink);
-                    double largeMBps = Measure(largeSource, largeDestination, LargePayloadSize, roundBudgetMilliseconds, ref sink);
-
-                    // Round score is the worse of the two payload classes.
-                    roundScores[round] = Math.Min(smallMBps, largeMBps);
+                    sink ^= RunIteration(smallSource, smallDestination,
+                        parameters.SmallPayloadSize, 0x9E3779B97F4A7C15UL ^ (ulong)i);
+                }
+                for (int i = 0; i < GlobalWarmupLargeIterations; i++)
+                {
+                    sink ^= RunIteration(largeSource, largeDestination,
+                        parameters.LargePayloadSize, 0xC2B2AE3D27D4EB4FUL ^ (ulong)i);
                 }
 
+                // Discard complete rounds so MeasureWindow/RunFor are already on the
+                // optimised JIT tier and the CPU clock is steady before any scored
+                // sample. Without this, a 1-round probe measures tier-0 code while a
+                // 9-round probe measures tier-1 code on the very same machine.
+                for (int d = 0; d < ProbeWarmupRounds; d++)
+                {
+                    ulong dSeed = 0xD1C0FFEEUL ^ (ulong)d;
+                    sink ^= RunFor(smallSource, smallDestination,
+                        parameters.SmallPayloadSize, parameters.WarmupMilliseconds, dSeed);
+                    sink ^= RunFor(largeSource, largeDestination,
+                        parameters.LargePayloadSize, parameters.WarmupMilliseconds,
+                        dSeed ^ 0x5A5A5A5AUL);
+                    MeasureWindow(smallSource, smallDestination,
+                        parameters.SmallPayloadSize, parameters,
+                        dSeed ^ 0x1111111111111111UL, ref sink, out _);
+                    MeasureWindow(largeSource, largeDestination,
+                        parameters.LargePayloadSize, parameters,
+                        dSeed ^ 0x2222222222222222UL, ref sink, out _);
+                }
+
+                int scoredRounds = parameters.Rounds < MinScoredRounds
+                    ? MinScoredRounds
+                    : parameters.Rounds;
+                double[] roundScores = new double[scoredRounds];
+                long totalIterations = 0L;
+                long startedTicks = Stopwatch.GetTimestamp();
+
+                for (int round = 0; round < scoredRounds; round++)
+                {
+                    ulong roundSeed = unchecked((ulong)round * 0x100000001B3UL + 1UL);
+
+                    // Per-round warmup covers both payload classes.
+                    sink ^= RunFor(smallSource, smallDestination,
+                        parameters.SmallPayloadSize, parameters.WarmupMilliseconds, roundSeed);
+                    sink ^= RunFor(largeSource, largeDestination,
+                        parameters.LargePayloadSize, parameters.WarmupMilliseconds,
+                        roundSeed ^ 0x5A5A5A5AUL);
+
+                    double smallMBps = MeasureWindow(smallSource, smallDestination,
+                        parameters.SmallPayloadSize, parameters,
+                        roundSeed ^ 0x1111111111111111UL, ref sink, out long smallIterations);
+                    double largeMBps = MeasureWindow(largeSource, largeDestination,
+                        parameters.LargePayloadSize, parameters,
+                        roundSeed ^ 0x2222222222222222UL, ref sink, out long largeIterations);
+
+                    roundScores[round] = Math.Min(smallMBps, largeMBps);
+                    totalIterations += smallIterations + largeIterations;
+                }
+
+                long elapsedTicks = Stopwatch.GetTimestamp() - startedTicks;
                 double median = Median(roundScores);
 
-                // Data dependency so the optimizer cannot eliminate the workload.
-                if (median <= 0 || sink == ulong.MaxValue)
-                    return 0;
+                // Data dependency so the workload cannot be eliminated by the optimizer.
+                if (median <= 0d || sink == ulong.MaxValue)
+                    median = 0d;
 
-                return median;
+                return new NetworkCapabilityScore(
+                    median, parameters.ParametersId, scoredRounds, elapsedTicks, totalIterations);
             }
             finally
             {
@@ -126,43 +153,83 @@ namespace CycloneGames.Networking
             }
         }
 
-        private static double Measure(byte[] source, byte[] destination, int length, int budgetMilliseconds, ref ulong sink)
+        private static double MeasureWindow(
+            byte[] source,
+            byte[] destination,
+            int length,
+            in NetworkProbeParameters parameters,
+            ulong seed,
+            ref ulong sink,
+            out long iterations)
         {
-            var stopwatch = Stopwatch.StartNew();
-            long iterations = 0;
+            long budgetTicks = (long)(parameters.RoundBudgetMilliseconds
+                                      * (double)Stopwatch.Frequency / 1000d);
+            if (budgetTicks <= 0L)
+                budgetTicks = 1L;
+
+            // Fixed workload per payload class. Both short and long budget
+            // arguments therefore measure the same number of iterations on the
+            // same (already promoted) JIT tier; only the lower time bound differs.
+            long targetIterations = length >= parameters.LargePayloadSize
+                ? (long)parameters.MinIterationsPerWindow * LargeWindowIterationMultiplier
+                : (long)parameters.MinIterationsPerWindow * SmallWindowIterationMultiplier;
+            if (targetIterations < parameters.MinIterationsPerWindow)
+                targetIterations = parameters.MinIterationsPerWindow;
+
+            long start = Stopwatch.GetTimestamp();
             ulong checksum = sink;
-            while (stopwatch.ElapsedMilliseconds < budgetMilliseconds)
+            long count = 0L;
+
+            while (true)
             {
-                checksum ^= RunIteration(source, destination, length);
-                iterations++;
+                checksum ^= RunIteration(source, destination, length, seed ^ (ulong)count);
+                count++;
+
+                if (count >= targetIterations
+                    && Stopwatch.GetTimestamp() - start >= budgetTicks)
+                {
+                    break;
+                }
             }
-            stopwatch.Stop();
+
+            long elapsedTicks = Stopwatch.GetTimestamp() - start;
             sink = checksum;
+            iterations = count;
 
-            if (iterations == 0 || stopwatch.ElapsedTicks == 0)
-                return 0;
+            double seconds = elapsedTicks / (double)Stopwatch.Frequency;
+            if (seconds <= 0d)
+                return 0d;
 
-            double bytesProcessed = (double)iterations * length * 2; // read + write
-            return bytesProcessed / stopwatch.Elapsed.TotalSeconds / (1024.0 * 1024.0);
+            return (double)count * length * 2d / seconds / (1024d * 1024d);
         }
 
-        private static ulong RunFor(byte[] source, byte[] destination, int length, int milliseconds)
+        private static ulong RunFor(
+            byte[] source, byte[] destination, int length, int milliseconds, ulong seed)
         {
             if (milliseconds == 0)
-                return 0;
+                return 0UL;
 
-            var stopwatch = Stopwatch.StartNew();
-            ulong checksum = 0;
-            while (stopwatch.ElapsedMilliseconds < milliseconds)
-                checksum ^= RunIteration(source, destination, length);
+            long endTicks = Stopwatch.GetTimestamp()
+                            + (long)(milliseconds * (double)Stopwatch.Frequency / 1000d);
+            ulong checksum = 0UL;
+            ulong count = 0UL;
+
+            do
+            {
+                checksum ^= RunIteration(source, destination, length, seed ^ count);
+                count++;
+            }
+            while (Stopwatch.GetTimestamp() < endTicks);
+
             return checksum;
         }
 
-        private static ulong RunIteration(byte[] source, byte[] destination, int length)
+        private static ulong RunIteration(byte[] source, byte[] destination, int length, ulong seed)
         {
             // FNV-1a over the payload (serialization-like read), then a block copy
-            // (transport-like write) — the two dominant costs of the network stack.
-            ulong hash = 14695981039346656037UL;
+            // (transport-like write). The seed varies per iteration so the loop is
+            // not loop-invariant and cannot be hoisted out by the JIT.
+            ulong hash = 14695981039346656037UL ^ seed;
             for (int i = 0; i < length; i++)
             {
                 hash ^= source[i];

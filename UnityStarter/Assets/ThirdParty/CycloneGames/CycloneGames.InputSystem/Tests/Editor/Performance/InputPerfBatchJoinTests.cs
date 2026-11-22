@@ -11,17 +11,14 @@ using UIS = UnityEngine.InputSystem.InputSystem;
 namespace CycloneGames.InputSystem.Tests.Editor
 {
     /// <summary>
-    /// Frame-split evidence for batch join. A batch join now yields between players, so the observable contract is
-    /// "a multi-player batch does not complete inside the frame that started it, and a single-player batch still
-    /// does". These cases measure how many frame boundaries the batch actually spanned instead of asserting on the
-    /// shape of the code, and they pair the multi-player case with a single-player control.
+    /// Measures how many frame boundaries a batch join spans. A multi-player batch yields between
+    /// players and must not complete inside the starting frame; a single-player batch has no trailing
+    /// yield and completes inside the calling frame.
     /// </summary>
     /// <remarks>
-    /// The measured boundary count is a lower bound, not a per-player count: in EditMode the editor pumps the UniTask
-    /// player loop on every <c>EditorApplication.update</c>, so several yield continuations can complete inside one
-    /// test frame. In a real player loop the yield maps to one frame per player. That is why the assertion is
-    /// "spanned more than zero frames" and the evidence is the contrast with the single-player control, which must
-    /// span zero.
+    /// The measured boundary count is a lower bound: in EditMode the editor pumps the UniTask player
+    /// loop on every <c>EditorApplication.update</c>, so several continuations can complete inside one
+    /// test frame.
     /// </remarks>
     public sealed class InputPerfBatchJoinTests
     {
@@ -32,8 +29,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
         private const int ActionsPerContext = 32;
 
         /// <summary>
-        /// Eight players must not complete inside the starting frame: the batch has to span at least one boundary.
-        /// Before the batch yielded between players this case spanned zero, identically to the control below.
+        /// Eight players must not complete inside the starting frame: the batch spans at least one boundary.
         /// </summary>
         [UnityTest]
         [Timeout(180000)]
@@ -43,8 +39,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
         }
 
         /// <summary>
-        /// Control case: a single-player batch has no trailing yield, so it must complete inside the calling frame.
-        /// If this ever spans a frame, the last-player guard has regressed into an unconditional yield.
+        /// Control case: a single-player batch has no trailing yield and completes inside the calling frame.
         /// </summary>
         [UnityTest]
         [Timeout(180000)]

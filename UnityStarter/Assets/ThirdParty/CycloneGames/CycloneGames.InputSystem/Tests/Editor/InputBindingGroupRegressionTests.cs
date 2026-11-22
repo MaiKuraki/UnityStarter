@@ -24,12 +24,9 @@ namespace CycloneGames.InputSystem.Tests.Editor
         private readonly List<InputDevice> _injectedDevices = new List<InputDevice>();
 
         /// <summary>
-        /// EditMode also runs headless (-batchmode), where Unity never creates a keyboard or a mouse.
-        /// The KeyboardMouse scheme in these fixtures requires both as non-optional devices, so without
-        /// this the scheme cannot match at all and JoinSinglePlayer either returns null or silently
-        /// picks the Gamepad scheme instead - the assertions then measure a different code path than the
-        /// one they were written for. Creating the devices explicitly makes the tests hermetic; when the
-        /// interactive editor already provides them this is a no-op.
+        /// EditMode can run headless (-batchmode), where Unity creates no keyboard or mouse. The
+        /// KeyboardMouse scheme in these fixtures requires both as non-optional devices, so the test
+        /// creates them explicitly; in the interactive editor this is a no-op.
         /// </summary>
         private void EnsureSchemeDevices()
         {
@@ -127,9 +124,8 @@ namespace CycloneGames.InputSystem.Tests.Editor
         [Test]
         public void LegacyConfig_WithoutPerBindingGroups_KeepsExactlyTheOldBehaviour()
         {
-            // A configuration that omits the new key must behave bit-for-bit as before: the action-level
-            // mixed groups still let a gamepad binding through the KeyboardMouse mask. This is the
-            // zero-migration guarantee, not a desired behaviour for new configurations.
+            // Without per-binding groups, action-level mixed groups still let a gamepad binding
+            // through the KeyboardMouse mask.
             var pad = UIS.AddDevice<Gamepad>("LegacyPad");
             EnsureSchemeDevices();
             var manager = new InputManager();
@@ -144,7 +140,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
                     Is.EqualTo("KeyboardMouse;Gamepad"));
                 Assert.That(manager.PairAdditionalDevice(0, pad), Is.True);
                 Assert.That(CountGamepadControls(asset, "Confirm"), Is.EqualTo(1),
-                    "Legacy configurations must not silently change semantics.");
+                    "Configurations without per-binding groups must retain the action-level groups.");
             }
             finally
             {
@@ -241,8 +237,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
         }
 
         /// <summary>
-        /// Builds a minimal single-slot locked configuration. groupEntries == null omits the new key
-        /// entirely, which is the legacy shape.
+        /// Builds a minimal single-slot locked configuration. A null groupEntries omits the key entirely.
         /// </summary>
         private static string SingleSlotYaml(IReadOnlyList<string> groupEntries)
         {

@@ -831,10 +831,8 @@ namespace CycloneGames.InputSystem.Runtime
             InputDevice device = context.control?.device;
             if (device == null || !IsDeviceClaimable(device)) return;
 
-            // A join key always creates a player while unregistered slots remain. Only when every declared
-            // slot is occupied does it extend the primary player's device set, which is the single-player
-            // hot-plug case. Previously the locking branch always paired the device to player zero, so a
-            // second local player could never register from a gamepad.
+            // A join key creates a player while unregistered slots remain. Once every declared slot is
+            // occupied, it extends the primary player's device set: the single-player hot-plug case.
             RuntimePlayerSlotConfig fallback = null;
             for (int i = 0; i < _runtimeConfiguration.PlayerSlots.Count; i++)
             {
@@ -1491,13 +1489,9 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
-        /// Counts the paired devices that still exist in the system. <c>InputSystem.onDeviceChange</c> is
-        /// raised <em>before</em> <c>InputUser</c> drops the removed device from
-        /// <c>pairedDevices</c> - measured: on the <c>Removed</c> notification for the second of two paired
-        /// devices the list still reports one entry. A plain <c>pairedDevices.Count</c> check inside the
-        /// notification therefore never sees an orphaned player, and auto-reassignment silently degrades to
-        /// "wait for some unrelated later topology event". Filtering on <c>Device.added</c> makes the check
-        /// correct both inside and outside the notification.
+        /// Counts paired devices that still exist in the system. <c>InputSystem.onDeviceChange</c> fires
+        /// before <c>InputUser</c> removes the device from <c>pairedDevices</c>, so filtering on
+        /// <c>Device.added</c> is required for the count to be correct inside the removal callback.
         /// </summary>
         private static int CountLivePairedDevices(InputUser user)
         {

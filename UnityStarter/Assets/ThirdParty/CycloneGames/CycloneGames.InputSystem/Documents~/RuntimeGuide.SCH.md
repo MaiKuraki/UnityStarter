@@ -1,6 +1,6 @@
 # Runtime 指南
 
-[English | 简体中文](RuntimeGuide.md)
+[English](RuntimeGuide.md) | 简体中文
 
 相关：[快速上手](GettingStarted.SCH.md) | [配置指南](Configuration.SCH.md) | [模块参考](../README.SCH.md)
 

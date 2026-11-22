@@ -60,7 +60,7 @@ namespace CycloneGames.InputSystem.Runtime
         /// <summary>Fine-grained family used for prompt selection.</summary>
         public InputDeviceFamily Family { get; }
 
-        /// <summary>Legacy coarse kind, kept so existing <see cref="InputDeviceKind"/> consumers still work.</summary>
+        /// <summary>Coarse device kind for consumers that do not need per-layout detail.</summary>
         public InputDeviceKind PromptKind { get; }
 
         /// <summary>Full control path of the control that produced the activity, or an empty string.</summary>

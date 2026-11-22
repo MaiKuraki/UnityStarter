@@ -12,10 +12,9 @@ namespace CycloneGames.InputSystem.Editor
     /// Package-local property drawer for <see cref="StringAsConstSelectorAttribute"/>.
     /// </summary>
     /// <remarks>
-    /// Registration binds to the local attribute type only, so this drawer never intercepts
-    /// fields annotated by the CycloneGames.Utility copy. The draw path is allocation-free;
-    /// menu construction, target copying and one command object per option are cold paths
-    /// that run only when the picker is opened.
+    /// Registration binds to the local attribute type only, so fields annotated by other attribute
+    /// types are unaffected. The draw path is allocation-free; menu construction, target copying
+    /// and one command object per option run only when the picker is opened.
     /// </remarks>
     [CustomPropertyDrawer(typeof(StringAsConstSelectorAttribute))]
     internal sealed class StringAsConstSelectorDrawer : PropertyDrawer

@@ -124,6 +124,19 @@ namespace CycloneGames.Networking.Replication
         }
     }
 
+    /// <summary>
+    /// Top-K selection implementation. SortedInsert is cache-friendly and optimal
+    /// for small result capacities; BinaryHeap bounds the worst case at O(N log K)
+    /// when both the object count and the result capacity are large. Both produce
+    /// exactly the same ordered selection sequence.
+    /// </summary>
+    public enum NetworkReplicationSelectionStrategy : byte
+    {
+        SortedInsert = 0,
+        BinaryHeap = 1,
+        Auto = 2
+    }
+
     public sealed class NetworkReplicationPlanner
     {
         private const float FULL_STATE_SCORE_BONUS = 1000000f;
@@ -134,15 +147,31 @@ namespace CycloneGames.Networking.Replication
         private const float OVERDUE_SCORE_PER_TICK = 0.01f;
 
         private readonly INetworkInterestEvaluator _interestEvaluator;
+        private readonly NetworkReplicationSelectionStrategy _strategy;
 
         public NetworkReplicationPlanner()
-            : this(DefaultNetworkInterestEvaluator.Instance)
+            : this(DefaultNetworkInterestEvaluator.Instance, NetworkReplicationSelectionStrategy.Auto)
         {
         }
 
         public NetworkReplicationPlanner(INetworkInterestEvaluator interestEvaluator)
+            : this(interestEvaluator, NetworkReplicationSelectionStrategy.Auto)
+        {
+        }
+
+        public NetworkReplicationPlanner(NetworkReplicationSelectionStrategy strategy)
+            : this(DefaultNetworkInterestEvaluator.Instance, strategy)
+        {
+        }
+
+        public NetworkReplicationPlanner(
+            INetworkInterestEvaluator interestEvaluator,
+            NetworkReplicationSelectionStrategy strategy)
         {
             _interestEvaluator = interestEvaluator ?? throw new ArgumentNullException(nameof(interestEvaluator));
+            if (strategy > NetworkReplicationSelectionStrategy.Auto)
+                throw new ArgumentOutOfRangeException(nameof(strategy));
+            _strategy = strategy;
         }
 
         public int BuildPlan(
@@ -157,11 +186,10 @@ namespace CycloneGames.Networking.Replication
                 throw new ArgumentException("Replication observer is invalid.", nameof(observer));
             }
 
-            if (serverTick < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(serverTick));
-            }
-
+            // serverTick is a 32-bit modular counter and may legitimately be
+            // negative after the int.MaxValue wrap. Every elapsed-time comparison
+            // goes through NetworkTickMath instead of a raw int subtraction.
+            bool useHeap = ShouldUseHeap(_strategy);
             int candidateCount = 0;
             for (int i = 0; i < objects.Length; i++)
             {
@@ -192,28 +220,16 @@ namespace CycloneGames.Networking.Replication
                     continue;
                 }
 
-                InsertCandidate(
-                    selection,
-                    results,
-                    ref candidateCount);
+                if (useHeap)
+                    InsertCandidateHeap(selection, results, ref candidateCount);
+                else
+                    InsertCandidate(selection, results, ref candidateCount);
             }
 
-            int acceptedCount = 0;
-            for (int i = 0; i < candidateCount; i++)
-            {
-                NetworkReplicationSelection selection = results[i];
-                if (!budget.TryConsume(selection.EstimatedPayloadBytes))
-                {
-                    continue;
-                }
-
-                results[acceptedCount++] = selection;
-            }
-
-            return acceptedCount;
+            return FinalizePlan(results, candidateCount, useHeap, ref budget);
         }
 
-        private static bool ShouldConsider(in NetworkReplicatedObject replicatedObject, int serverTick)
+        internal static bool ShouldConsider(in NetworkReplicatedObject replicatedObject, int serverTick)
         {
             if (replicatedObject.Policy.Interest == NetworkReplicationInterest.None)
             {
@@ -232,10 +248,13 @@ namespace CycloneGames.Networking.Replication
                 return true;
             }
 
-            return serverTick - replicatedObject.LastSentTick >= replicatedObject.Policy.MinIntervalTicks;
+            return NetworkTickMath.HasElapsed(
+                serverTick,
+                replicatedObject.LastSentTick,
+                replicatedObject.Policy.MinIntervalTicks);
         }
 
-        private static float CalculateScore(
+        internal static float CalculateScore(
             in NetworkReplicatedObject replicatedObject,
             NetworkInterestReason reason,
             int serverTick)
@@ -268,13 +287,14 @@ namespace CycloneGames.Networking.Replication
 
             if (replicatedObject.LastSentTick != NetworkReplicatedObject.NEVER_SENT)
             {
-                score += MathF.Max(0f, serverTick - replicatedObject.LastSentTick) * OVERDUE_SCORE_PER_TICK;
+                score += NetworkTickMath.ElapsedNonNegative(
+                    serverTick, replicatedObject.LastSentTick) * OVERDUE_SCORE_PER_TICK;
             }
 
             return score;
         }
 
-        private static void InsertCandidate(
+        internal static void InsertCandidate(
             in NetworkReplicationSelection selection,
             Span<NetworkReplicationSelection> results,
             ref int count)
@@ -307,6 +327,150 @@ namespace CycloneGames.Networking.Replication
             }
 
             results[insertIndex] = selection;
+        }
+
+        internal static bool ShouldUseHeap(NetworkReplicationSelectionStrategy strategy)
+        {
+            // Auto uses insertion sort. BinaryHeap is an explicit opt-in because
+            // its cost depends on the candidate distribution, which (N, K) alone
+            // does not describe. Both strategies produce the same ordered sequence.
+            return strategy == NetworkReplicationSelectionStrategy.BinaryHeap;
+        }
+
+        /// <summary>
+        /// Shared finalization for both the per-connection planner and the shared
+        /// frame planner, guaranteeing an identical ordered/budgeted output.
+        /// </summary>
+        internal static int FinalizePlan(
+            Span<NetworkReplicationSelection> results,
+            int candidateCount,
+            bool useHeap,
+            ref NetworkSendBudget budget)
+        {
+            if (useHeap)
+            {
+                if (candidateCount < results.Length)
+                    SortSparseDescending(results, candidateCount);
+                else
+                    SortHeapDescending(results, candidateCount);
+            }
+
+            int acceptedCount = 0;
+            for (int i = 0; i < candidateCount; i++)
+            {
+                NetworkReplicationSelection selection = results[i];
+                if (!budget.TryConsume(selection.EstimatedPayloadBytes))
+                    continue;
+
+                results[acceptedCount++] = selection;
+            }
+
+            return acceptedCount;
+        }
+
+        // Ordering key: higher score first, then earlier source index for ties.
+        // This reproduces the insertion-sort path's stable ordering exactly.
+        internal static bool Precedes(in NetworkReplicationSelection a, in NetworkReplicationSelection b)
+        {
+            if (a.Score != b.Score)
+                return a.Score > b.Score;
+            return a.SourceIndex < b.SourceIndex;
+        }
+
+        // Min-heap predicate: true when a is WORSE than b and belongs nearer the root.
+        internal static bool IsWorse(in NetworkReplicationSelection a, in NetworkReplicationSelection b)
+        {
+            return Precedes(b, a);
+        }
+
+        internal static void InsertCandidateHeap(
+            in NetworkReplicationSelection selection,
+            Span<NetworkReplicationSelection> results,
+            ref int count)
+        {
+            if (results.Length == 0)
+                return;
+
+            if (count < results.Length)
+            {
+                // Sparse candidate sets pay only an O(1) append. The min-heap is
+                // built once when the buffer first fills (or once at the end when
+                // it never fills), so the heap path is never worse than the
+                // insertion-sort path on small or sparse inputs.
+                results[count] = selection;
+                count++;
+                if (count == results.Length)
+                    BuildMinHeap(results, count);
+                return;
+            }
+
+            // The root is the current worst candidate. Replace only when the new
+            // candidate is strictly better (ties keep the earlier source index).
+            if (!Precedes(selection, results[0]))
+                return;
+
+            results[0] = selection;
+            SiftDown(results, 0, count);
+        }
+
+        internal static void BuildMinHeap(Span<NetworkReplicationSelection> heap, int count)
+        {
+            // Floyd heap construction: O(K), in place, no allocation.
+            for (int i = (count >> 1) - 1; i >= 0; i--)
+                SiftDown(heap, i, count);
+        }
+
+        internal static void SiftDown(Span<NetworkReplicationSelection> heap, int root, int count)
+        {
+            while (true)
+            {
+                int left = (root << 1) + 1;
+                if (left >= count)
+                    break;
+
+                int right = left + 1;
+                int worst = left;
+                if (right < count && IsWorse(heap[right], heap[left]))
+                    worst = right;
+
+                if (!IsWorse(heap[worst], heap[root]))
+                    break;
+
+                NetworkReplicationSelection temp = heap[root];
+                heap[root] = heap[worst];
+                heap[worst] = temp;
+                root = worst;
+            }
+        }
+
+        internal static void SortSparseDescending(Span<NetworkReplicationSelection> items, int count)
+        {
+            // Used when the candidate buffer never filled; O(C^2) struct moves
+            // are cheaper than heap construction plus heapsort for small C.
+            for (int i = 1; i < count; i++)
+            {
+                NetworkReplicationSelection value = items[i];
+                int j = i - 1;
+                while (j >= 0 && Precedes(value, items[j]))
+                {
+                    items[j + 1] = items[j];
+                    j--;
+                }
+                items[j + 1] = value;
+            }
+        }
+
+        internal static void SortHeapDescending(Span<NetworkReplicationSelection> heap, int count)
+        {
+            // Repeatedly move the worst root to the tail. With a min-heap this
+            // leaves the array ordered best-first without a second buffer.
+            for (int end = count - 1; end > 0; end--)
+            {
+                NetworkReplicationSelection temp = heap[0];
+                heap[0] = heap[end];
+                heap[end] = temp;
+                SiftDown(heap, 0, end);
+            }
         }
     }
 }

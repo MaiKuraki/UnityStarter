@@ -1,212 +1,50 @@
 using System;
-using System.Collections.Concurrent;
-using System.Threading;
 
 namespace CycloneGames.Networking.Buffers
 {
     /// <summary>
-    /// Thread-safe owner of pooled <see cref="NetworkBufferStorage"/> instances.
-    /// Buffer contents and cursors remain single-owner through a generation-checked lease.
+    /// Compatibility facade over the default instance-scoped buffer pool.
+    ///
+    /// All mutable counters and idle buffers now live in a
+    /// <see cref="NetworkBufferPoolInstance"/>. Composition roots that need session
+    /// isolation, independent configuration, or parallel test isolation should
+    /// construct and inject their own instance instead of using this process-wide
+    /// default. The static members are retained so existing call sites keep working.
     /// </summary>
     public static class NetworkBufferPool
     {
-        private const int DefaultMaxPoolSize = 32;
+        private static readonly NetworkBufferPoolInstance s_default = new NetworkBufferPoolInstance();
 
-        private static readonly ConcurrentQueue<NetworkBufferStorage> Pool = new ConcurrentQueue<NetworkBufferStorage>();
+        /// <summary>Default process-wide pool. Prefer injecting an instance for new code.</summary>
+        public static NetworkBufferPoolInstance Default => s_default;
 
-        private static int _count;
-        private static int _outstandingCount;
-        private static int _invalidReturnCount;
-        private static int _maxPoolSize = DefaultMaxPoolSize;
-        private static int _clearBuffersOnReturn;
-        private static long _pressureTrimmedBufferCount;
+        public static int Count => s_default.Count;
 
-        public static int Count => Volatile.Read(ref _count);
+        public static int OutstandingCount => s_default.OutstandingCount;
 
-        /// <summary>Gets the number of active leases that have not been returned.</summary>
-        public static int OutstandingCount => Volatile.Read(ref _outstandingCount);
+        public static int InvalidReturnCount => s_default.InvalidReturnCount;
 
-        /// <summary>Gets the number of rejected default, stale, or duplicate returns.</summary>
-        public static int InvalidReturnCount => Volatile.Read(ref _invalidReturnCount);
+        public static int MaxPoolSize => s_default.MaxPoolSize;
 
-        public static int MaxPoolSize => Volatile.Read(ref _maxPoolSize);
+        public static bool ClearBuffersOnReturn => s_default.ClearBuffersOnReturn;
 
-        public static bool ClearBuffersOnReturn => Volatile.Read(ref _clearBuffersOnReturn) != 0;
+        public static NetworkBufferPoolMemorySnapshot GetMemorySnapshot() => s_default.GetMemorySnapshot();
 
-        public static NetworkBufferPoolMemorySnapshot GetMemorySnapshot()
-        {
-            return new NetworkBufferPoolMemorySnapshot(
-                Count,
-                OutstandingCount,
-                MaxPoolSize,
-                InvalidReturnCount,
-                Interlocked.Read(ref _pressureTrimmedBufferCount),
-                ClearBuffersOnReturn);
-        }
+        public static void Configure(int maxPoolSize, bool clearBuffersOnReturn = false) =>
+            s_default.Configure(maxPoolSize, clearBuffersOnReturn);
 
-        public static void Configure(int maxPoolSize, bool clearBuffersOnReturn = false)
-        {
-            if (maxPoolSize < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(maxPoolSize));
-            }
+        public static NetworkBuffer Get() => s_default.Get();
 
-            Volatile.Write(ref _clearBuffersOnReturn, clearBuffersOnReturn ? 1 : 0);
-            Volatile.Write(ref _maxPoolSize, maxPoolSize);
-            TrimExcess();
-        }
+        public static NetworkBuffer GetWithData(ArraySegment<byte> data) => s_default.GetWithData(data);
 
-        public static NetworkBuffer Get()
-        {
-            NetworkBufferStorage storage;
-            if (Pool.TryDequeue(out storage))
-            {
-                Interlocked.Decrement(ref _count);
-            }
-            else
-            {
-                storage = new NetworkBufferStorage();
-            }
+        public static NetworkBuffer GetWithData(ReadOnlySpan<byte> data) => s_default.GetWithData(data);
 
-            long leaseToken;
-            try
-            {
-                leaseToken = storage.BeginLease();
-            }
-            catch
-            {
-                storage.ReleaseBuffer(ClearBuffersOnReturn);
-                throw;
-            }
+        internal static void ReturnLease(NetworkBufferStorage storage, long leaseToken) =>
+            s_default.ReturnLease(storage, leaseToken);
 
-            Interlocked.Increment(ref _outstandingCount);
-            return new NetworkBuffer(storage, leaseToken);
-        }
+        public static void Clear() => s_default.Clear();
 
-        public static NetworkBuffer GetWithData(ArraySegment<byte> data)
-        {
-            NetworkBuffer buffer = Get();
-            try
-            {
-                buffer.SetBuffer(data);
-                return buffer;
-            }
-            catch
-            {
-                buffer.Dispose();
-                throw;
-            }
-        }
-
-        public static NetworkBuffer GetWithData(ReadOnlySpan<byte> data)
-        {
-            NetworkBuffer buffer = Get();
-            try
-            {
-                buffer.SetBuffer(data);
-                return buffer;
-            }
-            catch
-            {
-                buffer.Dispose();
-                throw;
-            }
-        }
-
-        internal static void ReturnLease(NetworkBufferStorage storage, long leaseToken)
-        {
-            if (storage == null || !storage.TryEndLease(leaseToken))
-            {
-                Interlocked.Increment(ref _invalidReturnCount);
-                throw new ObjectDisposedException(
-                    nameof(NetworkBuffer),
-                    "The network-buffer lease is default, stale, or has already been returned.");
-            }
-
-            Interlocked.Decrement(ref _outstandingCount);
-
-            bool clearBuffer = ClearBuffersOnReturn;
-            storage.PrepareForPooling(clearBuffer);
-
-            if (!TryReservePoolSlot())
-            {
-                storage.ReleaseBuffer(clearBuffer: false);
-                return;
-            }
-
-            Pool.Enqueue(storage);
-            // A concurrent Configure call may have lowered the limit after the slot was
-            // reserved. The returning thread closes that race after publication.
-            TrimExcess();
-        }
-
-        public static void Clear()
-        {
-            bool clearBuffer = ClearBuffersOnReturn;
-            while (Pool.TryDequeue(out NetworkBufferStorage storage))
-            {
-                Interlocked.Decrement(ref _count);
-                storage.ReleaseBuffer(clearBuffer);
-            }
-        }
-
-        /// <summary>Releases at most <paramref name="maxWork"/> idle buffers and never touches active leases.</summary>
-        public static NetworkBufferPoolTrimResult TrimIdleStep(int targetIdleCount, int maxWork)
-        {
-            if (targetIdleCount < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(targetIdleCount));
-            }
-
-            if (maxWork < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(maxWork));
-            }
-
-            int released = 0;
-            bool clearBuffer = ClearBuffersOnReturn;
-            while (released < maxWork && Count > targetIdleCount && Pool.TryDequeue(out NetworkBufferStorage storage))
-            {
-                Interlocked.Decrement(ref _count);
-                storage.ReleaseBuffer(clearBuffer);
-                released++;
-            }
-
-            if (released > 0)
-            {
-                Interlocked.Add(ref _pressureTrimmedBufferCount, released);
-            }
-
-            return new NetworkBufferPoolTrimResult(released, Count);
-        }
-
-        private static bool TryReservePoolSlot()
-        {
-            while (true)
-            {
-                int maxPoolSize = Volatile.Read(ref _maxPoolSize);
-                int count = Volatile.Read(ref _count);
-                if (count >= maxPoolSize)
-                {
-                    return false;
-                }
-
-                if (Interlocked.CompareExchange(ref _count, count + 1, count) == count)
-                {
-                    return true;
-                }
-            }
-        }
-
-        private static void TrimExcess()
-        {
-            bool clearBuffer = ClearBuffersOnReturn;
-            while (Volatile.Read(ref _count) > Volatile.Read(ref _maxPoolSize)
-                   && Pool.TryDequeue(out NetworkBufferStorage storage))
-            {
-                Interlocked.Decrement(ref _count);
-                storage.ReleaseBuffer(clearBuffer);
-            }
-        }
+        public static NetworkBufferPoolTrimResult TrimIdleStep(int targetIdleCount, int maxWork) =>
+            s_default.TrimIdleStep(targetIdleCount, maxWork);
     }
 }
