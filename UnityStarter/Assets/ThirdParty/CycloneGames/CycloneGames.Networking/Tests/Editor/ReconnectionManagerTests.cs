@@ -10,7 +10,7 @@ namespace CycloneGames.Networking.Tests.Editor
         public void TryReconnect_WithValidToken_CompletesReconnect()
         {
             var manager = new ReconnectionManager();
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 0d, 100UL, out ReconnectToken token);
 
             var connection = new TestConnection { PlayerId = 100UL };
 
@@ -22,7 +22,7 @@ namespace CycloneGames.Networking.Tests.Editor
         public void TryReconnect_Rejects_PlayerMismatch()
         {
             var manager = new ReconnectionManager();
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 0d, 100UL, out ReconnectToken token);
 
             ReconnectRejectReason rejectReason = ReconnectRejectReason.None;
             manager.OnReconnectRejected += (_, reason) => rejectReason = reason;
@@ -38,7 +38,7 @@ namespace CycloneGames.Networking.Tests.Editor
         public void TryReconnect_Rejects_MissingPlayerIdentityForBoundReservation()
         {
             var manager = new ReconnectionManager(requireAuthenticatedConnection: true);
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 0d, 100UL, out ReconnectToken token);
 
             ReconnectRejectReason rejectReason = ReconnectRejectReason.None;
             manager.OnReconnectRejected += (_, reason) => rejectReason = reason;
@@ -52,24 +52,6 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.IsTrue(manager.HasReservation(10));
         }
 
-        [Test]
-        public void TryReconnect_Rejects_ProtocolMismatch()
-        {
-            var manager = new ReconnectionManager();
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out ReconnectToken token);
-
-            var invalidToken = ReconnectToken.Create(
-                token.OriginalConnectionId,
-                token.PlayerId,
-                protocolVersion: 4,
-                token.Nonce);
-
-            ReconnectRejectReason rejectReason = ReconnectRejectReason.None;
-            manager.OnReconnectRejected += (_, reason) => rejectReason = reason;
-
-            Assert.IsFalse(manager.TryReconnect(new TestConnection { PlayerId = 100UL }, 10, invalidToken, 0.5d));
-            Assert.AreEqual(ReconnectRejectReason.ProtocolMismatch, rejectReason);
-        }
 
         [Test]
         public void Update_Expires_CatchingUp_Reservation()
@@ -83,7 +65,7 @@ namespace CycloneGames.Networking.Tests.Editor
             int expiredConnectionId = -1;
             manager.OnReconnectWindowExpired += id => expiredConnectionId = id;
 
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 0d, 100UL, out ReconnectToken token);
             Assert.IsTrue(manager.TryReconnect(new TestConnection { PlayerId = 100UL }, 10, token, 0.5d));
 
             manager.Update(1.1d);
@@ -107,7 +89,7 @@ namespace CycloneGames.Networking.Tests.Editor
                 failedReason = reason;
             };
 
-            manager.OnClientDisconnected(10, 0d, 0UL, 0, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 0d, 0UL, out ReconnectToken token);
 
             Assert.IsTrue(manager.TryReconnect(new TestConnection(), 10, token, 0.5d));
             Assert.AreEqual(10, failedConnectionId);
@@ -119,7 +101,7 @@ namespace CycloneGames.Networking.Tests.Editor
         public void TryReconnect_Rejects_DisconnectedConnection()
         {
             var manager = new ReconnectionManager();
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 0d, 100UL, out ReconnectToken token);
 
             ReconnectRejectReason rejectReason = ReconnectRejectReason.None;
             manager.OnReconnectRejected += (_, reason) => rejectReason = reason;
@@ -136,7 +118,7 @@ namespace CycloneGames.Networking.Tests.Editor
         public void TryReconnect_Rejects_UnauthenticatedConnection_WhenRequired()
         {
             var manager = new ReconnectionManager(requireAuthenticatedConnection: true);
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 0d, 100UL, out ReconnectToken token);
 
             ReconnectRejectReason rejectReason = ReconnectRejectReason.None;
             manager.OnReconnectRejected += (_, reason) => rejectReason = reason;
@@ -162,7 +144,7 @@ namespace CycloneGames.Networking.Tests.Editor
             manager.OnReconnectRejected += (_, reason) => rejectReason = reason;
             manager.OnReconnectWindowExpired += id => expiredConnectionId = id;
 
-            manager.OnClientDisconnected(10, 2d, 100UL, 3, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 2d, 100UL, out ReconnectToken token);
 
             Assert.IsFalse(manager.TryReconnect(
                 new TestConnection { PlayerId = 100UL },
@@ -187,7 +169,7 @@ namespace CycloneGames.Networking.Tests.Editor
                 failedReason = reason;
             };
 
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 0d, 100UL, out ReconnectToken token);
 
             Assert.IsFalse(manager.TryReconnect(
                 new TestConnection { PlayerId = 100UL },
@@ -216,7 +198,7 @@ namespace CycloneGames.Networking.Tests.Editor
                 reconnected = true;
             };
 
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 0d, 100UL, out ReconnectToken token);
 
             Assert.IsTrue(manager.TryReconnect(
                 new TestConnection { PlayerId = 100UL },
@@ -232,10 +214,10 @@ namespace CycloneGames.Networking.Tests.Editor
         public void OnClientDisconnected_Rejects_When_Reservation_Capacity_Is_Exhausted()
         {
             var manager = new ReconnectionManager(maxReservations: 1);
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out _);
+            manager.OnClientDisconnected(10, 0d, 100UL, out _);
 
             Assert.Throws<InvalidOperationException>(() =>
-                manager.OnClientDisconnected(11, 0d, 101UL, 3, out _));
+                manager.OnClientDisconnected(11, 0d, 101UL, out _));
             Assert.AreEqual(1, manager.ReservationCount);
         }
 
@@ -252,8 +234,8 @@ namespace CycloneGames.Networking.Tests.Editor
         public void Update_Commits_All_Expirations_Before_Publishing_Observers()
         {
             var manager = new ReconnectionManager { ReconnectWindow = 1d };
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out _);
-            manager.OnClientDisconnected(11, 0d, 101UL, 3, out _);
+            manager.OnClientDisconnected(10, 0d, 100UL, out _);
+            manager.OnClientDisconnected(11, 0d, 101UL, out _);
             manager.OnReconnectWindowExpired += _ => throw new InvalidOperationException("observer failed");
 
             Assert.Throws<InvalidOperationException>(() => manager.Update(2d));
@@ -265,29 +247,30 @@ namespace CycloneGames.Networking.Tests.Editor
         public void OnClientDisconnected_IdempotentDuplicate_ReturnsExistingToken()
         {
             var manager = new ReconnectionManager();
-            manager.OnClientDisconnected(10, 1d, 100UL, 3, out ReconnectToken originalToken);
+            manager.OnClientDisconnected(10, 1d, 100UL, out ReconnectToken originalToken);
 
-            manager.OnClientDisconnected(10, 1.5d, 100UL, 3, out ReconnectToken duplicateToken);
+            manager.OnClientDisconnected(10, 1.5d, 100UL, out ReconnectToken duplicateToken);
 
             Assert.AreEqual(originalToken, duplicateToken);
             Assert.AreEqual(1, manager.ReservationCount);
         }
 
         [Test]
-        public void OnClientDisconnected_RejectsActiveOwnershipOrProtocolConflict()
+        public void OnClientDisconnected_RejectsOwnershipConflict_AndIsIdempotentForSameOwner()
         {
             var manager = new ReconnectionManager();
-            manager.OnClientDisconnected(10, 1d, 100UL, 3, out ReconnectToken originalToken);
+            manager.OnClientDisconnected(10, 1d, 100UL, out ReconnectToken originalToken);
 
             ReconnectToken rejectedToken = originalToken;
             Assert.Throws<InvalidOperationException>(() =>
-                manager.OnClientDisconnected(10, 1.5d, 101UL, 3, out rejectedToken));
+                manager.OnClientDisconnected(10, 1.5d, 101UL, out rejectedToken));
             Assert.IsFalse(rejectedToken.IsValid);
 
-            rejectedToken = originalToken;
-            Assert.Throws<InvalidOperationException>(() =>
-                manager.OnClientDisconnected(10, 1.5d, 100UL, 4, out rejectedToken));
-            Assert.IsFalse(rejectedToken.IsValid);
+            // Same ownership with a later disconnect time is idempotent: the
+            // existing reservation is returned, not rejected.
+            rejectedToken = default;
+            manager.OnClientDisconnected(10, 1.5d, 100UL, out rejectedToken);
+            Assert.IsTrue(rejectedToken.IsValid);
             Assert.IsTrue(manager.HasReservation(10));
         }
 
@@ -295,11 +278,11 @@ namespace CycloneGames.Networking.Tests.Editor
         public void OnClientDisconnected_RejectsClockRegressionForExistingReservation()
         {
             var manager = new ReconnectionManager();
-            manager.OnClientDisconnected(10, 2d, 100UL, 3, out ReconnectToken originalToken);
+            manager.OnClientDisconnected(10, 2d, 100UL, out ReconnectToken originalToken);
 
             ReconnectToken rejectedToken = originalToken;
             Assert.Throws<InvalidOperationException>(() =>
-                manager.OnClientDisconnected(10, 1.5d, 100UL, 3, out rejectedToken));
+                manager.OnClientDisconnected(10, 1.5d, 100UL, out rejectedToken));
 
             Assert.IsFalse(rejectedToken.IsValid);
             Assert.IsTrue(manager.HasReservation(10));
@@ -309,7 +292,7 @@ namespace CycloneGames.Networking.Tests.Editor
         public void OnClientDisconnected_RejectsDuplicateWhileCatchUpIsActive()
         {
             var manager = new ReconnectionManager(new PendingCatchUp());
-            manager.OnClientDisconnected(10, 0d, 100UL, 3, out ReconnectToken token);
+            manager.OnClientDisconnected(10, 0d, 100UL, out ReconnectToken token);
             Assert.IsTrue(manager.TryReconnect(
                 new TestConnection { PlayerId = 100UL },
                 10,
@@ -317,7 +300,7 @@ namespace CycloneGames.Networking.Tests.Editor
                 0.5d));
 
             Assert.Throws<InvalidOperationException>(() =>
-                manager.OnClientDisconnected(10, 0.75d, 100UL, 3, out _));
+                manager.OnClientDisconnected(10, 0.75d, 100UL, out _));
             Assert.IsTrue(manager.HasReservation(10));
         }
 

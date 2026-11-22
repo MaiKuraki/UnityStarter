@@ -126,8 +126,10 @@ namespace CycloneGames.Networking.Tests.Editor
         {
             // 8 heterogeneous cores (would look "Medium" statically) but a strong
             // measured hot path: the benchmark wins.
-            var fastSilicon = new NetworkHardwareInfo(8, 65536, benchmarkScoreMBps: 6000);
-            var slowSilicon = new NetworkHardwareInfo(16, 65536, benchmarkScoreMBps: 400);
+            var fastSilicon = new NetworkHardwareInfo(8, 65536, benchmarkScoreMBps: 6000,
+                benchmarkParametersId: NetworkProbeParameters.Standard.ParametersId);
+            var slowSilicon = new NetworkHardwareInfo(16, 65536, benchmarkScoreMBps: 400,
+                benchmarkParametersId: NetworkProbeParameters.Standard.ParametersId);
 
             Assert.AreEqual(NetworkPerformanceTier.High, NetworkDeviceProfiles.Classify(fastSilicon));
             Assert.AreEqual(NetworkPerformanceTier.Low, NetworkDeviceProfiles.Classify(slowSilicon),
@@ -197,19 +199,19 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void ScaleOverride_ReplacesBaseline_AndRestores()
         {
-            try
-            {
-                NetworkSessionScaleTable.RegisterScaleOverride(
-                    NetworkSessionScale.Coop, new NetworkScaleSpec(4, maxConnections: 4, snapshotBufferSize: 16));
+            var registry = new NetworkSessionScaleRegistry();
+            var custom = new NetworkScaleSpec(4, maxConnections: 4, snapshotBufferSize: 16);
+            registry.RegisterScaleOverride(NetworkSessionScale.Coop, custom);
 
-                NetworkRuntimeProfile profile = NetworkProfileComposer.Compose(
-                    NetworkPerformanceTier.Low, NetworkSessionScale.Coop, NetworkEndpointRole.ListenHost);
-                Assert.AreEqual(32, profile.MaxConnections, "max(tier 32, scale 4) keeps the tier budget.");
-            }
-            finally
-            {
-                NetworkSessionScaleTable.ClearScaleOverrides();
-            }
+            NetworkScaleSpec overridden = registry.GetSpec(NetworkSessionScale.Coop);
+            Assert.AreEqual(4, overridden.ExpectedParticipants);
+            Assert.AreEqual(1024, registry.GetSpec(NetworkSessionScale.Massive).MaxConnections,
+                "Other scales stay at baseline.");
+
+            registry.ClearScaleOverrides();
+            Assert.AreEqual(NetworkSessionScaleTable.CoopSpec.ExpectedParticipants,
+                registry.GetSpec(NetworkSessionScale.Coop).ExpectedParticipants,
+                "ClearScaleOverrides must restore the baseline spec.");
         }
 
         [Test]
@@ -255,25 +257,19 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void RegisterTierOverride_ReplacesProfile_WithoutTouchingCore()
         {
-            try
-            {
-                var customLow = new NetworkTierSpec("tier-low", "Studio Low", maxConnections: 8, sendRate: 10);
-                NetworkDeviceProfiles.RegisterTierOverride(NetworkPerformanceTier.Low, customLow);
+            var registry = NetworkTierRegistry.CreateStandard();
+            var customLow = new NetworkTierSpec("tier-low", "Studio Low", maxConnections: 8, sendRate: 10);
+            registry.RegisterTierOverride(NetworkPerformanceTier.Low, customLow);
 
-                NetworkRuntimeProfile profile = NetworkDeviceProfiles.ForTier(NetworkPerformanceTier.Low);
-                Assert.AreEqual(8, profile.MaxConnections);
-                Assert.AreEqual(10, profile.SendRate);
-                Assert.AreEqual("Studio Low", profile.DisplayName);
+            NetworkRuntimeProfile profile = registry.ForTier(NetworkPerformanceTier.Low);
+            Assert.AreEqual(8, profile.MaxConnections);
+            Assert.AreEqual(10, profile.SendRate);
+            Assert.AreEqual("Studio Low", profile.DisplayName);
 
-                // Other tiers stay at baseline.
-                Assert.AreEqual(1024, NetworkDeviceProfiles.ForTier(NetworkPerformanceTier.Server).MaxConnections);
-            }
-            finally
-            {
-                NetworkDeviceProfiles.ClearTierOverrides();
-            }
+            Assert.AreEqual(1024, registry.ForTier(NetworkPerformanceTier.Server).MaxConnections);
 
-            Assert.AreEqual(32, NetworkDeviceProfiles.ForTier(NetworkPerformanceTier.Low).MaxConnections,
+            registry.ClearTierOverrides();
+            Assert.AreEqual(32, registry.ForTier(NetworkPerformanceTier.Low).MaxConnections,
                 "ClearTierOverrides must restore the baseline spec.");
         }
 
@@ -301,7 +297,7 @@ namespace CycloneGames.Networking.Tests.Editor
         {
             NetworkTierThresholds broken = NetworkTierThresholds.CreateStandard();
             broken.MediumMaxCores = broken.LowMaxCores; // Not strictly increasing.
-            Assert.Throws<System.ArgumentOutOfRangeException>(() => NetworkDeviceProfiles.DefaultThresholds = broken);
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => new NetworkTierRegistry(broken));
         }
     }
 }

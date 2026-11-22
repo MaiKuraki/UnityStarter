@@ -9,6 +9,7 @@ namespace CycloneGames.Networking.Tests.Editor
 {
     public sealed class ReplicationInfrastructureTests
     {
+        private NetworkBufferPoolInstance _bufferPool = new NetworkBufferPoolInstance();
         [Test]
         public void StateCache_UnknownObjectsRequireFullStateUntilSent()
         {
@@ -89,7 +90,7 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void SnapshotPacketBuilder_WritesMixedFullAndDeltaEntries()
         {
-            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            using NetworkBuffer buffer = _bufferPool.Get();
             var builder = new NetworkSnapshotPacketBuilder();
             var payloadSource = new FixedPayloadSource();
             NetworkReplicationSelection[] selections =

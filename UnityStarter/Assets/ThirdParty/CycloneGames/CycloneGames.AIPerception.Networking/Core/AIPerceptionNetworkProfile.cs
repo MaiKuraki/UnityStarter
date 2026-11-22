@@ -108,7 +108,6 @@ namespace CycloneGames.AIPerception.Networking
                 hash = CombineByte(hash, (byte)profile.ProfileId[i]);
             }
 
-            hash = CombineByte(hash, AIPerceptionNetworkProtocol.PROTOCOL_VERSION);
             hash = CombineByte(hash, (byte)profile.SyncModel);
             hash = Fnv1a64.CombineUInt32LittleEndian(hash, (uint)profile.Features);
             hash = Fnv1a64.CombineUInt32LittleEndian(hash, (uint)profile.RequiredFeatures);

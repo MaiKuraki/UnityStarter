@@ -24,8 +24,6 @@ namespace CycloneGames.Networking
 
             ProtocolId = string.IsNullOrEmpty(builder.ProtocolId) ? builder.Owner : builder.ProtocolId;
             Owner = builder.Owner ?? string.Empty;
-            CurrentVersion = builder.CurrentVersion;
-            MinimumSupportedVersion = builder.MinimumSupportedVersion;
             MessageRange = builder.MessageRange;
             _messages = builder.Messages.ToArray();
             _metadata = new Dictionary<string, string>(builder.Metadata, StringComparer.Ordinal);
@@ -37,8 +35,6 @@ namespace CycloneGames.Networking
 
         public string ProtocolId { get; }
         public string Owner { get; }
-        public int CurrentVersion { get; }
-        public int MinimumSupportedVersion { get; }
         public NetworkMessageIdRange MessageRange { get; }
         public ulong Fingerprint { get; }
 
@@ -58,11 +54,6 @@ namespace CycloneGames.Networking
             }
         }
 
-        public bool IsCompatibleWith(int remoteVersion)
-        {
-            return remoteVersion >= MinimumSupportedVersion && remoteVersion <= CurrentVersion;
-        }
-
         private void Validate()
         {
             if (string.IsNullOrEmpty(Owner))
@@ -72,16 +63,6 @@ namespace CycloneGames.Networking
 
             NetworkMessageCatalog.ComputeAsciiFnv1a64(Owner);
             NetworkMessageCatalog.ComputeAsciiFnv1a64(ProtocolId);
-
-            if (CurrentVersion <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(CurrentVersion));
-            }
-
-            if (MinimumSupportedVersion <= 0 || MinimumSupportedVersion > CurrentVersion)
-            {
-                throw new ArgumentOutOfRangeException(nameof(MinimumSupportedVersion));
-            }
 
             if (string.IsNullOrEmpty(MessageRange.Name)
                 || !string.Equals(MessageRange.Name, Owner, StringComparison.Ordinal))
@@ -203,7 +184,6 @@ namespace CycloneGames.Networking
     public sealed class NetworkProtocolManifestBuilder
     {
         private const int DEFAULT_MESSAGE_CAPACITY = 8;
-        private const int DEFAULT_PROTOCOL_VERSION = 1;
 
         internal readonly List<NetworkMessageDescriptor> Messages = new List<NetworkMessageDescriptor>(DEFAULT_MESSAGE_CAPACITY);
         internal readonly Dictionary<string, string> Metadata = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -216,8 +196,6 @@ namespace CycloneGames.Networking
 
         public string ProtocolId { get; set; }
         public string Owner { get; }
-        public int CurrentVersion { get; set; } = DEFAULT_PROTOCOL_VERSION;
-        public int MinimumSupportedVersion { get; set; } = DEFAULT_PROTOCOL_VERSION;
         public NetworkMessageIdRange MessageRange { get; }
 
         public NetworkProtocolManifestBuilder Add(NetworkMessageDescriptor descriptor)

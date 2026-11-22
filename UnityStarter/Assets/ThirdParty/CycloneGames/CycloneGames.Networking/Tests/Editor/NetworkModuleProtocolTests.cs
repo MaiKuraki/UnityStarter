@@ -4,53 +4,6 @@ using NUnit.Framework;
 
 namespace CycloneGames.Networking.Tests.Editor
 {
-    public sealed class NetworkProtocolVersionTests
-    {
-        [Test]
-        public void Supports_WithinWindow_ReturnsTrue()
-        {
-            var version = new NetworkProtocolVersion(current: 3, minimumSupported: 2);
-
-            Assert.IsTrue(version.Supports(2));
-            Assert.IsTrue(version.Supports(3));
-        }
-
-        [Test]
-        public void Supports_OutsideWindow_ReturnsFalse()
-        {
-            var version = new NetworkProtocolVersion(current: 3, minimumSupported: 2);
-
-            Assert.IsFalse(version.Supports(1));
-            Assert.IsFalse(version.Supports(4));
-        }
-
-        [Test]
-        public void IsCompatibleWith_OverlappingWindows_ReturnsTrue()
-        {
-            var local = new NetworkProtocolVersion(3, 2);
-            var remote = new NetworkProtocolVersion(2, 1);
-
-            Assert.IsTrue(local.IsCompatibleWith(remote));
-            Assert.IsTrue(remote.IsCompatibleWith(local));
-        }
-
-        [Test]
-        public void IsCompatibleWith_DisjointWindows_ReturnsFalse()
-        {
-            var local = new NetworkProtocolVersion(2, 2);
-            var remote = new NetworkProtocolVersion(5, 4);
-
-            Assert.IsFalse(local.IsCompatibleWith(remote));
-        }
-
-        [Test]
-        public void Ctor_InvalidArguments_Throw()
-        {
-            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkProtocolVersion(2, 3));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkProtocolVersion(0, 0));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkProtocolVersion(3, 0));
-        }
-    }
 
     public sealed class NetworkModuleProtocolTests
     {
@@ -66,11 +19,9 @@ namespace CycloneGames.Networking.Tests.Editor
                 RangeMax)
             {
                 ProtocolId = "CycloneGames.Tests.Protocol",
-                CurrentVersion = 3,
-                MinimumSupportedVersion = 2
             };
 
-            builder.AddMessage("ProtocolTestMessage:v1", PrimaryMessageId, 0x6EB11280CBB2205FUL);
+            builder.AddMessage("ProtocolTestMessage", PrimaryMessageId, 0xDFBC8C7F244165D4UL);
 
             return new NetworkModuleProtocol(builder.Build());
         }
@@ -85,15 +36,6 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.IsFalse(protocol.ContainsMessageId((ushort)(RangeMax + 1)));
         }
 
-        [Test]
-        public void IsSupportedProtocolVersion_DelegatesToVersionWindow()
-        {
-            NetworkModuleProtocol protocol = CreateProtocol();
-
-            Assert.IsTrue(protocol.IsSupportedProtocolVersion(2));
-            Assert.IsTrue(protocol.IsSupportedProtocolVersion(3));
-            Assert.IsFalse(protocol.IsSupportedProtocolVersion(1));
-        }
 
         [Test]
         public void Register_RegistersManifestMessagesIntoCatalog()
@@ -119,9 +61,9 @@ namespace CycloneGames.Networking.Tests.Editor
                     (ushort)(RangeMin + 50),
                     (ushort)(RangeMax + 50))
                 .AddMessage(
-                    "ProtocolTestMessage:v1",
+                    "ProtocolTestMessage",
                     (ushort)(RangeMin + 50),
-                    0x6EB11280CBB2205FUL)
+                    0xDFBC8C7F244165D4UL)
                 .Build();
             Assert.IsTrue(catalog.TryRegisterProtocolManifest(conflict));
 
@@ -138,7 +80,7 @@ namespace CycloneGames.Networking.Tests.Editor
             {
                 ProtocolId = "CycloneGames.Tests.协议"
             };
-            builder.AddMessage("ProtocolTestMessage:v1", PrimaryMessageId, 0x6EB11280CBB2205FUL);
+            builder.AddMessage("ProtocolTestMessage", PrimaryMessageId, 0xDFBC8C7F244165D4UL);
 
             Assert.Throws<ArgumentException>(() => builder.Build());
         }
@@ -148,9 +90,9 @@ namespace CycloneGames.Networking.Tests.Editor
         {
             var builder = new NetworkProtocolManifestBuilder("CycloneGames.Tests.ProtocolModule", RangeMin, RangeMax);
             builder.AddMessage(
-                "ProtocolTestMessage:v1",
+                "ProtocolTestMessage",
                 PrimaryMessageId,
-                0x6EB11280CBB2205FUL,
+                0xDFBC8C7F244165D4UL,
                 maxPayloadSize: NetworkConstants.MaxMTU - NetworkWireProtocol.HeaderLength + 1);
 
             Assert.Throws<ArgumentException>(() => builder.Build());

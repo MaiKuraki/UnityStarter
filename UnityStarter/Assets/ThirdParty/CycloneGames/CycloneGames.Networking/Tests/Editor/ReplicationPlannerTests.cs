@@ -66,7 +66,9 @@ namespace CycloneGames.Networking.Tests.Editor
                 NetworkReplicationPolicy.Always(),
                 NetworkVector3.Zero,
                 teamId: -1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new NetworkReplicatedObject(
+            // lastSentTick is a 32-bit modular tick; negative values after the
+            // int.MaxValue wrap are legal, only the NEVER_SENT sentinel is avoided.
+            Assert.DoesNotThrow(() => new NetworkReplicatedObject(
                 1UL,
                 NetworkReplicationPolicy.Always(),
                 NetworkVector3.Zero,

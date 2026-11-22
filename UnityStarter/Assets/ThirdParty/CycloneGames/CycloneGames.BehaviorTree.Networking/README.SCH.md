@@ -2,7 +2,7 @@
 
 [English](./README.md) | 简体中文
 
-`CycloneGames.BehaviorTree.Networking` 是 [CycloneGames.BehaviorTree](../CycloneGames.BehaviorTree/README.SCH.md) 与 [CycloneGames.Networking](../CycloneGames.Networking/README.SCH.md) 之间的适配桥接。它定义版本化协议、网络复制 profile、状态 payload DTO、authority generation 辅助类型，以及处理 snapshot、delta、hash 和 tick control 的 runtime bridge。基础 BehaviorTree 包不依赖本包。
+`CycloneGames.BehaviorTree.Networking` 是 [CycloneGames.BehaviorTree](../CycloneGames.BehaviorTree/README.SCH.md) 与 [CycloneGames.Networking](../CycloneGames.Networking/README.SCH.md) 之间的适配桥接。它定义指纹化协议、网络复制 profile、状态 payload DTO、authority generation 辅助类型，以及处理 snapshot、delta、hash 和 tick control 的 runtime bridge。基础 BehaviorTree 包不依赖本包。
 
 ## 目录
 
@@ -155,22 +155,22 @@ Transport adapter 负责序列化 DTO、选择 profile channel、发送数据、
 1. 检查 authority、身份认证、速率、target identity 和已启用的 profile feature。
 2. 在 tree owner thread capture snapshot、delta 或 hash-only message。
 3. 通过 networking backend 编码并发送 DTO。
-4. 使用相同的版本化契约解码传入数据。
+4. 使用相同的契约标识解码传入数据。
 5. 把已解码消息排队到 tree owner thread。
 6. 调用 `TryApplyPayload`；只有在 live commit 前拒绝 packet 时才把返回值视为 `false`。异常必须单独处理，它们可能发生在 live state 已改变之后。
 
 ## 协议契约
 
-本包保留消息范围 `14000-14999`。协议版本为 2，只有 fingerprint 完全一致的对端才会被接受：
+本包保留消息范围 `14000-14999`。只有 fingerprint 完全一致的对端才会被接受：
 
 | Constant | ID | Contract identity | 固定 schema hash | 默认 channel |
 | --- | ---: | --- | --- | --- |
-| `MSG_MANIFEST_HANDSHAKE` | `14000` | `BehaviorTreeManifestHandshakeMessage:v1` | `0x059263302E9505CD` | Reliable |
-| `MSG_FULL_SNAPSHOT` | `14001` | `BehaviorTreeStatePayloadMessage.FullSnapshot:v2` | `0x750F7F22C73B0946` | Reliable |
-| `MSG_BLACKBOARD_DELTA` | `14002` | `BehaviorTreeStatePayloadMessage.BlackboardDelta:v2` | `0x5528AAF0A310630D` | UnreliableSequenced |
-| `MSG_DESYNC_REPORT` | `14003` | `BehaviorTreeDesyncReportMessage:v2` | `0x566A9F2B1C5C9202` | Reliable |
-| `MSG_TICK_CONTROL` | `14004` | `BehaviorTreeTickControlMessage:v1` | `0x6299F932DCE53765` | Reliable |
-| `MSG_AUTHORITY_TRANSFER` | `14005` | `BehaviorTreeAuthorityTransferMessage:v1` | `0x94B78D8EED490D89` | Reliable |
+| `MSG_MANIFEST_HANDSHAKE` | `14000` | `BehaviorTreeManifestHandshakeMessage` | `0x6898D682C47854FE` | Reliable |
+| `MSG_FULL_SNAPSHOT` | `14001` | `BehaviorTreeStatePayloadMessage.FullSnapshot` | `0x7F95590BCB67D660` | Reliable |
+| `MSG_BLACKBOARD_DELTA` | `14002` | `BehaviorTreeStatePayloadMessage.BlackboardDelta` | `0xB2B40724FD8B87DA` | UnreliableSequenced |
+| `MSG_DESYNC_REPORT` | `14003` | `BehaviorTreeDesyncReportMessage` | `0xDAB47023610B0058` | Reliable |
+| `MSG_TICK_CONTROL` | `14004` | `BehaviorTreeTickControlMessage` | `0x6F19C5519F2372D6` | Reliable |
+| `MSG_AUTHORITY_TRANSFER` | `14005` | `BehaviorTreeAuthorityTransferMessage` | `0x9E4A1D764326F29A` | Reliable |
 
 Schema hash 是固定 wire identity。当前 v2 protocol fingerprint 为 `0x633B1F15F69258AB`。`BehaviorTreeManifestHandshakeMessage.IsCompatibleWithLocalProtocol` 只比较 protocol fingerprint；应用还必须检查 tree template hash 和 required feature 的兼容性。
 
@@ -236,7 +236,7 @@ if (bridge.TryCreateBlackboardDelta(
 }
 ```
 
-Delta byte 使用版本化 `BTDP1` frame。接收时，bridge 会 clone `Networked` scope、对 candidate 应用 delta、校验 hash，然后在一次 write lock 内提交。Revision 不匹配会在 live mutation 前抛出异常。Observer callback 在提交后、锁外执行。
+Delta byte 使用 `BTDP1` frame。接收时，bridge 会 clone `Networked` scope、对 candidate 应用 delta、校验 hash，然后在一次 write lock 内提交。Revision 不匹配会在 live mutation 前抛出异常。Observer callback 在提交后、锁外执行。
 
 ### Hash-only message 与 desync report
 
@@ -302,7 +302,7 @@ Bridge 会直接执行 snapshot/delta byte limit、通过 `MaxTrackedBlackboardK
 | `TryApplyPayload` 始终返回 `false` | Cursor target/template/authority 与 envelope 不一致 | 使用三项 stream identity 构造 cursor；仅在已接受 handoff 后调用 `ResetProgress(newAuthorityGeneration)` |
 | 第一个 payload 成功，后续 packet 失败 | Sequence 重复/过旧、tick 倒退，或 cursor 被错误重建 | 每条 stream 保存一个可变 cursor 并通过 `ref` 传入；检查 half-range sequence 生成 |
 | Full snapshot 有效但被拒绝 | 本地 managed node state 或 composite cursor 不一致 | 通过项目自有流程协调执行 reset/restart，然后重试 |
-| 看似有效的 delta 被拒绝 | Schema key/type/sync flag 或 hash provider 不一致 | 所有 peer 使用相同版本化 schema 和 `StringHashFunc` |
+| 看似有效的 delta 被拒绝 | Schema key/type/sync flag 或 hash provider 不一致 | 所有 peer 使用相同 schema 和 `StringHashFunc` |
 | 远端没有 object reference | Object key 为 `LocalOnly` | 同步稳定 primitive ID，并在本地解析 object |
 | 抛出跨线程异常 | Transport callback 直接调用 bridge | 把操作排队到 bridge/tree owner thread |
 | Delta capture 因 payload size 抛出异常 | 精确 patch 大小超过 `MaxDeltaPayloadBytes` | 增加预算或减少 tracked state |

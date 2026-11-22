@@ -210,9 +210,9 @@ ServerDamageValidationResult validation = processor.Process(
 - 请求超出距离；
 - 请求处于权威 cooldown 窗口内。
 
-`ServerAuthoritativeDamageProcessor` 总是先执行默认 fail-closed baseline，再调用自定义 validator。自定义 validator 可以拒绝 baseline 已批准的请求或降低批准伤害，但不能绕过 baseline，也不能将伤害提高到权威上限之上。Processor 不信任调用方提供的 `LastAcceptedTimeSeconds`，而是根据自身 `DamageCooldownTracker` 重建该值。权威时间戳与 cooldown duration 使用 `double`，可在长期运行后继续保留亚秒 cooldown 分辨率；已接受时间戳保持单调，不允许向后回退。
+`ServerAuthoritativeDamageProcessor` 总是先执行默认 fail-closed baseline，再调用自定义 validator。自定义 validator 可以拒绝 baseline 已批准的请求或降低批准伤害，但不能绕过 baseline，也不能将伤害提高到权威上限之上。Processor 不信任调用方提供的 `LastAcceptedTimeSeconds`，根据自身 `DamageCooldownTracker` 重建该值；同时用注入的 `INetworkMonotonicTimeProvider` 读数覆盖调用方提供的 `CurrentTimeSeconds`，权威 cooldown 判定不使用客户端 wall-clock。`PruneIdle` 读取同一单调时钟，时钟回拨不会导致过期条目无法回收。权威时间戳与 cooldown duration 使用 `double`，可在长期运行后继续保留亚秒 cooldown 分辨率；已接受时间戳保持单调，不允许向后回退。
 
-`DamageCooldownTracker` 绑定 owner thread，并接收最大 instigator 数量。`GetAdmissionSnapshot()` 提供 tracked count、容量和拒绝次数。预算已满时，新 instigator 的已接受请求会以 `CooldownCapacityReached` fail closed；该结果与游戏规则的 `Custom` 拒绝明确区分。Actor teardown 时移除 instigator，session shutdown 时清空 tracker。
+`DamageCooldownTracker` 绑定 owner thread，并接收最大 instigator 数量与注入的单调时钟。`GetAdmissionSnapshot()` 提供 tracked count、容量和拒绝次数。预算已满时，新 instigator 的已接受请求会以 `CooldownCapacityReached` fail closed；该结果与游戏规则的 `Custom` 拒绝明确区分。Actor teardown 时移除 instigator，session shutdown 时清空 tracker。
 
 `ServerDamageValidationResult.Accept` 只接受有限且非负的 damage；`Reject` 只接受已定义的 rejection reason。Processor 会把自定义 validator 返回的畸形结果，或超过 baseline 批准值的伤害，转换为 `Custom` rejection。在提交 cooldown 状态前，Processor 会验证完整的 outbound result。已接受结果要求 instigator 和 target Actor ID 均为正数且不相同，applied damage 有限且非负，hit location 有限。被拒绝的结果不能携带非零 damage。非法 hit location 会在自定义验证之前失败，并仅在 rejection payload 中替换为 zero，使 fail-closed 结果仍可序列化。
 
@@ -226,11 +226,11 @@ ServerDamageValidationResult validation = processor.Process(
 
 | 消息 | ID | Channel | 用途 |
 | --- | ---: | --- | --- |
-| `ActorMigrationState:v1` | `11000` | Reliable | 有界 Actor 转移状态 |
-| `DamageRequestMessage:v1` | `11001` | Reliable | 客户端伤害意图 |
-| `DamageResultMessage:v2` | `11002` | Reliable | 权威处理结果，包含 cooldown 容量拒绝 |
+| `ActorMigrationState` | `11000` | Reliable | 有界 Actor 转移状态 |
+| `DamageRequestMessage` | `11001` | Reliable | 客户端伤害意图 |
+| `DamageResultMessage` | `11002` | Reliable | 权威处理结果，包含 cooldown 容量拒绝 |
 
-协议只支持 module version 2。所有 primitive field 都按固定顺序显式序列化。测试固定了 protocol ID、schema identity、消息长度、result code 和 fingerprint。Deserializer 会拒绝非规范 boolean、非法身份、非有限数值、截断、trailing bytes 和超出 runtime budget 的数据。
+兼容性由 fingerprint 精确相等决定。所有 primitive field 都按固定顺序显式序列化。测试固定了 protocol ID、schema identity、消息长度、result code 和 fingerprint。Deserializer 会拒绝非规范 boolean、非法身份、非有限数值、截断、trailing bytes 和超出 runtime budget 的数据。
 
 ## 性能与内存
 

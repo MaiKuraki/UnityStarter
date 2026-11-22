@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.networking",
   "version": "1.0.0",
   "displayName": "CycloneGames.Networking",
-  "description": "Experimental transport-neutral networking foundation with explicit versioned protocol manifests, bounded memory and transport primitives, replication/session/simulation/security contracts, diagnostics, and optional transport and serializer integrations. Backend SDKs and product policy remain separately owned.",
+  "description": "Experimental transport-neutral networking foundation with explicit fingerprinted protocol manifests, bounded memory and transport primitives, replication/session/simulation/security contracts, diagnostics, and optional transport and serializer integrations. Backend SDKs and product policy remain separately owned.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {

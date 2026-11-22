@@ -10,7 +10,8 @@
 
 本包提供：
 
-- 位于自有消息范围 `10000..10999` 的版本化 little-endian Wire Protocol；
+- 位于自有消息范围 `10000..10999` 的 little-endian Wire Protocol；
+- `GASNetworkStateVersion` 是单个 authority ASC 与 stream epoch 的单调状态序号计数器，属于领域术语，不承载协议版本语义；本包没有协议版本设计，兼容性由 fingerprint 精确相等决定；
 - 对 protocol、wire schema、content catalog、GameplayTags manifest 和必需 feature 的 fail-closed 协商；
 - entity、ability grant 实例、active effect、content 和 tag 的稳定 wire identity；
 - activation、cancel、input edge、target confirm 和 target cancel 命令；
@@ -81,7 +82,7 @@ flowchart LR
 | Active effect | 稳定 effect ID、definition ID、source entity、source stream epoch、source grant、level、stack count、inhibition、duration、remaining time、period time、prediction correlation |
 | Effect child data | 由 tag/name 寻址的 `SetByCaller` value、dynamic granted tag、dynamic asset tag |
 | Loose tag | 稳定 tag ID 和精确的正 explicit count |
-| Stream state | epoch、batch sequence、base/current version、last processed command、semantic checksum |
+| Stream state | epoch、batch sequence、base/current state sequence、last processed command、semantic checksum |
 
 非零 source grant 只能通过完整的 `(SourceEntity, SourceStreamEpoch, SourceGrant)` identity 解析，裸 grant ID 永远不足以定位实例。Source entity 轮换 epoch 或替换被外部引用的 grant mapping 时，产品 composition 必须使已退役 binding 失效。如果该变化没有修改 target ASC 本身，其 authority owner 必须先调用 `GASNetworkStateVersion.MarkExternalIdentityChanged`，再重新捕获 target，确保 wire state version 仍然前进。
 
@@ -100,7 +101,7 @@ Replica 不会因为远端 ability 的 active flag 为 true 就执行远端 game
 
 Target data 可以是有界 actor list 或单个 portable hit record。客户端提供的 hit position、normal、distance、surface 和 target identity 都是不可信提示。`IGASNetworkTargetCommandHandler` 只能在 authentication、产品 authorization、ownership、permission、replay 和 rate gate 通过后运行，并且必须在提交 gameplay 前完成校验。通用 command 不携带没有执行语义的 client-known state 字段。需要 stale-state rejection 的产品应在 authenticated gate 或 target handler 中实现该 policy，因为只有该边界掌握 command kind 与权威世界语义。
 
-`GameplayEventData.OptionalObject` 保持 process-local，本包不会序列化它。任意 object graph 无法提供有界、稳定、AOT-safe 且可信的 wire schema。需要联网的产品 event 必须转换为现有的已校验 command，或转换为产品持有的、显式版本化且有界的 DTO；禁止传输 runtime object identity。
+`GameplayEventData.OptionalObject` 保持 process-local，本包不会序列化它。任意 object graph 无法提供有界、稳定、AOT-safe 且可信的 wire schema。需要联网的产品 event 必须转换为现有的已校验 command，或转换为产品持有的、显式契约化且有界的 DTO；禁止传输 runtime object identity。
 
 `GASNetworkAuthorityCommandProcessor` 解析精确的稳定 grant，对新命令只执行一次，并把终态结果缓存到有界 replay window。它不是 authorization boundary。意外执行异常仍会生成并缓存一次 `AuthorityUnavailable` result，其中携带异常后真实的 state version；随后设置 `RequiresStreamReset` 并拒绝继续执行。Owner 必须停止 intake，按需捕获并发布 canonical state，把共享 identity map 与 `GASNetworkStateVersion` 一起切换到新 epoch，再 reset processor，之后才能恢复命令接收。Target handler 应避免部分 mutation；该 fail-closed 路径用于防止异常后静默沿用旧 command stream。
 
@@ -245,6 +246,6 @@ EditMode 成功不能证明 Player、IL2CPP、WebGL、移动端、主机平台�
 | Command 在进入 gameplay 前被拒绝 | 检查 ready state、epoch/sequence、authenticated ownership、rate policy、entity mapping、grant mapping 和 target-data structure。 |
 | Predicted action 被回滚 | 检查 terminal result、send failure/timeout、grant-to-spec mapping、ASC resync state 和下一份 authoritative snapshot。 |
 | Cue 被拒绝或报告 sequence gap | 检查 entity/epoch owner、可靠有序 route、下一 Cue sequence、权威 state version、consumer 原子性与 predicted-cue retention。确认 gap 后替换 stream epoch；state resync 不会重放瞬时 Cue。 |
-| Replica 请求 resync | 检查缺失/乱序 chunk、baseline version、checksum、content/entity resolution、capacity 和 source-grant availability。 |
+| Replica 请求 resync | 检查缺失/乱序 chunk、baseline state sequence、checksum、content/entity resolution、capacity 和 source-grant availability。 |
 | Effect-granted ability 缺失 | Ability definition 与 granting effect 都必须进入 content catalog，snapshot 也必须携带它们的稳定关联。 |
 | 可选 backend assembly 未激活 | 确认准确 SDK 已安装，且 asmdef `versionDefines` 与 `defineConstraints` 满足。不要添加隐藏的 PlayerSettings symbol。 |

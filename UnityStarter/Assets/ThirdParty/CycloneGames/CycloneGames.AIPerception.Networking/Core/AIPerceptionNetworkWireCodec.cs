@@ -68,8 +68,8 @@ namespace CycloneGames.AIPerception.Networking
             WriteUInt64(destination, 8, message.PerceptionProfileHash);
             WriteUInt32(destination, 16, (uint)message.SupportedFeatures);
             WriteUInt32(destination, 20, (uint)message.RequiredFeatures);
-            destination[24] = message.MinimumSupportedProtocolVersion;
-            destination[25] = message.CurrentProtocolVersion;
+            destination[24] = 0;
+            destination[25] = 0;
             bytesWritten = HandshakePayloadBytes;
             return AIPerceptionNetworkWireCodecResult.Success;
         }
@@ -88,9 +88,7 @@ namespace CycloneGames.AIPerception.Networking
                 ReadUInt64(payload, 0),
                 ReadUInt64(payload, 8),
                 (AIPerceptionNetworkFeatureFlags)ReadUInt32(payload, 16),
-                (AIPerceptionNetworkFeatureFlags)ReadUInt32(payload, 20),
-                payload[24],
-                payload[25]);
+                (AIPerceptionNetworkFeatureFlags)ReadUInt32(payload, 20));
             if (AIPerceptionNetworkMessageValidator.Validate(in candidate) !=
                 AIPerceptionNetworkMessageValidationResult.Valid)
             {
@@ -118,7 +116,7 @@ namespace CycloneGames.AIPerception.Networking
                 return AIPerceptionNetworkWireCodecResult.DestinationTooSmall;
             }
 
-            destination[0] = message.ProtocolVersion;
+            destination[0] = 0;
             WriteUInt32(destination, 1, message.ObserverNetworkId);
             WriteUInt16(destination, 5, message.Sequence);
             WriteInt32(destination, 7, message.Tick);
@@ -142,7 +140,6 @@ namespace CycloneGames.AIPerception.Networking
 
             AIPerceptionDetectionEntry entry = ReadDetectionEntry(payload.Slice(24, DetectionEntryBytes));
             var candidate = new AIPerceptionDetectionEventMessage(
-                payload[0],
                 ReadUInt32(payload, 1),
                 ReadUInt16(payload, 5),
                 ReadInt32(payload, 7),
@@ -286,7 +283,7 @@ namespace CycloneGames.AIPerception.Networking
                 return AIPerceptionNetworkWireCodecResult.DestinationTooSmall;
             }
 
-            destination[0] = message.ProtocolVersion;
+            destination[0] = 0;
             WriteUInt32(destination, 1, message.ObserverNetworkId);
             WriteInt32(destination, 5, message.PreviousOwnerConnectionId);
             WriteInt32(destination, 9, message.NewOwnerConnectionId);
@@ -311,7 +308,6 @@ namespace CycloneGames.AIPerception.Networking
             }
 
             var candidate = new AIPerceptionAuthorityTransferMessage(
-                payload[0],
                 ReadUInt32(payload, 1),
                 ReadInt32(payload, 5),
                 ReadInt32(payload, 9),
@@ -348,7 +344,7 @@ namespace CycloneGames.AIPerception.Networking
                 return AIPerceptionNetworkWireCodecResult.DestinationTooSmall;
             }
 
-            destination[0] = message.ProtocolVersion;
+            destination[0] = 0;
             WriteUInt32(destination, 1, message.ObserverNetworkId);
             WriteUInt16(destination, 5, message.Sequence);
             WriteInt32(destination, 7, message.Tick);
@@ -370,7 +366,6 @@ namespace CycloneGames.AIPerception.Networking
             }
 
             var candidate = new AIPerceptionFullStateRequestMessage(
-                payload[0],
                 ReadUInt32(payload, 1),
                 ReadUInt16(payload, 5),
                 ReadInt32(payload, 7),
@@ -391,7 +386,7 @@ namespace CycloneGames.AIPerception.Networking
             Span<byte> destination,
             in AIPerceptionDetectionSnapshotMessage message)
         {
-            destination[0] = message.ProtocolVersion;
+            destination[0] = 0;
             WriteUInt32(destination, 1, message.ObserverNetworkId);
             WriteUInt16(destination, 5, message.Sequence);
             WriteInt32(destination, 7, message.Tick);
@@ -404,7 +399,6 @@ namespace CycloneGames.AIPerception.Networking
         private static AIPerceptionDetectionSnapshotMessage ReadSnapshotHeader(ReadOnlySpan<byte> payload)
         {
             return new AIPerceptionDetectionSnapshotMessage(
-                payload[0],
                 ReadUInt32(payload, 1),
                 ReadUInt16(payload, 5),
                 ReadInt32(payload, 7),

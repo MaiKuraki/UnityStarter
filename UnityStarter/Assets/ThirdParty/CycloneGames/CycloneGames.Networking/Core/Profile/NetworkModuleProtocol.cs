@@ -3,28 +3,17 @@ using System;
 namespace CycloneGames.Networking
 {
     /// <summary>
-    /// Provides the runtime-facing operations for one immutable, versioned protocol manifest.
+    /// Runtime-facing operations for one immutable protocol manifest.
+    /// Compatibility is decided by exact fingerprint equality.
     /// </summary>
     public sealed class NetworkModuleProtocol
     {
         public NetworkModuleProtocol(NetworkProtocolManifest manifest)
         {
             Manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
-
-            if (manifest.CurrentVersion > byte.MaxValue || manifest.MinimumSupportedVersion > byte.MaxValue)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(manifest),
-                    "Protocol version window must fit in a byte to stay wire-compatible.");
-            }
-
-            Version = new NetworkProtocolVersion(
-                (byte)manifest.CurrentVersion,
-                (byte)manifest.MinimumSupportedVersion);
         }
 
         public NetworkProtocolManifest Manifest { get; }
-        public NetworkProtocolVersion Version { get; }
 
         public string Owner => Manifest.Owner;
         public string ProtocolId => Manifest.ProtocolId;
@@ -37,10 +26,10 @@ namespace CycloneGames.Networking
             return MessageRange.Contains(messageId);
         }
 
-        /// <summary>True when a peer advertising <paramref name="protocolVersion"/> is interoperable with this module.</summary>
-        public bool IsSupportedProtocolVersion(byte protocolVersion)
+        /// <summary>True when a peer advertises exactly the same protocol fingerprint.</summary>
+        public bool MatchesFingerprint(ulong remoteFingerprint)
         {
-            return Version.Supports(protocolVersion);
+            return remoteFingerprint == Fingerprint;
         }
 
         /// <summary>
