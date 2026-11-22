@@ -48,8 +48,8 @@ namespace CycloneGames.DeviceFeedback.Tests.Editor
             Assert.That(backend.FlashCount, Is.EqualTo(1));
             Assert.That(backend.PlayGradientCount, Is.EqualTo(1));
             Assert.That(backend.PlayIntensityCurveCount, Is.EqualTo(1));
-            Assert.That(backend.LastGradientSampleIntervalMs, Is.EqualTo(10));
-            Assert.That(backend.LastIntensitySampleIntervalMs, Is.EqualTo(10));
+            Assert.That(backend.LastGradientSampleIntervalMs, Is.EqualTo(DeviceFeedbackProfile.Default.MinimumSampleIntervalMilliseconds));
+            Assert.That(backend.LastIntensitySampleIntervalMs, Is.EqualTo(DeviceFeedbackProfile.Default.MinimumSampleIntervalMilliseconds));
         }
 
         [Test]

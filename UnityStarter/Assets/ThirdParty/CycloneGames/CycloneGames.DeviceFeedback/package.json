@@ -1,14 +1,16 @@
 {
   "name": "com.cyclone-games.device-feedback",
-  "displayName": "CycloneGames.DeviceFeedback",
-  "description": "Multi-platform device feedback for Unity. Includes Android/iOS/WebGL mobile vibration plus backend-ready gamepad rumble and device light interfaces with safe no-op defaults.",
-  "unity": "2019.3",
   "version": "1.0.0",
+  "displayName": "CycloneGames.DeviceFeedback",
+  "description": "Cross-platform device feedback for Unity. Android/iOS/WebGL haptics plus backend-ready gamepad rumble and device light services with bounded admission, per-instance diagnostics, instance-owned buffers and an explicit result contract.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {},
   "keywords": [
-    "vibration",
+    "CycloneGames",
+    "DeviceFeedback",
     "haptics",
-    "haptic-feedback",
-    "mobile",
+    "vibration",
     "gamepad",
     "rumble",
     "lightbar"
@@ -18,11 +20,10 @@
     "email": "",
     "url": ""
   },
-  "repository": {},
   "samples": [
     {
       "displayName": "Mobile Vibration Example",
-      "description": "Demo scene showing all mobile haptic API features: presets, custom patterns, iOS-specific haptics, AnimationCurve vibration, and toggle control.",
+      "description": "Demo scene showing presets, custom patterns, curve vibration, HapticClip and the master switch.",
       "path": "Samples~/MobileVibrationExample"
     }
   ]
