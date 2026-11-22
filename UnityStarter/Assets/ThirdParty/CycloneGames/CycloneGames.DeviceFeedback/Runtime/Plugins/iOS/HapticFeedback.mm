@@ -1,8 +1,6 @@
 #import <UIKit/UIKit.h>
 
-// Pre-allocated generators — calling prepare() ahead of time lets the Taptic Engine
-// spin up before the trigger, eliminating ~30-50ms cold-start latency.
-// Apple docs: "Call prepare() before the event that triggers feedback."
+// Generators are created and prepared before their first trigger.
 
 static UIImpactFeedbackGenerator *s_impactLight   = nil;
 static UIImpactFeedbackGenerator *s_impactMedium  = nil;
