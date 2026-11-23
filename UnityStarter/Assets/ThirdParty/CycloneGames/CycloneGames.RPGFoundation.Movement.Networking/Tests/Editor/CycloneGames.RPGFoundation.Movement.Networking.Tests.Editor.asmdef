@@ -4,8 +4,7 @@
     "references": [
         "CycloneGames.RPGFoundation.Movement.Core",
         "CycloneGames.RPGFoundation.Movement.Networking.Core",
-        "CycloneGames.Networking.Core",
-        "Unity.Mathematics"
+        "CycloneGames.Networking.Core"
     ],
     "includePlatforms": [
         "Editor"

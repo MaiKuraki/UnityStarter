@@ -24,14 +24,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 
             context.CurrentSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
 
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.RollTrigger);
-                if (hash != 0)
-                {
-                    context.AnimationController.SetTrigger(hash);
-                }
-            }
+            context.StepEvents |= MovementStepEvent.RollStarted;
         }
 
         public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
@@ -45,12 +38,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             displacement = context.RollDirection * rollSpeed * context.DeltaTime;
             context.CurrentSpeed = rollSpeed;
             context.CurrentVelocity = context.RollDirection * rollSpeed;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                context.AnimationController.SetFloat(hash, rollSpeed);
-            }
         }
 
         public override MovementStateBase2D EvaluateTransition(ref MovementContext2D context)
@@ -59,17 +46,17 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             {
                 if (!context.IsGrounded)
                 {
-                    return StatePool<MovementStateBase2D>.GetState<FallState2D>();
+                    return context.StatePool.Get<FallState2D>();
                 }
 
                 if (math.lengthsq(context.InputDirection) > 0.0001f)
                 {
                     if (context.SprintHeld)
-                        return StatePool<MovementStateBase2D>.GetState<SprintState2D>();
-                    return StatePool<MovementStateBase2D>.GetState<RunState2D>();
+                        return context.StatePool.Get<SprintState2D>();
+                    return context.StatePool.Get<RunState2D>();
                 }
 
-                return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                return context.StatePool.Get<IdleState2D>();
             }
 
             return null;

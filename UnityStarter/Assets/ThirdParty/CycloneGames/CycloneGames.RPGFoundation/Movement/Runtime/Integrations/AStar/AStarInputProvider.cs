@@ -10,12 +10,6 @@ using Pathfinding;
 
 namespace CycloneGames.RPGFoundation.Movement.Integrations.AStar
 {
-    /// <summary>
-    /// Provides A* Pathfinding Project based movement input for AI characters.
-    /// Supports both 3D and 2D pathfinding (grid graphs, navmesh graphs, etc.).
-    /// 
-    /// Requires: A* Pathfinding Project package (com.arongranberg.astar)
-    /// </summary>
 #if CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING
     [RequireComponent(typeof(Seeker))]
     [DisallowMultipleComponent]
@@ -62,20 +56,20 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AStar
             }
         }
 
-        public Vector3 CurrentDestination => _destination;
+        public MovementVector3 CurrentDestination => _destination.ToMovementVector3();
 
-        public Vector3 CurrentDirection
+        public MovementVector3 CurrentDirection
         {
             get
             {
                 if (_currentPath == null || _currentWaypoint >= _currentPath.vectorPath.Count)
-                    return Vector3.zero;
+                    return MovementVector3.Zero;
 
                 Vector3 dir = _currentPath.vectorPath[_currentWaypoint] - transform.position;
                 if (is2DMode) dir.z = 0;
                 else dir.y = 0;
 
-                return dir.sqrMagnitude > 0.001f ? dir.normalized : Vector3.zero;
+                return dir.sqrMagnitude > 0.001f ? dir.normalized.ToMovementVector3() : MovementVector3.Zero;
             }
         }
 
@@ -128,16 +122,17 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AStar
             }
         }
 
-        public bool SetDestination(Vector3 destination)
+        public bool SetDestination(MovementVector3 destination)
         {
             if (_seeker == null) return false;
 
-            _destination = destination;
+            Vector3 destinationVector = destination.ToVector3();
+            _destination = destinationVector;
             _hasDestination = true;
             _currentWaypoint = 0;
             _lastRepathTime = Time.time;
 
-            _seeker.StartPath(transform.position, destination, OnPathComplete);
+            _seeker.StartPath(transform.position, destinationVector, OnPathComplete);
             return true;
         }
 
@@ -230,20 +225,17 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AStar
         }
     }
 #else
-    /// <summary>
-    /// Stub class when A* Pathfinding Project is not installed.
-    /// </summary>
     public class AStarInputProvider : MonoBehaviour, IPathfindingProvider
     {
         private static readonly LogChannel Log = RpgAStarLog.Channel;
 
         public bool IsNavigating => false;
         public bool HasReachedDestination => false;
-        public Vector3 CurrentDestination => Vector3.zero;
-        public Vector3 CurrentDirection => Vector3.zero;
+        public MovementVector3 CurrentDestination => MovementVector3.Zero;
+        public MovementVector3 CurrentDirection => MovementVector3.Zero;
         public float RemainingDistance => 0f;
 
-        public bool SetDestination(Vector3 destination) => false;
+        public bool SetDestination(MovementVector3 destination) => false;
         public void StopNavigation() { }
 
         private void Awake()

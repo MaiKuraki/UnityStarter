@@ -1,6 +1,5 @@
 namespace CycloneGames.RPGFoundation.Movement.Runtime
 {
-    /// <summary>Allocation-free retained-policy diagnostics for one MovementComponent.</summary>
     public readonly struct MovementComponentMemorySnapshot
     {
         internal MovementComponentMemorySnapshot(

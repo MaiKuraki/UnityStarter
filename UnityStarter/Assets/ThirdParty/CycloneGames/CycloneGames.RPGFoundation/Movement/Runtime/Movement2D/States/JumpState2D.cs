@@ -9,7 +9,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 
         public override void OnEnter(ref MovementContext2D context)
         {
-            // Check jump count limit before allowing jump
             int resolvedMaxJumpCount = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
             if (context.Config != null && context.JumpCount >= resolvedMaxJumpCount)
             {
@@ -28,11 +27,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             context.JumpCount++;
             context.JumpPressed = false;
 
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.JumpTrigger);
-                context.AnimationController.SetTrigger(hash);
-            }
+            context.StepEvents |= MovementStepEvent.JumpImpulse;
         }
 
         public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
@@ -50,14 +45,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             displacement = currentVelocity * context.DeltaTime;
             context.CurrentSpeed = math.abs(horizontalVelocity);
             context.CurrentVelocity = currentVelocity;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int speedHash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                int verticalHash = AnimationParameterCache.GetHash(context.Config.VerticalSpeedParameter);
-                context.AnimationController.SetFloat(speedHash, context.CurrentSpeed);
-                context.AnimationController.SetFloat(verticalHash, currentVelocity.y);
-            }
         }
 
         public override MovementStateBase2D EvaluateTransition(ref MovementContext2D context)
@@ -73,28 +60,25 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
                 if (math.lengthsq(context.InputDirection) > 0.0001f)
                 {
                     if (context.SprintHeld)
-                        return StatePool<MovementStateBase2D>.GetState<SprintState2D>();
+                        return context.StatePool.Get<SprintState2D>();
                     else
-                        return StatePool<MovementStateBase2D>.GetState<RunState2D>();
+                        return context.StatePool.Get<RunState2D>();
                 }
                 else
                 {
-                    return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                    return context.StatePool.Get<IdleState2D>();
                 }
             }
 
-            // Transition to FallState2D when reaching apex or descending
-            // This must be checked BEFORE multi-jump to prevent extra jumps at apex
 #if UNITY_6000_0_OR_NEWER
             if (context.Rigidbody.linearVelocity.y <= 0)
 #else
             if (context.Rigidbody.velocity.y <= 0)
 #endif
             {
-                return StatePool<MovementStateBase2D>.GetState<FallState2D>();
+                return context.StatePool.Get<FallState2D>();
             }
 
-            // Multi-jump: Allow additional jumps while rising (velocity.y > 0) if within jump count limit
             int resolvedMaxJumpCount = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
             if (context.JumpPressed && context.Config != null && context.JumpCount < resolvedMaxJumpCount)
             {
@@ -111,11 +95,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
                 context.JumpCount++;
                 context.JumpPressed = false;
 
-                if (context.AnimationController != null && context.AnimationController.IsValid)
-                {
-                    int hash = AnimationParameterCache.GetHash(context.Config.JumpTrigger);
-                    context.AnimationController.SetTrigger(hash);
-                }
+                context.StepEvents |= MovementStepEvent.AirJumpImpulse;
             }
 
             return null;

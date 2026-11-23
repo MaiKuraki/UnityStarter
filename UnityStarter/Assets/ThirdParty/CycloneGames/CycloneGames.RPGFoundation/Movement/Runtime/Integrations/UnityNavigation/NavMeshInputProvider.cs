@@ -9,13 +9,6 @@ using UnityEngine.AI;
 
 namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
 {
-    /// <summary>
-    /// Provides NavMesh-based movement input for AI characters.
-    /// Converts NavMeshAgent path following into MovementComponent input.
-    /// Supports OffMeshLink traversal (jumping gaps, dropping, etc.).
-    /// 
-    /// Requires: Unity AI Navigation package (com.unity.ai.navigation)
-    /// </summary>
 #if CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION
     [RequireComponent(typeof(MovementComponent))]
     [RequireComponent(typeof(NavMeshAgent))]
@@ -45,14 +38,8 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
 
         #region IPathfindingProvider Implementation
 
-        /// <summary>
-        /// Returns true if the agent has an active path and hasn't reached destination.
-        /// </summary>
         public bool IsNavigating => _hasDestination && !HasReachedDestination;
 
-        /// <summary>
-        /// Returns true if the agent has reached its destination.
-        /// </summary>
         public bool HasReachedDestination
         {
             get
@@ -63,28 +50,19 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
             }
         }
 
-        /// <summary>
-        /// Current navigation destination.
-        /// </summary>
-        public Vector3 CurrentDestination => _agent != null ? _agent.destination : Vector3.zero;
+        public MovementVector3 CurrentDestination => _agent != null ? _agent.destination.ToMovementVector3() : MovementVector3.Zero;
 
-        /// <summary>
-        /// Current movement direction towards next waypoint (normalized).
-        /// </summary>
-        public Vector3 CurrentDirection
+        public MovementVector3 CurrentDirection
         {
             get
             {
-                if (_agent == null || !_hasDestination) return Vector3.zero;
+                if (_agent == null || !_hasDestination) return MovementVector3.Zero;
                 Vector3 dir = (_agent.steeringTarget - transform.position);
                 dir.y = 0;
-                return dir.sqrMagnitude > 0.001f ? dir.normalized : Vector3.zero;
+                return dir.sqrMagnitude > 0.001f ? dir.normalized.ToMovementVector3() : MovementVector3.Zero;
             }
         }
 
-        /// <summary>
-        /// Distance remaining to destination.
-        /// </summary>
         public float RemainingDistance => _agent != null ? _agent.remainingDistance : 0f;
 
         #endregion
@@ -94,7 +72,6 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
             _movement = GetComponent<MovementComponent>();
             _agent = GetComponent<NavMeshAgent>();
 
-            // Disable NavMeshAgent's automatic movement - we handle it via MovementComponent
             _agent.updatePosition = false;
             _agent.updateRotation = false;
         }
@@ -103,19 +80,16 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
         {
             if (_agent == null || _movement == null) return;
 
-            // Sync agent position to actual character position
             _agent.nextPosition = transform.position;
 
             if (!_hasDestination) return;
 
-            // Handle OffMeshLink traversal
             if (_agent.isOnOffMeshLink && autoTraverseLinks)
             {
                 HandleOffMeshLink();
                 return;
             }
 
-            // Normal path following
             if (!HasReachedDestination && !_isTraversingLink)
             {
                 Vector3 direction = CurrentDirection;
@@ -130,23 +104,15 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
             }
         }
 
-        /// <summary>
-        /// Set a new navigation destination.
-        /// </summary>
-        /// <param name="destination">World position to navigate to.</param>
-        /// <returns>True if path was found and navigation started.</returns>
-        public bool SetDestination(Vector3 destination)
+        public bool SetDestination(MovementVector3 destination)
         {
             if (_agent == null) return false;
 
-            _agent.destination = destination;
+            _agent.destination = destination.ToVector3();
             _hasDestination = true;
             return true;
         }
 
-        /// <summary>
-        /// Stop navigation and clear destination.
-        /// </summary>
         public void StopNavigation()
         {
             if (_agent != null)
@@ -162,9 +128,6 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
             }
         }
 
-        /// <summary>
-        /// Handle OffMeshLink traversal (jumping, dropping, etc.).
-        /// </summary>
         private void HandleOffMeshLink()
         {
             if (!_agent.isOnOffMeshLink) return;
@@ -173,7 +136,6 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
             Vector3 startPos = linkData.startPos;
             Vector3 endPos = linkData.endPos;
 
-            // Calculate if this is a jump up, jump down, or horizontal jump
             float heightDiff = endPos.y - startPos.y;
             Vector3 direction = (endPos - startPos).normalized;
             direction.y = 0;
@@ -184,24 +146,20 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
 
                 if (heightDiff > 0.5f)
                 {
-                    // Jump up
                     _movement.LaunchCharacter(new Vector3(direction.x * 5f, linkJumpForce, direction.z * 5f));
                 }
                 else if (heightDiff < -0.5f)
                 {
-                    // Drop down - just walk off
                     _movement.SetInputDirection(direction * speedMultiplier);
                 }
                 else
                 {
-                    // Horizontal jump
                     float jumpHeight = Mathf.Max(1f, Vector3.Distance(startPos, endPos) * 0.25f);
                     float jumpVelocity = Mathf.Sqrt(2f * Mathf.Abs(Physics.gravity.y) * jumpHeight);
                     _movement.LaunchCharacter(new Vector3(direction.x * 5f, jumpVelocity, direction.z * 5f));
                 }
             }
 
-            // Check if we've reached the end position
             float distToEnd = Vector3.Distance(transform.position, endPos);
             if (distToEnd < stoppingDistance || _movement.IsGrounded)
             {
@@ -217,7 +175,6 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
         {
             if (_agent == null || !_hasDestination) return;
 
-            // Draw path
             Gizmos.color = Color.green;
             NavMeshPath path = _agent.path;
             if (path != null && path.corners.Length > 1)
@@ -230,26 +187,22 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
                 Gizmos.DrawWireSphere(path.corners[path.corners.Length - 1], 0.1f);
             }
 
-            // Draw destination
             Gizmos.color = Color.red;
             Gizmos.DrawWireSphere(_agent.destination, 0.3f);
         }
     }
 #else
-    /// <summary>
-    /// Stub class when Unity AI Navigation package is not installed.
-    /// </summary>
     public class NavMeshInputProvider : MonoBehaviour, IPathfindingProvider
     {
         private static readonly LogChannel Log = RpgUnityNavigationLog.Channel;
 
         public bool IsNavigating => false;
         public bool HasReachedDestination => false;
-        public Vector3 CurrentDestination => Vector3.zero;
-        public Vector3 CurrentDirection => Vector3.zero;
+        public MovementVector3 CurrentDestination => MovementVector3.Zero;
+        public MovementVector3 CurrentDirection => MovementVector3.Zero;
         public float RemainingDistance => 0f;
 
-        public bool SetDestination(Vector3 destination) => false;
+        public bool SetDestination(MovementVector3 destination) => false;
         public void StopNavigation() { }
 
         private void Awake()

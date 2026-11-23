@@ -5,14 +5,6 @@ using CycloneGames.RPGFoundation.Movement.Runtime;
 
 namespace CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation
 {
-    /// <summary>
-    /// Provides Agents Navigation (DOTS) based movement input for AI characters.
-    /// This is a simplified implementation that uses direction-based movement.
-    /// For full ECS integration, extend this class or create a custom implementation.
-    /// 
-    /// Requires: Agents Navigation package (com.projectdawn.navigation)
-    /// Note: Only supports 3D movement. For 2D, use AStarInputProvider.
-    /// </summary>
 #if CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION
     [DisallowMultipleComponent]
     public class AgentsNavigationProvider : MonoBehaviour, IPathfindingProvider
@@ -44,16 +36,16 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation
             }
         }
 
-        public Vector3 CurrentDestination => _destination;
+        public MovementVector3 CurrentDestination => _destination.ToMovementVector3();
 
-        public Vector3 CurrentDirection
+        public MovementVector3 CurrentDirection
         {
             get
             {
-                if (!_hasDestination) return Vector3.zero;
+                if (!_hasDestination) return MovementVector3.Zero;
                 Vector3 dir = _destination - transform.position;
                 dir.y = 0;
-                return dir.sqrMagnitude > 0.001f ? dir.normalized : Vector3.zero;
+                return dir.sqrMagnitude > 0.001f ? dir.normalized.ToMovementVector3() : MovementVector3.Zero;
             }
         }
 
@@ -86,9 +78,9 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation
             }
         }
 
-        public bool SetDestination(Vector3 destination)
+        public bool SetDestination(MovementVector3 destination)
         {
-            _destination = destination;
+            _destination = destination.ToVector3();
             _hasDestination = true;
             return true;
         }
@@ -117,20 +109,17 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation
         }
     }
 #else
-    /// <summary>
-    /// Stub class when Agents Navigation is not installed.
-    /// </summary>
     public class AgentsNavigationProvider : MonoBehaviour, IPathfindingProvider
     {
         private static readonly LogChannel Log = RpgAgentsNavigationLog.Channel;
 
         public bool IsNavigating => false;
         public bool HasReachedDestination => false;
-        public Vector3 CurrentDestination => Vector3.zero;
-        public Vector3 CurrentDirection => Vector3.zero;
+        public MovementVector3 CurrentDestination => MovementVector3.Zero;
+        public MovementVector3 CurrentDirection => MovementVector3.Zero;
         public float RemainingDistance => 0f;
 
-        public bool SetDestination(Vector3 destination) => false;
+        public bool SetDestination(MovementVector3 destination) => false;
         public void StopNavigation() { }
 
         private void Awake()

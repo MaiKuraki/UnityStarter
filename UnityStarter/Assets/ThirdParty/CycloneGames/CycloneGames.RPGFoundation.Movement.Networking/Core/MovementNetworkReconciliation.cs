@@ -10,55 +10,63 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             in MovementNetworkCorrectionPolicy policy,
             out float positionErrorSqr)
         {
-            positionErrorSqr = NetworkVector3.SqrDistance(predicted.Position, authoritative.Position);
-            if (positionErrorSqr > policy.PositionCorrectionThresholdSqr)
+            positionErrorSqr = 0f;
+
+            if (!predicted.IsWellFormed || !authoritative.IsWellFormed) return false;
+            if (predicted.EntityId != authoritative.EntityId) return false;
+            if (predicted.Epoch != authoritative.Epoch) return false;
+            if (authoritative.ServerTick < predicted.ServerTick) return false;
+
+            float positionError = NetworkVector3.SqrDistance(predicted.Position, authoritative.Position);
+            if (!float.IsFinite(positionError))
             {
+                positionErrorSqr = float.MaxValue;
                 return true;
             }
 
-            float velocityErrorSqr = NetworkVector3.SqrDistance(predicted.Velocity, authoritative.Velocity);
-            return velocityErrorSqr > policy.VelocityCorrectionThresholdSqr
+            positionErrorSqr = positionError;
+            if (positionError > policy.PositionCorrectionThresholdSqr) return true;
+
+            float velocityError = NetworkVector3.SqrDistance(predicted.Velocity, authoritative.Velocity);
+            if (!float.IsFinite(velocityError)) return true;
+
+            return velocityError > policy.VelocityCorrectionThresholdSqr
                    || predicted.StateId != authoritative.StateId
                    || predicted.JumpCount != authoritative.JumpCount
-                   || predicted.Flags != authoritative.Flags;
+                   || !MovementNetworkSnapshotFlags.WireEquals(predicted.Flags, authoritative.Flags);
         }
 
         public static bool TryCreateCorrection(
             in MovementNetworkSnapshotMessage predicted,
-            in MovementNetworkSnapshotMessage authoritative,
+            in MovementFullStateMessage authoritative,
             in MovementNetworkCorrectionPolicy policy,
             out MovementCorrectionMessage correction)
         {
-            if (!predicted.IsValid
-                || !authoritative.IsValid
-                || predicted.EntityId != authoritative.EntityId)
-            {
-                correction = default;
-                return false;
-            }
+            correction = default;
+            if (!predicted.IsWellFormed || !authoritative.IsValid) return false;
+            if (predicted.EntityId != authoritative.EntityId) return false;
+            if (predicted.Epoch != authoritative.Epoch) return false;
 
-            if (!RequiresCorrection(predicted, authoritative, policy, out float positionErrorSqr))
-            {
-                correction = default;
-                return false;
-            }
+            byte flags = MovementNetworkSnapshotFlags.None;
+            MovementNetworkSnapshotMessage delta = authoritative.ToDelta(flags);
+            if (!RequiresCorrection(predicted, delta, policy, out float positionErrorSqr)) return false;
 
-            MovementNetworkSnapshotMessage correctionSnapshot = authoritative;
             if (positionErrorSqr > policy.PositionHardSnapThresholdSqr)
             {
-                correctionSnapshot.Flags = MovementNetworkSnapshotFlags.Set(
-                    correctionSnapshot.Flags,
-                    MovementNetworkSnapshotFlags.Teleport,
-                    true);
+                flags = MovementNetworkSnapshotFlags.Set(
+                    flags, MovementNetworkSnapshotFlags.Teleport, true);
             }
 
+            MovementFullStateMessage payload = authoritative;
+            payload.State = authoritative.State;
             correction = new MovementCorrectionMessage(
-                authoritative.EntityId,
+                predicted.EntityId,
+                predicted.Epoch,
                 predicted.Tick,
                 authoritative.ServerTick,
                 predicted.Sequence,
                 positionErrorSqr,
-                correctionSnapshot);
+                payload);
             return true;
         }
     }

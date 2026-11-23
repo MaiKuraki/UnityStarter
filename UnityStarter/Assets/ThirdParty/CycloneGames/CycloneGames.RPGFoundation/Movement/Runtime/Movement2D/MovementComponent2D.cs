@@ -13,11 +13,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         private static readonly LogChannel Log = RpgMovementLog.Channel;
 
         [SerializeField] private MovementConfig2D config;
-        [SerializeField] private Animator characterAnimator;
-        [SerializeField] private UnityEngine.Object animancerComponent;
         [SerializeField] private Transform worldUpSource;
+        [Tooltip("Consume root motion deltas from a bound IRootMotionSource and feed them "
+                 + "through the ordinary velocity resolution.")]
         [SerializeField] private bool useRootMotion = false;
-
 
         [Tooltip("Ignore global Time.timeScale. When enabled, this character will use Time.unscaledDeltaTime instead.\n" +
                  "Use cases:\n" +
@@ -28,10 +27,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                  "Note: LocalTimeScale still applies even when this is enabled.")]
         [SerializeField] private bool ignoreTimeScale = false;
 
-        /// <summary>
-        /// Whether this character ignores global Time.timeScale.
-        /// Can be set at runtime to dynamically switch between affected/ignored time scale.
-        /// </summary>
         public bool IgnoreTimeScale
         {
             get => ignoreTimeScale;
@@ -39,12 +34,81 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         }
 
         public float LocalTimeScale { get; set; } = 1f;
-        public IMovementAuthority MovementAuthority { get; set; }
-        public UnityEngine.Object ExternalAnimationComponent => animancerComponent;
+        private IMovementAuthority _movementAuthority;
 
-        /// <summary>
-        /// Read-only access to movement configuration. Prevents external modification of shared ScriptableObject assets.
-        /// </summary>
+        public IMovementAuthority MovementAuthority
+        {
+            get
+            {
+                if (_movementAuthority != null && !MovementUnityLifetime.IsAlive(_movementAuthority))
+                    _movementAuthority = null;
+                return _movementAuthority;
+            }
+            set { _movementAuthority = MovementUnityLifetime.Alive(value); }
+        }
+        public void BindAnimation(IMovementLocomotionSink locomotionSink, IMovementActionSink actionSink)
+        {
+            _locomotionSink = locomotionSink;
+            _actionSink = actionSink;
+        }
+
+        public void BindRootMotion(IRootMotionSource source)
+        {
+            _rootMotionSource = source;
+            _animatorRootMotionSource = source as AnimatorRootMotionSource;
+            SyncRootMotionTimeSource();
+        }
+
+        private void SyncRootMotionTimeSource()
+        {
+            if (_animatorRootMotionSource != null)
+                _animatorRootMotionSource.SetTimeScale(LocalTimeScale, ignoreTimeScale);
+        }
+
+        public void SetUseRootMotion(bool enable)
+        {
+            useRootMotion = enable;
+            if (!enable) _rootMotionAccumulator.Discard();
+        }
+
+        public void BindSemantics(MovementExtensionRegistry registry) { _semantics = registry; }
+
+        public void BindPresentationBudget(IMovementPresentationBudget budget) { _presentationBudget = budget; }
+
+        public void SetSemanticStateId(uint id) { _semanticStateId = id; }
+
+        public MovementExtensionRegistry Semantics { get { return _semantics; } }
+
+        public void BindMovementLayers(MovementLayerArbiter arbiter) { _movementLayers = arbiter; }
+
+        public MovementLayerArbiter MovementLayers { get { return _movementLayers; } }
+
+        // Only the outermost window saves layer state and restores it.
+        public void BeginReplay()
+        {
+            if (_replayDepth == 0 && _movementLayers != null) _movementLayers.SaveReplayState();
+            if (_replayDepth < int.MaxValue) _replayDepth++;
+        }
+
+        public void EndReplay()
+        {
+            if (_replayDepth <= 0) return;
+            _replayDepth--;
+            if (_replayDepth == 0 && _movementLayers != null) _movementLayers.RestoreReplayState();
+        }
+
+        public void BindDeterministicStep(IMovementDeterministicStep driver) { _deterministicStep = driver; }
+
+        public void SetPresentationEnabled(bool enabled)
+        {
+            _presentationEnabled = enabled;
+        }
+
+        public MovementAnimationState LastPublishedAnimationState
+        {
+            get { return _lastPublishedState; }
+        }
+
         public IMovementConfig2DReadOnly Config => _configReadOnly ??= new MovementConfig2DReadOnlyWrapper(config);
 
         private IMovementConfig2DReadOnly _configReadOnly;
@@ -56,12 +120,36 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         private Rigidbody2D _rigidbody;
         private MovementStateBase2D _currentState;
         private MovementContext2D _context;
+        private readonly MovementStatePool<MovementStateBase2D> _statePool = new MovementStatePool<MovementStateBase2D>();
+        private IMovementLocomotionSink _locomotionSink;
+        private IMovementActionSink _actionSink;
+        private IRootMotionSource _rootMotionSource;
+        private readonly MovementAnimationFrameBuilder _animationFrame = new MovementAnimationFrameBuilder();
+        private readonly MovementAnimationAction[] _actionBuffer =
+            new MovementAnimationAction[MovementAnimationActionWriter.MaximumActionsPerStep];
+        private MovementAnimationState _lastPublishedState;
+        private bool _presentationEnabled = true;
+        private bool _rootMotionAppliedThisStep;
+        private float _rootMotionYawThisStep;
+        private MovementExtensionRegistry _semantics;
+        private IMovementPresentationBudget _presentationBudget;
+        private uint _semanticStateId;
+        private bool _presentationPaused;
+        private MovementLayerArbiter _movementLayers;
+        private IMovementDeterministicStep _deterministicStep;
+        private int _replayDepth;
+        private uint _layerSequence;
+        private static readonly Unity.Profiling.ProfilerMarker AnimationPublishMarker =
+            new Unity.Profiling.ProfilerMarker("CycloneGames.Movement.PublishAnimationFrame");
+        private AnimatorRootMotionSource _animatorRootMotionSource;
+        private readonly MovementRootMotionAccumulator _rootMotionAccumulator =
+            new MovementRootMotionAccumulator();
 
         private float _coyoteTimeCounter;
         private float _jumpBufferCounter;
         private bool _wasGrounded;
-        private bool _facingRight; // Current facing direction (initialized from config)
-        private Transform _groundCheck; // Auto-created ground check point (internal use only)
+        private bool _facingRight;
+        private Transform _groundCheck;
 
         private const float _minSqrMagnitudeForMovement = 0.0001f;
 
@@ -73,11 +161,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         private Vector2 _pendingImpulse;
         private Vector2 _pendingForce;
         private float _unconstrainedTimer;
-
-        private bool _isUsingAnimancer;
-        private bool _isUsingHybridAnimancer;
-        private Animator _hybridAnimancerAnimator;
-        private Animator _cachedTargetAnimator; // Character's own velocity when last grounded
 
         private float DeltaTime => (ignoreTimeScale ? Time.unscaledDeltaTime : Time.deltaTime) * LocalTimeScale;
         private float FixedDeltaTime => (ignoreTimeScale ? Time.fixedUnscaledDeltaTime : Time.fixedDeltaTime) * LocalTimeScale;
@@ -91,26 +174,18 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         public bool IsMoving => math.lengthsq(_context.CurrentVelocity) > _minSqrMagnitudeForMovement;
         #endregion
 
+        private void Reset()
+        {
+            Rigidbody2D body = GetComponent<Rigidbody2D>();
+            if (body == null) return;
+            body.interpolation = RigidbodyInterpolation2D.Interpolate;
+            body.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+            body.constraints = RigidbodyConstraints2D.FreezeRotation;
+        }
+
         void Awake()
         {
             _rigidbody = GetComponent<Rigidbody2D>();
-
-            IAnimationController animationController = null;
-
-            if (animancerComponent != null)
-            {
-                Log.Warning(
-                    "[MovementComponent2D] External animation component is assigned, but no Movement animation integration has bound it yet. " +
-                    "Falling back to Unity Animator.");
-            }
-
-            if (animationController == null)
-            {
-                if (characterAnimator == null)
-                    characterAnimator = GetComponent<Animator>();
-                if (characterAnimator != null)
-                    animationController = new AnimatorAnimationController(characterAnimator);
-            }
 
             if (config == null)
             {
@@ -129,15 +204,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                 }
             }
 
-            PreWarmAnimationParameters();
             InitializePhysics();
-            InitializeContext(animationController);
-            _currentState = StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+            InitializeContext();
+            _currentState = _statePool.Get<IdleState2D>();
 
-            // Initialize facing direction from config
             _facingRight = config.FacingRight;
-
-            CacheTargetAnimator();
 
             if (MovementAuthority == null)
             {
@@ -145,128 +216,17 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             }
         }
 
-        public void SetExternalAnimationController(IAnimationController animationController, Animator targetAnimator, bool supportsRootMotion)
-        {
-            if (animationController == null)
-            {
-                Log.Warning("[MovementComponent2D] External animation controller is null.");
-                return;
-            }
-
-            _isUsingAnimancer = true;
-            _isUsingHybridAnimancer = supportsRootMotion;
-            _hybridAnimancerAnimator = targetAnimator;
-
-            if (_hybridAnimancerAnimator != null && characterAnimator == null)
-            {
-                characterAnimator = _hybridAnimancerAnimator;
-            }
-
-            _context.AnimationController = animationController;
-
-            CacheTargetAnimator();
-
-            if (useRootMotion && !supportsRootMotion)
-            {
-                Log.Warning("[MovementComponent2D] Root motion requires an external animation controller that supports root motion.");
-            }
-        }
-
-        private void CacheTargetAnimator()
-        {
-            if (_isUsingHybridAnimancer && _hybridAnimancerAnimator != null)
-                _cachedTargetAnimator = _hybridAnimancerAnimator;
-            else if (characterAnimator != null && !_isUsingAnimancer)
-                _cachedTargetAnimator = characterAnimator;
-            else
-                _cachedTargetAnimator = null;
-
-            if (_cachedTargetAnimator != null && useRootMotion)
-                _cachedTargetAnimator.applyRootMotion = true;
-        }
-
-        private System.Collections.Generic.Dictionary<int, string> CreateParameterNameMap()
-        {
-            if (config == null) return new System.Collections.Generic.Dictionary<int, string>();
-
-            var map = new System.Collections.Generic.Dictionary<int, string>();
-
-            // Map parameter hashes to names for Animancer Parameters mode
-            if (!string.IsNullOrEmpty(config.MovementSpeedParameter))
-            {
-                int hash = AnimationParameterCache.GetHash(config.MovementSpeedParameter);
-                map[hash] = config.MovementSpeedParameter;
-            }
-
-            if (!string.IsNullOrEmpty(config.IsGroundedParameter))
-            {
-                int hash = AnimationParameterCache.GetHash(config.IsGroundedParameter);
-                map[hash] = config.IsGroundedParameter;
-            }
-
-            if (!string.IsNullOrEmpty(config.JumpTrigger))
-            {
-                int hash = AnimationParameterCache.GetHash(config.JumpTrigger);
-                map[hash] = config.JumpTrigger;
-            }
-
-            if (!string.IsNullOrEmpty(config.VerticalSpeedParameter))
-            {
-                int hash = AnimationParameterCache.GetHash(config.VerticalSpeedParameter);
-                map[hash] = config.VerticalSpeedParameter;
-            }
-
-            if (!string.IsNullOrEmpty(config.InputXParameter))
-            {
-                int hash = AnimationParameterCache.GetHash(config.InputXParameter);
-                map[hash] = config.InputXParameter;
-            }
-
-            if (!string.IsNullOrEmpty(config.InputYParameter))
-            {
-                int hash = AnimationParameterCache.GetHash(config.InputYParameter);
-                map[hash] = config.InputYParameter;
-            }
-
-            if (!string.IsNullOrEmpty(config.RollTrigger))
-            {
-                int hash = AnimationParameterCache.GetHash(config.RollTrigger);
-                map[hash] = config.RollTrigger;
-            }
-
-            return map;
-        }
-
-        private void PreWarmAnimationParameters()
-        {
-            if (config == null) return;
-
-            AnimationParameterCache.PreWarm(
-                config.MovementSpeedParameter,
-                config.IsGroundedParameter,
-                config.JumpTrigger,
-                config.VerticalSpeedParameter,
-                config.InputXParameter,
-                config.InputYParameter
-            );
-
-            if (!string.IsNullOrEmpty(config.RollTrigger))
-            {
-                AnimationParameterCache.PreWarm(config.RollTrigger);
-            }
-        }
-
         private void InitializePhysics()
         {
+            _rigidbody.interpolation = RigidbodyInterpolation2D.Interpolate;
+            _rigidbody.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
             if (config.MovementType == MovementType2D.TopDown)
             {
-                // TopDown has no gravity
                 _rigidbody.gravityScale = 0;
                 _rigidbody.constraints = RigidbodyConstraints2D.FreezeRotation;
             }
             else if (config.MovementType == MovementType2D.Platformer && config.LockZAxis)
             {
-                // Rigidbody2D automatically ignores Z position, but we can freeze rotation
                 _rigidbody.constraints = RigidbodyConstraints2D.FreezeRotation;
             }
             else
@@ -276,18 +236,18 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             }
         }
 
-        private void InitializeContext(IAnimationController animationController)
+        private void InitializeContext()
         {
             _context = new MovementContext2D
             {
                 Rigidbody = _rigidbody,
-                AnimationController = animationController,
                 Transform = transform,
                 Config = config,
                 WorldUp = new float2(0, 1),
                 IsGrounded = false,
                 JumpCount = 0,
-                MovementAuthority = null
+                MovementAuthority = null,
+                StatePool = _statePool
             };
         }
 
@@ -299,9 +259,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
         void FixedUpdate()
         {
+            SyncRootMotionTimeSource();
+            if (_deterministicStep != null && _deterministicStep.Step(FixedDeltaTime)) return;
             if (_currentState == null)
             {
-                _currentState = StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                _currentState = _statePool.Get<IdleState2D>();
                 if (_currentState != null)
                 {
                     _currentState.OnEnter(ref _context);
@@ -361,7 +323,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                 }
             }
 
-            // BeltScroll: restore depth position on landing
             if (config.MovementType == MovementType2D.BeltScroll && !wasGrounded && _context.IsGrounded)
             {
                 if (math.abs(_context.PendingDepth) > 0.001f)
@@ -386,23 +347,16 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             _wasGrounded = _context.IsGrounded;
         }
 
-        /// <summary>
-        /// Mario-style gap bridging: check if there's ground ahead when running fast.
-        /// Maintains grounded state to "slide" across small gaps.
-        /// </summary>
         private bool TryBridgeGap2D(Vector2 currentCheckPos)
         {
             if (config == null) return false;
 
-            // Only bridge when moving fast enough
             float currentSpeed = Mathf.Abs(_context.CurrentVelocity.x);
             if (currentSpeed < config.MinSpeedForGapBridge) return false;
 
-            // Get movement direction
             float moveDir = Mathf.Sign(_context.CurrentVelocity.x);
             if (Mathf.Approximately(moveDir, 0)) return false;
 
-            // Check for ground ahead at increasing distances
             for (float dist = 0.3f; dist <= config.MaxGapDistance; dist += 0.2f)
             {
                 Vector2 aheadPos = currentCheckPos + new Vector2(moveDir * dist, 0);
@@ -410,7 +364,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
                 if (ground != null)
                 {
-                    // Found ground ahead - bridge the gap
                     _lastGroundCollider = ground;
                     return true;
                 }
@@ -419,9 +372,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             return false;
         }
 
-        /// <summary>
-        /// Applies movement from the moving platform before processing character movement.
-        /// </summary>
         private void ApplyMovingPlatform()
         {
             if (config == null || !config.EnableMovingPlatform || !_movingPlatform.isOnPlatform)
@@ -447,13 +397,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                     transform.Rotate(0, 0, deltaRotZ);
                 }
             }
-            // Note: localPosition is updated in UpdateMovingPlatformTracking after character movement
         }
 
-        /// <summary>
-        /// Updates moving platform tracking after character movement is processed.
-        /// Applies platform momentum when leaving platform (jumping off).
-        /// </summary>
         private void UpdateMovingPlatformTracking(float deltaTime)
         {
             if (config == null || !config.EnableMovingPlatform)
@@ -464,7 +409,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
             if (!_context.IsGrounded)
             {
-                // Left platform - apply momentum if configured
                 if (_movingPlatform.isOnPlatform && config.InheritPlatformMomentum)
                 {
                     _inheritedPlatformVelocity = _movingPlatform.platformVelocity;
@@ -474,7 +418,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             }
             else
             {
-                // On ground - clear inherited velocities
                 _inheritedPlatformVelocity = Vector2.zero;
                 _lastGroundVelocity = Vector2.zero;
             }
@@ -495,7 +438,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                     else
                     {
                         _movingPlatform.UpdatePlatformVelocity(deltaTime);
-                        // Update localPosition AFTER character movement to include running
                         _movingPlatform.localPosition = _movingPlatform.platformTransform.InverseTransformPoint(transform.position);
                         _movingPlatform.localRotationZ = transform.eulerAngles.z - _movingPlatform.platformTransform.eulerAngles.z;
                     }
@@ -505,7 +447,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
             if (_movingPlatform.isOnPlatform) _movingPlatform.Clear();
         }
-
 
         private void HandleCoyoteTime()
         {
@@ -550,23 +491,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             _context.DeltaTime = deltaTime;
             _context.FixedDeltaTime = FixedDeltaTime;
 
-            if (_context.AnimationController != null && _context.AnimationController.IsValid)
-            {
-                int groundedHash = AnimationParameterCache.GetHash(config.IsGroundedParameter);
-                int verticalHash = AnimationParameterCache.GetHash(config.VerticalSpeedParameter);
-                int inputXHash = AnimationParameterCache.GetHash(config.InputXParameter);
-                int inputYHash = AnimationParameterCache.GetHash(config.InputYParameter);
-
-                _context.AnimationController.SetBool(groundedHash, _context.IsGrounded);
-#if UNITY_6000_0_OR_NEWER
-                _context.AnimationController.SetFloat(verticalHash, _rigidbody.linearVelocity.y);
-#else
-                _context.AnimationController.SetFloat(verticalHash, _rigidbody.velocity.y);
-#endif
-                _context.AnimationController.SetFloat(inputXHash, _context.InputDirection.x);
-                _context.AnimationController.SetFloat(inputYHash, _context.InputDirection.y);
-            }
-
             _context.MovementAuthority = MovementAuthority;
         }
 
@@ -574,7 +498,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         {
             if (_currentState == null)
             {
-                _currentState = StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                _currentState = _statePool.Get<IdleState2D>();
                 if (_currentState != null)
                 {
                     _currentState.OnEnter(ref _context);
@@ -586,14 +510,28 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                 }
             }
 
+            MovementRootMotionDelta captured = default;
+            if (_rootMotionSource != null && _rootMotionSource.TryConsume(out captured))
+                _rootMotionAccumulator.Push(in captured);
+            else if (!useRootMotion)
+                _rootMotionAccumulator.Discard();
+            MovementRootMotionDelta stepDelta = default;
+            bool rootMotionAvailable = _rootMotionAccumulator.TryConsumeStep(deltaTime, out stepDelta);
+            bool shouldUseRootMotion = useRootMotion && rootMotionAvailable;
+            _rootMotionAppliedThisStep = shouldUseRootMotion;
+            _rootMotionYawThisStep = shouldUseRootMotion ? stepDelta.YawVelocity : 0f;
+
             float2 displacement;
             _currentState.OnUpdate(ref _context, out displacement);
 
-            bool shouldUseRootMotion = useRootMotion && _cachedTargetAnimator != null && _cachedTargetAnimator.applyRootMotion;
+            if (shouldUseRootMotion)
+            {
+                MovementVector3 rootVelocity = stepDelta.LinearVelocity;
+                displacement = new float2(rootVelocity.X, rootVelocity.Y) * deltaTime;
+            }
 
             float dt = deltaTime > 0 ? deltaTime : 1f;
 
-            if (!shouldUseRootMotion)
             {
 #if UNITY_6000_0_OR_NEWER
             Vector2 targetVelocity = new Vector2(displacement.x / dt, _rigidbody.linearVelocity.y);
@@ -603,7 +541,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
             if (config.MovementType == MovementType2D.TopDown)
             {
-                // TopDown: Full X/Y control, no gravity
 #if UNITY_6000_0_OR_NEWER
                 _rigidbody.linearVelocity = new Vector2(displacement.x / dt, displacement.y / dt);
 #else
@@ -612,21 +549,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             }
             else if (config.MovementType == MovementType2D.BeltScroll)
             {
-                // BeltScroll (DNF-style): 
-                // - X axis: horizontal movement
-                // - Y axis: BOTH depth (input.y) AND jump height
-                // 
-                // Unlike true 3D, DNF-style games use Y for depth simulation.
-                // The depth movement (input.y to displacement.y) is applied directly.
-                // Jump is handled by JumpState setting Rigidbody velocity.y.
-                // 
-                // Key insight: In DNF, when on ground, input.y moves you in "depth".
-                // When jumping, Rigidbody.velocity.y handles the arc.
-                // Since we're using Rigidbody2D, both are naturally combined.
-
-                // When grounded, depth movement is controlled by states (WalkState, RunState, etc.)
-                // States should output displacement.y for depth movement when MovementType is BeltScroll.
-                // When in air (Jump/Fall), states control horizontal only; physics handles vertical.
 
                 bool isAirborne = _currentState != null &&
                                   (_currentState.StateType == MovementStateType.Jump ||
@@ -634,7 +556,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
                 if (isAirborne)
                 {
-                    // In air: X from input, Y from physics (gravity/jump)
 #if UNITY_6000_0_OR_NEWER
                     _rigidbody.linearVelocity = new Vector2(targetVelocity.x, _rigidbody.linearVelocity.y);
 #else
@@ -643,7 +564,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                 }
                 else
                 {
-                    // On ground: Full X/Y control for depth movement, no gravity effect on grounded depth
 #if UNITY_6000_0_OR_NEWER
                     _rigidbody.linearVelocity = new Vector2(displacement.x / dt, displacement.y / dt);
 #else
@@ -653,7 +573,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             }
             else
             {
-                // Platformer: X from input, Y from physics
 #if UNITY_6000_0_OR_NEWER
                 Vector2 finalVelocity = new Vector2(targetVelocity.x, _rigidbody.linearVelocity.y);
 #else
@@ -662,12 +581,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
                 if (_context.IsGrounded)
                 {
-                    // Save character's ground velocity for jump momentum
                     _lastGroundVelocity = new Vector2(displacement.x / dt, 0);
                 }
                 else
                 {
-                    // In air: apply inherited momentum (platform + character's own velocity)
 #if UNITY_6000_0_OR_NEWER
                     Vector2 totalInheritedVelocity = _inheritedPlatformVelocity + _lastGroundVelocity;
 #else
@@ -676,16 +593,13 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
                     if (totalInheritedVelocity.sqrMagnitude > _minSqrMagnitudeForMovement)
                     {
-                        // Use whichever is greater: inherited momentum or player input
                         float inheritedSpeed = Mathf.Abs(totalInheritedVelocity.x);
                         float inputSpeed = Mathf.Abs(targetVelocity.x);
 
                         if (inheritedSpeed > inputSpeed)
                         {
-                            // Inherited momentum is stronger - use it
                             finalVelocity.x = totalInheritedVelocity.x;
                         }
-                        // else: player input is stronger, use normal velocity
                     }
                 }
 
@@ -695,14 +609,119 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                 _rigidbody.velocity = finalVelocity;
 #endif
             }
-            } // if (!shouldUseRootMotion)
+            }
 
             MovementStateBase2D nextState = _currentState.EvaluateTransition(ref _context);
             if (nextState != null && nextState != _currentState)
             {
                 RequestStateChangeInternal(nextState);
             }
+
+            if (_movementLayers != null)
+            {
+                Vector2 current = _rigidbody.velocity;
+                var layerFrame = new MovementLayerFrame(
+                    ++_layerSequence, deltaTime,
+                    new MovementVector3(current.x, current.y, 0f),
+                    new MovementVector3(_context.WorldUp.x, _context.WorldUp.y, 0f),
+                    _context.IsGrounded);
+                MovementLayerOutput layers = _movementLayers.Resolve(in layerFrame);
+                _rigidbody.velocity += new Vector2(
+                    layers.VelocityDelta.X, layers.VelocityDelta.Y);
+                _rigidbody.velocity += new Vector2(
+                    layers.PositionDelta.X, layers.PositionDelta.Y)
+                    / Mathf.Max(deltaTime, 0.0001f);
+            }
+
+            PublishAnimationFrame();
         }
+
+        #region Animation Presentation
+
+        protected virtual void PublishAnimationFrame()
+        {
+            MovementStepEvent events = _context.StepEvents;
+            _context.StepEvents = MovementStepEvent.None;
+
+            MovementStateType state = _currentState != null
+                ? _currentState.StateType
+                : MovementStateType.Idle;
+
+            events |= _animationFrame.DeriveEdges(
+                _context.IsGrounded,
+                state == MovementStateType.Climb,
+                _context.IsWallSliding,
+                state == MovementStateType.Swim,
+                state == MovementStateType.Fly);
+
+            if (!_presentationEnabled || _presentationPaused || _replayDepth > 0) return;
+
+            uint sequence = _animationFrame.AdvanceSequence();
+            MovementAnimationState frame = BuildAnimationFrame(state, sequence)
+                .WithSemanticState(_semanticStateId);
+            _lastPublishedState = frame;
+
+            if (_presentationBudget != null && !_presentationBudget.ShouldPublish(in frame, 0f)) return;
+
+            using (AnimationPublishMarker.Auto())
+            {
+                if (_locomotionSink != null) _locomotionSink.Apply(in frame);
+
+                if (_actionSink == null) return;
+                int count = MovementAnimationActionWriter.Write(events, sequence, _actionBuffer);
+                for (int i = 0; i < count; i++)
+                {
+                    MovementAnimationAction action = _actionBuffer[i];
+                    _actionSink.Play(in action);
+                }
+            }
+        }
+
+        private void OnApplicationPause(bool paused)
+        {
+            _presentationPaused = paused;
+            if (paused) _rootMotionAccumulator.Discard();
+        }
+
+        private void OnApplicationFocus(bool focused)
+        {
+            _presentationPaused = !focused;
+        }
+
+        protected virtual MovementAnimationState BuildAnimationFrame(MovementStateType state, uint sequence)
+        {
+            MovementAnimationFlags flags = MovementAnimationFlags.None;
+            if (_context.IsGrounded) flags |= MovementAnimationFlags.Grounded;
+            if (_context.SprintHeld) flags |= MovementAnimationFlags.Sprinting;
+            if (_context.CrouchHeld) flags |= MovementAnimationFlags.Crouching;
+            if (state == MovementStateType.Climb) flags |= MovementAnimationFlags.Climbing;
+            if (_context.IsWallSliding) flags |= MovementAnimationFlags.WallSliding;
+            if (state == MovementStateType.Swim) flags |= MovementAnimationFlags.Swimming;
+            if (state == MovementStateType.Fly) flags |= MovementAnimationFlags.Flying;
+            if (state == MovementStateType.Roll) flags |= MovementAnimationFlags.Rolling;
+            if (_context.IsWallJumping) flags |= MovementAnimationFlags.WallJumping;
+            if (_rootMotionAppliedThisStep) flags |= MovementAnimationFlags.RootMotionDriven;
+
+#if UNITY_6000_0_OR_NEWER
+            Vector2 velocity = _rigidbody.linearVelocity;
+#else
+            Vector2 velocity = _rigidbody.velocity;
+#endif
+            MovementAnimationState frame = new MovementAnimationState(
+                sequence,
+                FixedDeltaTime,
+                state,
+                flags,
+                new MovementVector3(velocity.x, velocity.y, 0f),
+                new MovementVector3(_context.InputDirection.x, _context.InputDirection.y, 0f),
+                new MovementVector3(_context.WorldUp.x, _context.WorldUp.y, 0f),
+                new MovementVector3(_context.GroundNormal.x, _context.GroundNormal.y, 0f),
+                new MovementVector3(_context.LookDirection.x, _context.LookDirection.y, 0f));
+            return frame.WithExtensions(_rootMotionAppliedThisStep ? 1u : 0u,
+                _rootMotionYawThisStep, 0f, 0f, 0f);
+        }
+
+        #endregion
 
         private void UpdateFacing()
         {
@@ -710,15 +729,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
             if (config.MovementType == MovementType2D.TopDown || config.MovementType == MovementType2D.BeltScroll)
             {
-                // TopDown/BeltScroll: use LookDirection if set, otherwise use movement direction for facing
                 float2 facingSource = math.lengthsq(_context.LookDirection) > _minSqrMagnitudeForMovement
                     ? _context.LookDirection
                     : _context.InputDirection;
 
                 if (math.lengthsq(facingSource) > _minSqrMagnitudeForMovement)
                 {
-                    // For these modes, facing is tracked in context for external use (animation, combat)
-                    // Scale flipping is only for X-facing; Y-facing is handled by the animation system
                     if (config.MovementType == MovementType2D.BeltScroll)
                     {
                         float scaleX = transform.localScale.x;
@@ -731,7 +747,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             }
             else
             {
-                // Platformer: scale flip based on X input
                 if (math.lengthsq(_context.InputDirection) > _minSqrMagnitudeForMovement)
                 {
                     Vector3 scale = transform.localScale;
@@ -755,13 +770,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         {
             if (config.MovementType == MovementType2D.BeltScroll || config.MovementType == MovementType2D.TopDown)
             {
-                // Map Input Y to InputDirection.y (BeltScroll: Z movement, TopDown: Y movement)
                 _context.InputDirection = new float2(direction.x, direction.y);
             }
             else
             {
-                // Platformer: Input Y is usually ignored for movement (unless climbing/flying)
-                // Standard Walk/Run only use X.
                 _context.InputDirection = new float2(direction.x, 0);
             }
         }
@@ -778,8 +790,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                 return;
             }
 
-            // Trigger jump on rising edge when grounded or in coyote time.
-            // JumpCount check is handled in JumpState2D.OnEnter to ensure consistent counting.
             if (_coyoteTimeCounter > 0 || _context.IsGrounded)
             {
                 RequestStateChange(MovementStateType.Jump);
@@ -787,7 +797,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             }
 
             _jumpBufferCounter = config != null ? config.JumpBufferTime : 0f;
-            // Multi-jump is handled in JumpState2D.EvaluateTransition and FallState2D.EvaluateTransition.
         }
 
         public void SetSprintHeld(bool held)
@@ -869,23 +878,15 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             _context.LookDirection = float2.zero;
         }
 
-        /// <summary>
-        /// Sets the character's rotation. For 2D characters, this primarily affects Z-axis rotation.
-        /// For Platformer/BeltScroll modes, the facing direction is controlled by scale flipping,
-        /// but initial rotation may still be important for sprite orientation.
-        /// </summary>
-        /// <param name="rotation">The target rotation</param>
-        /// <param name="immediate">If true, sets rotation immediately. If false, has no effect in 2D (2D uses scale flipping for facing).</param>
         public void SetRotation(Quaternion rotation, bool immediate = false)
         {
             if (immediate)
             {
                 transform.rotation = rotation;
 
-                // For Platformer/BeltScroll modes, also update facing direction based on rotation
                 if (config != null && config.MovementType != MovementType2D.TopDown)
                 {
-                    Vector3 forward = rotation * Vector3.right; // In 2D, right is typically forward
+                    Vector3 forward = rotation * Vector3.right;
                     bool shouldFaceRight = forward.x > 0;
 
                     if (shouldFaceRight != _facingRight)
@@ -938,12 +939,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
             _currentState?.OnExit(ref _context);
 
-            MovementAuthority?.OnStateExited(oldStateType);
+            if (MovementAuthority != null) MovementAuthority.OnStateExited(oldStateType);
 
             _currentState = newState;
             _currentState.OnEnter(ref _context);
 
-            MovementAuthority?.OnStateEntered(newStateType);
+            if (MovementAuthority != null) MovementAuthority.OnStateEntered(newStateType);
 
             OnStateChanged?.Invoke(oldStateType, newStateType);
 
@@ -951,9 +952,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             {
                 OnJumpStart?.Invoke();
                 _coyoteTimeCounter = 0;
-                // Note: We do NOT reset JumpPressed here to allow multi-jump (air jump)
-                // JumpPressed is consumed in JumpState2D.EvaluateTransition when performing multi-jump
-                // It will be reset when landing (in CheckGround when grounded)
             }
         }
 
@@ -961,23 +959,23 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         {
             switch (stateType)
             {
-                case MovementStateType.Idle: return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
-                case MovementStateType.Walk: return StatePool<MovementStateBase2D>.GetState<WalkState2D>();
-                case MovementStateType.Run: return StatePool<MovementStateBase2D>.GetState<RunState2D>();
-                case MovementStateType.Sprint: return StatePool<MovementStateBase2D>.GetState<SprintState2D>();
-                case MovementStateType.Crouch: return StatePool<MovementStateBase2D>.GetState<CrouchState2D>();
-                case MovementStateType.Jump: return StatePool<MovementStateBase2D>.GetState<JumpState2D>();
-                case MovementStateType.Fall: return StatePool<MovementStateBase2D>.GetState<FallState2D>();
-                case MovementStateType.Roll: return StatePool<MovementStateBase2D>.GetState<RollState2D>();
+                case MovementStateType.Idle: return _statePool.Get<IdleState2D>();
+                case MovementStateType.Walk: return _statePool.Get<WalkState2D>();
+                case MovementStateType.Run: return _statePool.Get<RunState2D>();
+                case MovementStateType.Sprint: return _statePool.Get<SprintState2D>();
+                case MovementStateType.Crouch: return _statePool.Get<CrouchState2D>();
+                case MovementStateType.Jump: return _statePool.Get<JumpState2D>();
+                case MovementStateType.Fall: return _statePool.Get<FallState2D>();
+                case MovementStateType.Roll: return _statePool.Get<RollState2D>();
                 case MovementStateType.Climb:
                     return _context.ClimbingMode switch
                     {
-                        ClimbingMode.Ladder => StatePool<MovementStateBase2D>.GetState<LadderClimbState2D>(),
-                        ClimbingMode.Wall => StatePool<MovementStateBase2D>.GetState<WallClimbState2D>(),
+                        ClimbingMode.Ladder => _statePool.Get<LadderClimbState2D>(),
+                        ClimbingMode.Wall => _statePool.Get<WallClimbState2D>(),
                         _ => null
                     };
-                case MovementStateType.Swim: return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
-                case MovementStateType.Fly: return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                case MovementStateType.Swim: return _statePool.Get<IdleState2D>();
+                case MovementStateType.Fly: return _statePool.Get<IdleState2D>();
                 default:
                     Log.Warning(
                         stateType,
@@ -998,50 +996,145 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
         #region Network Snapshot
 
+        public long NetworkTick { get; set; }
+        public double NetworkTimeSeconds { get; set; }
+
         public MovementSnapshot GetSnapshot()
         {
-            return new MovementSnapshot
-            {
-                Position = transform.position.ToMovementVector3(),
-                Velocity = new MovementVector3(_context.CurrentVelocity.x, _context.CurrentVelocity.y, 0f),
-                WorldUp = new MovementVector3(_context.WorldUp.x, _context.WorldUp.y, 0f),
-                StateType = CurrentState,
-                VerticalVelocity = _context.VerticalVelocity,
-                IsGrounded = _context.IsGrounded,
-                JumpCount = _context.JumpCount,
-                Tick = Time.frameCount,
-                Timestamp = Time.time
-            };
+            MovementSnapshot snapshot = default;
+            snapshot.Position = transform.position.ToMovementVector3();
+            snapshot.Velocity = new MovementVector3(_context.CurrentVelocity.x, _context.CurrentVelocity.y, 0f);
+            snapshot.WorldUp = new MovementVector3(_context.WorldUp.x, _context.WorldUp.y, 0f);
+            snapshot.StateId = (ushort)CurrentState;
+            snapshot.Flags = 0;
+            int jumps = _context.JumpCount;
+            snapshot.JumpCount = (byte)(jumps < 0 ? 0 : (jumps > 32 ? 32 : jumps));
+            snapshot.VerticalVelocity = _context.VerticalVelocity;
+            snapshot.IsGrounded = _context.IsGrounded;
+            snapshot.NetworkTick = NetworkTick;
+            snapshot.NetworkTimeSeconds = NetworkTimeSeconds;
+            return snapshot;
+        }
+
+        public MovementFullState CaptureFullState()
+        {
+            MovementFullState state = default;
+            state.NetworkTick = NetworkTick;
+            state.NetworkTimeSeconds = NetworkTimeSeconds;
+            state.Position = transform.position.ToMovementVector3();
+            state.Velocity = new MovementVector3(_context.CurrentVelocity.x, _context.CurrentVelocity.y, 0f);
+            state.WorldUp = new MovementVector3(_context.WorldUp.x, _context.WorldUp.y, 0f);
+            state.GroundNormal = new MovementVector3(_context.GroundNormal.x, _context.GroundNormal.y, 0f);
+            state.InputDirection = new MovementVector3(_context.InputDirection.x, _context.InputDirection.y, 0f);
+            state.FacingDirection = new MovementVector3(_context.LookDirection.x, _context.LookDirection.y, 0f);
+            state.RollDirection = new MovementVector3(_context.RollDirection.x, _context.RollDirection.y, 0f);
+            state.WallJumpDirection = new MovementVector3(_context.WallJumpDirection.x, _context.WallJumpDirection.y, 0f);
+            state.LastWallNormal = MovementVector3.Zero;
+            state.WallClimbNormal = MovementVector3.Zero;
+            state.PendingImpulse = new MovementVector3(_pendingImpulse.x, _pendingImpulse.y, 0f);
+            state.PendingForce = new MovementVector3(_pendingForce.x, _pendingForce.y, 0f);
+            state.PlatformLocalPosition = MovementVector3.Zero;
+            state.PlatformVelocity = MovementVector3.Zero;
+            state.PlatformLocalRotationX = 0f;
+            state.PlatformLocalRotationY = 0f;
+            state.PlatformLocalRotationZ = 0f;
+            state.PlatformLocalRotationW = 1f;
+            state.VerticalVelocity = _context.VerticalVelocity;
+            state.SlopeAngle = _context.GroundAngle;
+            state.RollTimer = _context.RollTimer;
+            state.WallClingTimer = _context.WallClingTimer;
+            state.LastWallJumpTime = _context.LastWallJumpTime;
+            state.StateElapsed = _jumpBufferCounter;
+            state.UnconstrainedTimer = _unconstrainedTimer;
+            state.CurrentSpeed = _context.CurrentSpeed;
+            state.JumpCount = _context.JumpCount;
+            state.StateTick = 0;
+            state.Extension0 = _coyoteTimeCounter;
+            state.Extension1 = _context.PendingDepth;
+            state.ExtensionInt0 = _context.LastWallSide;
+            state.ExtensionInt1 = _context.WallClimbSide;
+            state.StateId = (ushort)CurrentState;
+            state.ClimbingMode = (byte)_context.ClimbingMode;
+            state.IsGrounded = _context.IsGrounded;
+            state.WasGrounded = _context.IsGrounded;
+            state.IsOnNonWalkableSlope = false;
+            state.IsWallJumping = _context.IsWallJumping;
+            state.IsWallSliding = _context.IsWallSliding;
+            state.IsOnPlatform = false;
+            state.UseRootMotion = false;
+            state.JumpPressed = _context.JumpPressed;
+            state.SprintHeld = _context.SprintHeld;
+            state.CrouchHeld = _context.CrouchHeld;
+            state.RollPressed = _context.RollPressed;
+            return state;
         }
 
         public void ApplySnapshot(in MovementSnapshot snapshot)
         {
             Vector3 position = snapshot.Position.ToVector3();
-            Vector2 velocity = new Vector2(snapshot.Velocity.X, snapshot.Velocity.Y);
-
             transform.position = position;
-            _rigidbody.position = position;
-            _context.CurrentVelocity = velocity;
+            _rigidbody.position = new Vector2(position.x, position.y);
+            _context.CurrentVelocity = new float2(snapshot.Velocity.X, snapshot.Velocity.Y);
             _context.WorldUp = new float2(snapshot.WorldUp.X, snapshot.WorldUp.Y);
             _context.VerticalVelocity = snapshot.VerticalVelocity;
             _context.IsGrounded = snapshot.IsGrounded;
             _context.JumpCount = snapshot.JumpCount;
+            NetworkTick = snapshot.NetworkTick;
+            NetworkTimeSeconds = snapshot.NetworkTimeSeconds;
 
-            if (_currentState?.StateType != snapshot.StateType)
-            {
-                RequestStateChange(snapshot.StateType);
-            }
+            if (_currentState == null || (ushort)_currentState.StateType != snapshot.StateId)
+                RequestStateChange((MovementStateType)snapshot.StateId);
         }
 
-        public void ResetFromSnapshot(in MovementSnapshot snapshot)
+        public void ApplyFullState(in MovementFullState state)
         {
-            ApplySnapshot(snapshot);
-            _context.CurrentSpeed = 0f;
-            _context.InputDirection = float2.zero;
-            _context.LookDirection = float2.zero;
-            _pendingImpulse = Vector2.zero;
-            _pendingForce = Vector2.zero;
-            _unconstrainedTimer = 0f;
+            Vector3 position = state.Position.ToVector3();
+            transform.position = position;
+            _rigidbody.position = new Vector2(position.x, position.y);
+            NetworkTick = state.NetworkTick;
+            NetworkTimeSeconds = state.NetworkTimeSeconds;
+            _context.CurrentVelocity = new float2(state.Velocity.X, state.Velocity.Y);
+            _context.WorldUp = new float2(state.WorldUp.X, state.WorldUp.Y);
+            _context.GroundNormal = new float2(state.GroundNormal.X, state.GroundNormal.Y);
+            _context.InputDirection = new float2(state.InputDirection.X, state.InputDirection.Y);
+            _context.LookDirection = new float2(state.FacingDirection.X, state.FacingDirection.Y);
+            _context.RollDirection = new float2(state.RollDirection.X, state.RollDirection.Y);
+            _context.WallJumpDirection = new Vector2(state.WallJumpDirection.X, state.WallJumpDirection.Y);
+            _pendingImpulse = new Vector2(state.PendingImpulse.X, state.PendingImpulse.Y);
+            _pendingForce = new Vector2(state.PendingForce.X, state.PendingForce.Y);
+            _context.VerticalVelocity = state.VerticalVelocity;
+            _context.GroundAngle = state.SlopeAngle;
+            _context.RollTimer = state.RollTimer;
+            _context.WallClingTimer = state.WallClingTimer;
+            _context.LastWallJumpTime = state.LastWallJumpTime;
+            _jumpBufferCounter = state.StateElapsed;
+            _unconstrainedTimer = state.UnconstrainedTimer;
+            _context.CurrentSpeed = state.CurrentSpeed;
+            _context.JumpCount = state.JumpCount;
+            _coyoteTimeCounter = state.Extension0;
+            _context.PendingDepth = state.Extension1;
+            _context.LastWallSide = state.ExtensionInt0;
+            _context.WallClimbSide = state.ExtensionInt1;
+            _context.ClimbingMode = (ClimbingMode)state.ClimbingMode;
+            _context.IsGrounded = state.IsGrounded;
+            _context.IsWallJumping = state.IsWallJumping;
+            _context.IsWallSliding = state.IsWallSliding;
+            _context.JumpPressed = state.JumpPressed;
+            _context.SprintHeld = state.SprintHeld;
+            _context.CrouchHeld = state.CrouchHeld;
+            _context.RollPressed = state.RollPressed;
+
+            if (_currentState == null || (ushort)_currentState.StateType != state.StateId)
+                RequestStateChange((MovementStateType)state.StateId);
+
+            _context.StepEvents = MovementStepEvent.None;
+            _animationFrame.ResetBaseline();
+            _rootMotionAccumulator.Discard();
+        }
+
+        public void ResetFromFullState(in MovementFullState state)
+        {
+            ApplyFullState(state);
             _jumpBufferCounter = 0f;
             _coyoteTimeCounter = 0f;
         }
@@ -1121,37 +1214,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         public void PauseGroundConstraint(float duration = 0.1f)
         {
             _unconstrainedTimer = duration;
-        }
-
-        #endregion
-
-        #region Root Motion
-
-        private void OnAnimatorMove()
-        {
-            if (!useRootMotion || _cachedTargetAnimator == null)
-                return;
-            if (!_cachedTargetAnimator.applyRootMotion)
-                return;
-
-            Vector2 rootMotionDelta = _cachedTargetAnimator.deltaPosition;
-            if (rootMotionDelta.sqrMagnitude > _minSqrMagnitudeForMovement)
-            {
-#if UNITY_6000_0_OR_NEWER
-                _rigidbody.linearVelocity = rootMotionDelta / Mathf.Max(DeltaTime, 0.0001f);
-#else
-                _rigidbody.velocity = rootMotionDelta / Mathf.Max(DeltaTime, 0.0001f);
-#endif
-                // Preserve Y velocity for gravity/jump in Platformer mode
-                if (config.MovementType != MovementType2D.TopDown)
-                {
-#if UNITY_6000_0_OR_NEWER
-                    _rigidbody.linearVelocity = new Vector2(_rigidbody.linearVelocity.x, _rigidbody.linearVelocity.y);
-#else
-                    _rigidbody.velocity = new Vector2(_rigidbody.velocity.x, _rigidbody.velocity.y);
-#endif
-                }
-            }
         }
 
         #endregion
