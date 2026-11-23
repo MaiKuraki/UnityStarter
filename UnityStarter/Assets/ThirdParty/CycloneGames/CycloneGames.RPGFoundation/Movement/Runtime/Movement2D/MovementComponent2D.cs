@@ -619,18 +619,30 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
             if (_movementLayers != null)
             {
+#if UNITY_6000_0_OR_NEWER
+                Vector2 current = _rigidbody.linearVelocity;
+#else
                 Vector2 current = _rigidbody.velocity;
+#endif
                 var layerFrame = new MovementLayerFrame(
                     ++_layerSequence, deltaTime,
                     new MovementVector3(current.x, current.y, 0f),
                     new MovementVector3(_context.WorldUp.x, _context.WorldUp.y, 0f),
                     _context.IsGrounded);
                 MovementLayerOutput layers = _movementLayers.Resolve(in layerFrame);
+#if UNITY_6000_0_OR_NEWER
+                _rigidbody.linearVelocity += new Vector2(
+                    layers.VelocityDelta.X, layers.VelocityDelta.Y);
+                _rigidbody.linearVelocity += new Vector2(
+                    layers.PositionDelta.X, layers.PositionDelta.Y)
+                    / Mathf.Max(deltaTime, 0.0001f);
+#else
                 _rigidbody.velocity += new Vector2(
                     layers.VelocityDelta.X, layers.VelocityDelta.Y);
                 _rigidbody.velocity += new Vector2(
                     layers.PositionDelta.X, layers.PositionDelta.Y)
                     / Mathf.Max(deltaTime, 0.0001f);
+#endif
             }
 
             PublishAnimationFrame();
