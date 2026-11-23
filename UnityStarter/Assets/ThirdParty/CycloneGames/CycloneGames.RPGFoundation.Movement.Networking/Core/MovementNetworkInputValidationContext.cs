@@ -1,5 +1,4 @@
 using System;
-
 using CycloneGames.Networking;
 using CycloneGames.Networking.Simulation;
 
@@ -8,6 +7,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
     public readonly struct MovementNetworkInputValidationContext
     {
         public readonly INetConnection Sender;
+        public readonly ulong Epoch;
         public readonly NetworkTickId ServerTick;
         public readonly NetworkTickId LastAcceptedClientTick;
         public readonly ushort LastAcceptedInputSequence;
@@ -24,6 +24,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
 
         public MovementNetworkInputValidationContext(
             INetConnection sender,
+            ulong epoch,
             NetworkTickId serverTick,
             NetworkTickId lastAcceptedClientTick,
             ushort lastAcceptedInputSequence = 0,
@@ -38,27 +39,19 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             float maxAimDirectionMagnitude = 1.25f,
             bool requireNormalizedAimDirection = false)
         {
+            if (epoch == MovementWireIds.InvalidEpoch)
+                throw new ArgumentOutOfRangeException(nameof(epoch));
             if (maxAcceptedTickDrift < -1)
-            {
                 throw new ArgumentOutOfRangeException(nameof(maxAcceptedTickDrift));
-            }
-
             if (!float.IsFinite(maxMoveAxesMagnitude) || maxMoveAxesMagnitude < 0f)
-            {
                 throw new ArgumentOutOfRangeException(nameof(maxMoveAxesMagnitude));
-            }
-
             if (!float.IsFinite(minAimDirectionMagnitude) || minAimDirectionMagnitude < 0f)
-            {
                 throw new ArgumentOutOfRangeException(nameof(minAimDirectionMagnitude));
-            }
-
             if (!float.IsFinite(maxAimDirectionMagnitude) || maxAimDirectionMagnitude < minAimDirectionMagnitude)
-            {
                 throw new ArgumentOutOfRangeException(nameof(maxAimDirectionMagnitude));
-            }
 
             Sender = sender;
+            Epoch = epoch;
             ServerTick = serverTick;
             LastAcceptedClientTick = lastAcceptedClientTick;
             LastAcceptedInputSequence = lastAcceptedInputSequence;
@@ -72,6 +65,11 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             MinAimDirectionMagnitudeSqr = minAimDirectionMagnitude * minAimDirectionMagnitude;
             MaxAimDirectionMagnitudeSqr = maxAimDirectionMagnitude * maxAimDirectionMagnitude;
             RequireNormalizedAimDirection = requireNormalizedAimDirection;
+        }
+
+        public bool IsAuthenticated
+        {
+            get { return Sender != null && Sender.IsAuthenticated; }
         }
 
         public NetworkActionValidationContext ToActionValidationContext()

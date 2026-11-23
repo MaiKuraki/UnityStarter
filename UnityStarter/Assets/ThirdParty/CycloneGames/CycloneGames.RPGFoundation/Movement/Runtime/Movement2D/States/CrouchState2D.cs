@@ -20,27 +20,21 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             displacement = currentVelocity * context.DeltaTime;
             context.CurrentSpeed = math.abs(horizontalVelocity);
             context.CurrentVelocity = currentVelocity;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                context.AnimationController.SetFloat(hash, context.CurrentSpeed);
-            }
         }
 
         public override MovementStateBase2D EvaluateTransition(ref MovementContext2D context)
         {
             if (!context.IsGrounded)
             {
-                return StatePool<MovementStateBase2D>.GetState<FallState2D>();
+                return context.StatePool.Get<FallState2D>();
             }
 
             if (!context.CrouchHeld)
             {
                 if (math.lengthsq(context.InputDirection) > 0.0001f)
-                    return StatePool<MovementStateBase2D>.GetState<RunState2D>();
+                    return context.StatePool.Get<RunState2D>();
                 else
-                    return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                    return context.StatePool.Get<IdleState2D>();
             }
 
             return null;

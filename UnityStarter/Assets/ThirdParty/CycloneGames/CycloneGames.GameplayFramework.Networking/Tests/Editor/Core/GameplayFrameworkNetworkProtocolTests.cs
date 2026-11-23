@@ -38,7 +38,10 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             Assert.AreEqual(
                 "A8D7E18C57BD1E3B",
                 GameplayFrameworkNetworkProtocol.DefaultManifest.Metadata["damageWireSchemaFingerprint"]);
-            Assert.AreEqual(0x4853FB7FFAE15D14UL, GameplayFrameworkNetworkProtocol.ProtocolFingerprint);
+            Assert.AreEqual(0xD0BFBEC9C89DB464UL, GameplayFrameworkNetworkProtocol.ProtocolFingerprint);
+            Assert.AreEqual(
+                GameplayFrameworkNetworkProtocol.DefaultManifest.Fingerprint,
+                GameplayFrameworkNetworkProtocol.ProtocolFingerprint);
         }
 
         [Test]

@@ -29,16 +29,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
             context.CurrentSpeed = math.length(horizontalMovement + verticalMovement);
             context.CurrentVelocity = horizontalMovement + verticalMovement;
 
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                context.AnimationController.SetFloat(hash, context.CurrentSpeed);
-            }
-
             if (!context.IsGrounded)
             {
                 float gravity = context.GetAttributeValue(MovementAttribute.Gravity, context.Config.Gravity);
-                context.VerticalVelocity += gravity * context.DeltaTime * 0.3f; // Reduced gravity in water
+                context.VerticalVelocity += gravity * context.DeltaTime * 0.3f;
                 displacement += context.WorldUp * context.VerticalVelocity * context.DeltaTime;
             }
         }
@@ -47,12 +41,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
         {
             if (!context.IsGrounded && context.VerticalVelocity > context.Config.JumpForce * 0.5f)
             {
-                return StatePool<MovementStateBase>.GetState<FallState>();
+                return context.StatePool.Get<FallState>();
             }
 
             if (math.lengthsq(context.InputDirection) < 0.0001f)
             {
-                return StatePool<MovementStateBase>.GetState<IdleState>();
+                return context.StatePool.Get<IdleState>();
             }
 
             return null;

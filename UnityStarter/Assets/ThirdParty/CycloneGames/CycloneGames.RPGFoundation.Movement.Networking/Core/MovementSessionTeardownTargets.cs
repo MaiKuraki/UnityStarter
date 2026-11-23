@@ -3,7 +3,6 @@ using CycloneGames.Networking.Maintenance;
 
 namespace CycloneGames.RPGFoundation.Movement.Networking
 {
-    /// <summary>Session-scoped teardown for MovementNetworkInputHistory. Container state is keyed by entity/actor id, not connection id.</summary>
     public sealed class MovementHistoryTeardownTarget : INetworkSessionTeardownTarget
     {
         private readonly MovementNetworkInputHistory _container;
@@ -13,11 +12,31 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             _container = container ?? throw new ArgumentNullException(nameof(container));
         }
 
-        public string MaintenanceId => "movement.history.teardown";
+        public string MaintenanceId { get { return "movement.history.teardown"; } }
 
         public void TeardownSession()
         {
             _container.Clear();
+        }
+    }
+
+    public readonly struct MovementSessionTeardownSet
+    {
+        public readonly INetworkSessionTeardownTarget History;
+        public readonly INetworkSessionTeardownTarget Audit;
+
+        public MovementSessionTeardownSet(
+            INetworkSessionTeardownTarget history,
+            INetworkSessionTeardownTarget audit)
+        {
+            History = history;
+            Audit = audit;
+        }
+
+        public void TeardownSession()
+        {
+            if (History != null) History.TeardownSession();
+            if (Audit != null) Audit.TeardownSession();
         }
     }
 }

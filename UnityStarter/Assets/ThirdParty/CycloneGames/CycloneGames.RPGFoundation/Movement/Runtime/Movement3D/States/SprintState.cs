@@ -22,28 +22,21 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
 
             context.CurrentSpeed = actualSpeed;
             context.CurrentVelocity = movement;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                context.AnimationController.SetFloat(hash, math.length(movement));
-            }
         }
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
         {
-            // Fall when not grounded OR on non-walkable slope
             if (!context.IsGrounded || context.IsOnNonWalkableSlope)
             {
-                return StatePool<MovementStateBase>.GetState<FallState>();
+                return context.StatePool.Get<FallState>();
             }
 
             if (!context.SprintHeld || math.lengthsq(context.InputDirection) < 0.0001f)
             {
                 if (math.lengthsq(context.InputDirection) > 0.0001f)
-                    return StatePool<MovementStateBase>.GetState<RunState>();
+                    return context.StatePool.Get<RunState>();
                 else
-                    return StatePool<MovementStateBase>.GetState<IdleState>();
+                    return context.StatePool.Get<IdleState>();
             }
 
             return null;

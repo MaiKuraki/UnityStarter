@@ -1,11 +1,13 @@
 using CycloneGames.Networking;
+using CycloneGames.RPGFoundation.Movement.Core;
 
 namespace CycloneGames.RPGFoundation.Movement.Networking
 {
     public struct MovementTeleportMessage
     {
         public ulong EntityId;
-        public int ServerTick;
+        public ulong Epoch;
+        public long ServerTick;
         public ushort TeleportSequence;
         public ushort StateId;
         public byte Flags;
@@ -16,7 +18,8 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
 
         public MovementTeleportMessage(
             ulong entityId,
-            int serverTick,
+            ulong epoch,
+            long serverTick,
             ushort teleportSequence,
             ushort stateId,
             byte flags,
@@ -26,6 +29,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             NetworkVector3 worldUp)
         {
             EntityId = entityId;
+            Epoch = epoch;
             ServerTick = serverTick;
             TeleportSequence = teleportSequence;
             StateId = stateId;
@@ -41,29 +45,39 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             get
             {
                 return EntityId != 0UL
-                       && ServerTick >= 0
+                       && Epoch != MovementWireIds.InvalidEpoch
+                       && ServerTick >= 0L
+                       && MovementStateDomain.IsDefined(StateId)
+                       && MovementNetworkSnapshotFlags.Has(Flags, MovementNetworkSnapshotFlags.Teleport)
+                       && MovementNetworkSnapshotFlags.HasOnlyKnownBits(Flags)
                        && Position.IsFinite()
                        && Velocity.IsFinite()
                        && WorldUp.IsFinite()
-                       && MovementNetworkSnapshotFlags.Has(Flags, MovementNetworkSnapshotFlags.Teleport);
+                       && WorldUp.SqrMagnitude >= 0.95f
+                       && WorldUp.SqrMagnitude <= 1.05f;
             }
         }
 
-        public MovementNetworkSnapshotMessage ToSnapshotMessage(int movementTick, float timestamp = 0f)
+        public float VerticalVelocity
         {
-            return new MovementNetworkSnapshotMessage(
-                EntityId,
-                movementTick,
-                ServerTick,
-                TeleportSequence,
-                StateId,
-                Flags,
-                0,
-                timestamp,
-                Velocity.Y,
-                Position,
-                Velocity,
-                WorldUp);
+            get { return NetworkVector3.Dot(Velocity, WorldUp.Normalized); }
+        }
+
+        public MovementFullStateMessage ToFullStateMessage(long movementTick, double networkTimeSeconds)
+        {
+            MovementFullState state = default;
+            state.NetworkTick = movementTick;
+            state.NetworkTimeSeconds = networkTimeSeconds;
+            state.Position = Position.ToMovementVector3();
+            state.Velocity = Velocity.ToMovementVector3();
+            state.WorldUp = WorldUp.ToMovementVector3();
+            state.GroundNormal = state.WorldUp;
+            state.StateId = StateId;
+            state.VerticalVelocity = VerticalVelocity;
+            state.JumpCount = 0;
+            state.IsGrounded = false;
+            state.WasGrounded = false;
+            return new MovementFullStateMessage(EntityId, Epoch, ServerTick, TeleportSequence, state);
         }
     }
 }

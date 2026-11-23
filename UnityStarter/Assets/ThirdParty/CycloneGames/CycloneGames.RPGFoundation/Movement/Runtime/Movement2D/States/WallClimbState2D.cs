@@ -14,15 +14,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
         {
             context.WallClingTimer = 0f;
             context.IsWallSliding = false;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
-                if (hash != 0)
-                {
-                    context.AnimationController.SetBool(hash, true);
-                }
-            }
         }
 
         public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
@@ -41,12 +32,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
                 float slideSpeed = context.Config.WallSlideSpeed;
                 currentVelocity = new float2(0, -slideSpeed);
                 context.CurrentSpeed = slideSpeed;
-
-                if (context.AnimationController != null && context.AnimationController.IsValid)
-                {
-                    int slideHash = AnimationParameterCache.GetHash(context.Config.WallSlidingParameter);
-                    context.AnimationController.SetBool(slideHash, true);
-                }
             }
             else
             {
@@ -62,12 +47,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 
                 currentVelocity = moveDir * climbSpeed;
                 context.CurrentSpeed = math.length(moveDir) * climbSpeed;
-
-                if (context.AnimationController != null && context.AnimationController.IsValid)
-                {
-                    int climbHash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
-                    context.AnimationController.SetBool(climbHash, true);
-                }
             }
 
             displacement = currentVelocity * context.DeltaTime;
@@ -85,12 +64,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
                 context.LastWallSide = context.WallClimbSide;
                 context.LastWallJumpTime = Time.time;
 
-                return StatePool<MovementStateBase2D>.GetState<JumpState2D>();
+                return context.StatePool.Get<JumpState2D>();
             }
 
             if (context.IsGrounded)
             {
-                return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                return context.StatePool.Get<IdleState2D>();
             }
 
             return null;
@@ -106,15 +85,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             context.WallClimbSide = 0;
             context.WallClingTimer = 0f;
             context.IsWallSliding = false;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
-                if (hash != 0)
-                {
-                    context.AnimationController.SetBool(hash, false);
-                }
-            }
         }
     }
 }

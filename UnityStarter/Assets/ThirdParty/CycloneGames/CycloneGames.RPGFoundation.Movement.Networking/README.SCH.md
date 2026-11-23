@@ -1,291 +1,208 @@
-# CycloneGames.RPGFoundation.Movement.Networking
+# Movement.Networking
 
-[English](./README.md) | 简体中文
+[English](README.md) | 简体中文
 
-`CycloneGames.RPGFoundation.Movement.Networking` 将 RPGFoundation Movement 接入 `CycloneGames.Networking`。它提供与传输层无关的移动输入、权威快照、纠正、传送、完整状态请求、权威转移、manifest handshake、输入权威校验、历史缓冲和 reconciliation helper。
+权威移动的 wire 契约层。定义 DTO、带指纹的消息清单、按 epoch 的输入准入、每实体历史、reconciliation 与权限桥接。传输、序列化、预测循环与表现平滑由项目自行实现。
 
-基础 Movement 模块不依赖 `CycloneGames.Networking`。只有当移动状态需要跨 Cyclone 网络边界同步时，才需要引用本桥接包。
+## 目录
 
-## 快速入门
+1. [安装](#安装)
+2. [协议身份](#协议身份)
+3. [消息](#消息)
+4. [握手](#握手)
+5. [输入准入](#输入准入)
+6. [历史与 reconciliation](#历史与-reconciliation)
+7. [组合示例](#组合示例)
+8. [线布局规则](#线布局规则)
+9. [自定义校验器](#自定义校验器)
+10. [运行时约束](#运行时约束)
+11. [故障排查](#故障排查)
+12. [延伸阅读](#延伸阅读)
 
-1. 在 bootstrap 阶段把 `MovementNetworkProtocol` 注册到 network message catalog。
-2. 将本地输入转换为 `MovementInputCommandMessage`，并写入稳定 tick、sequence、button mask 和 prediction key。
-3. 在权威侧使用 `MovementNetworkInputAuthority` 和项目专属 `MovementNetworkInputValidationContext` 校验输入。
-4. 通过 `MovementNetworkAuthorityBridge` 捕获权威 movement state。
-5. 使用固定容量 history buffer 保存近期 input 和 snapshot，供 prediction、rewind、correction 和 late-join recovery 使用。
-6. 当 predicted snapshot 与 authoritative snapshot 的偏差超过项目策略时，用 `MovementNetworkReconciliation` 生成 correction message。
-7. 修改 DTO、validator、history 行为或 protocol metadata 后运行 Movement.Networking、Movement 和 Networking EditMode 测试。
+## 安装
 
-## 包结构
+UPM 标识：`com.cyclone-games.rpg-foundation-movement-networking`。
 
-```text
-CycloneGames.RPGFoundation.Movement.Networking/
-  Core/
-    CycloneGames.RPGFoundation.Movement.Networking.Core.asmdef
-    DefaultMovementNetworkInputValidator.cs
-    IMovementNetworkInputValidator.cs
-    MovementAuthorityTransferMessage.cs
-    MovementCorrectionMessage.cs
-    MovementFullStateRequestMessage.cs
-    MovementInputCommandMessage.cs
-    MovementManifestHandshakeMessage.cs
-    MovementNetworkActionExtensions.cs
-    MovementNetworkActionIds.cs
-    MovementNetworkAuthorityBridge.cs
-    MovementNetworkCorrectionPolicy.cs
-    MovementNetworkInputAuthority.cs
-    MovementNetworkInputHistory.cs
-    MovementNetworkInputValidationContext.cs
-    MovementNetworkProtocol.cs
-    MovementNetworkReconciliation.cs
-    MovementNetworkSnapshotFlags.cs
-    MovementNetworkSnapshotHistory.cs
-    MovementNetworkSnapshotMessage.cs
-    MovementNetworkVectorExtensions.cs
-    MovementTeleportMessage.cs
-  Tests/Editor/
-    CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor.asmdef
-    MovementNetworkingAuthorityTests.cs
-    MovementNetworkingIntegrationTests.cs
-```
-
-## 程序集边界
-
-| Assembly | 职责 | Unity 依赖 |
-| --- | --- | --- |
-| `CycloneGames.RPGFoundation.Movement.Networking.Core` | Movement DTO、snapshot conversion、authority bridge、input validation、history、reconciliation、message range 和 protocol manifest registration。 | 不引用 UnityEngine；通过 Movement core 引用 `Unity.Mathematics`。 |
-| `CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor` | 覆盖 protocol、bridge、validation、history 和 reconciliation 行为的 EditMode 测试。 | 不引用 UnityEngine。 |
-
-Core assembly 引用 `CycloneGames.RPGFoundation.Movement.Core`、`CycloneGames.Networking.Core` 和 `Unity.Mathematics`。它不引用后端 SDK 类型、PlayerSettings scripting define symbols 或特定 DI 容器。
-
-Core 与 EditMode test assembly 都设置 `autoReferenced: false`。Consumer asmdef 必须显式引用 Core。无需 PlayerSettings scripting define。
-
-## 核心概念
-
-| 类型 | 作用 |
+| 依赖 | 用途 |
 | --- | --- |
-| `MovementInputCommandMessage` | 携带 input intent、tick data、sequence、prediction key、button mask、custom flags、move axes 和 aim direction。 |
-| `MovementNetworkSnapshotMessage` | 携带由 `MovementSnapshot` 转换而来的 authoritative movement state。 |
-| `MovementCorrectionMessage` | 携带 client reconciliation 所需的 correction 数据。 |
-| `MovementTeleportMessage` | 携带 authoritative teleport 或 hard reset 数据。 |
-| `MovementAuthorityTransferMessage` | 携带 movement authority transfer 数据。 |
-| `MovementNetworkAuthorityBridge` | 通过 Movement core 接口 capture、apply、reset 和 validate movement snapshot。 |
-| `MovementNetworkActionExtensions` | 将 movement input DTO 映射为通用 `NetworkActionCommand`。 |
-| `DefaultMovementNetworkInputValidator` | 校验 input shape、tick/sequence window、prediction key、button/custom flag mask、move axes 和 aim direction。 |
-| `MovementNetworkInputAuthority` | 组合输入校验和固定容量历史，用 accepted input 拒绝 replayed duplicate。 |
-| `MovementNetworkInputHistory` | 固定容量 per-entity input history，用于 replay、duplicate detection 和 reconciliation。 |
-| `MovementNetworkSnapshotHistory` | 固定容量 per-entity authoritative snapshot history，用于 correction、full-state recovery 和 late join。 |
-| `MovementNetworkReconciliation` | 当 predicted snapshot 与 authoritative snapshot 偏离时创建 correction message。 |
-| `MovementNetworkProtocol` | 拥有 Movement message range 和 protocol manifest。 |
+| `com.cyclone-games.rpg-foundation` | Movement Core 契约 |
+| `com.cyclone-games.networking` | `INetConnection`、协议清单、握手协商 |
 
-## Movement Sync 流程
+程序集为 `CycloneGames.RPGFoundation.Movement.Networking.Core`，设置 `noEngineReferences: true`。本包不使用 `com.unity.mathematics`。
+
+## 协议身份
+
+`MovementNetworkProtocol` 是由组合根构造的 sealed 类。每个实例持有一个 `NetworkModuleProtocol`，模块区间为 `16000-16008`。契约身份是签入源码的可打印 ASCII 字符串，例如 `CycloneGames.Movement.InputCommand`，不使用 CLR 类型名，也不在运行时推导。
+
+| 属性 | 含义 |
+| --- | --- |
+| `ProtocolFingerprint` | 所持有 `NetworkModuleProtocol` 的指纹 |
+| `WireLayoutDigest` | DTO 字段顺序布局的摘要 |
+| `WireCodecDigest` | 序列化、压缩与量化策略的摘要 |
+| `Manifest` | 9 个消息描述符，含通道与载荷上限 |
+| `MessageRange` | `16000-16008` |
+
+`CreateProtocolManifest()` 是纯工厂方法，`GetContractId(index)` 返回签入的契约身份。
+
+## 消息
+
+| 消息 | ID | 通道 | 载荷上限 |
+| --- | ---: | --- | ---: |
+| `MovementManifestHandshakeMessage` | 16000 | Reliable | 128 |
+| `MovementInputCommandMessage` | 16001 | Unreliable | 128 |
+| `MovementNetworkSnapshotMessage` | 16002 | UnreliableSequenced | 256 |
+| `MovementCorrectionMessage` | 16003 | Reliable | 1024 |
+| `MovementFullStateRequestMessage` | 16004 | Reliable | 128 |
+| `MovementAuthorityTransferMessage` | 16005 | Reliable | 128 |
+| `MovementTeleportMessage` | 16006 | Reliable | 256 |
+| `MovementInputBatchMessage` | 16007 | Unreliable | 1024 |
+| `MovementInputAckMessage` | 16008 | Unreliable | 128 |
+
+`MovementInputBatchMessage` 最多携带 4 条按时间从旧到新排列的命令，下一个数据报即可补回丢失的命令。`MovementInputAckMessage` 驱动 `ApplyAck`，按服务器时间线剪枝预测历史。
+
+`MovementNetworkSnapshotMessage` 是高频紧凑增量。`MovementCorrectionMessage` 携带完整 `MovementFullState`，是校正、生成、迟到加入与重放唯一接受的类型。
+
+## 握手
 
 ```mermaid
-graph TD
-    Input["MovementInputCommandMessage"]
-    Action["NetworkActionCommand"]
-    InputAuthority["MovementNetworkInputAuthority"]
-    InputHistory["MovementNetworkInputHistory"]
-    Provider["IMovementSnapshotProvider"]
-    Bridge["MovementNetworkAuthorityBridge"]
-    Snapshot["MovementNetworkSnapshotMessage"]
-    SnapshotHistory["MovementNetworkSnapshotHistory"]
-    Reconcile["MovementNetworkReconciliation"]
-    Correction["MovementCorrectionMessage"]
-    Endpoint["INetworkMessageEndpoint"]
-
-    Input --> Action
-    Input --> InputAuthority
-    InputAuthority --> InputHistory
-    InputAuthority --> Endpoint
-    Provider --> Bridge
-    Bridge --> Snapshot
-    Snapshot --> SnapshotHistory
-    SnapshotHistory --> Reconcile
-    Reconcile --> Correction
-    Snapshot --> Endpoint
-    Correction --> Endpoint
+sequenceDiagram
+    participant P as 项目
+    participant A as MovementNetworkProtocol
+    participant H as MovementManifestHandshakeMessage
+    participant N as NetworkProtocolHandshake
+    P->>A: new MovementNetworkProtocol(codecPolicy)
+    P->>H: CreateHandshake(domainStateHash)
+    H->>N: IsCompatibleWith(protocol, domainStateHash, requireDomainStateMatch)
+    N-->>H: 匹配或 DomainStateMismatch
 ```
 
-## 协议
+握手核对三个独立事实：`WireLayoutDigest`、`WireCodecDigest` 与可选的 `DomainStateHash`。`DomainStateHash` 保持 `CycloneGames.Networking` 定义的语义，不承载布局数据。任意一项被篡改都会拒绝会话。
 
-`MovementNetworkProtocol` 在共享 `NetworkMessageRanges.Module` 范围（`1000-29999`）内拥有 `16000-16999` 消息 ID。`CreateProtocolManifest` 构造完整 manifest，`RegisterMessageCatalog` / `TryRegisterMessageCatalog` 通过 `TryRegisterProtocolManifest` 提交它。Catalog 要么同时提交 range 和全部 descriptor，要么拒绝 manifest 且不留下部分注册。
+`Negotiate(...)` 转发到 `NetworkProtocolHandshake.Negotiate`，并传递 `requireDomainStateMatch`。
 
-每个 descriptor 都声明显式的可打印 ASCII `ContractId`，例如 `MovementNetworkSnapshotMessage`。非零 `SchemaHash` 是该标识符原文的 FNV-1a 64-bit hash；manifest validation 会拒绝不匹配的组合。Protocol fingerprint 包含 range，以及每个 descriptor 的 message ID、contract identity、schema hash、channel 和 payload limit。CLR type name 与 reflection 不是协议 identity。fingerprint 只钉住 contract identity；本包不提供 wire codec，二进制 payload layout 由集成方选用的 serializer 决定，fingerprint 无法验证它。通信双方通过共享 serializer 配置来约定 layout；任何 layout 变化都必须以新 contract identity 发布。Payload layout、codec 或语义兼容性变化必须分配新 contract identity，并在所有通信 peer 之间交换新的 protocol fingerprint。必须在 gameplay traffic 前拒绝不兼容 peer。项目专用消息应放入独立的项目自有 manifest，并使用未占用的 `NetworkMessageRanges.User` 子范围；本模块不提供动态 descriptor 注册 facade。
+## 输入准入
 
-| Message | ID | Channel | Payload |
-| --- | ---: | --- | --- |
-| `MSG_MANIFEST_HANDSHAKE` | `16000` | Reliable | `MovementManifestHandshakeMessage` |
-| `MSG_INPUT_COMMAND` | `16001` | UnreliableSequenced | `MovementInputCommandMessage` |
-| `MSG_AUTHORITATIVE_SNAPSHOT` | `16002` | UnreliableSequenced | `MovementNetworkSnapshotMessage` |
-| `MSG_CORRECTION` | `16003` | Reliable | `MovementCorrectionMessage` |
-| `MSG_FULL_STATE_REQUEST` | `16004` | Reliable | `MovementFullStateRequestMessage` |
-| `MSG_AUTHORITY_TRANSFER` | `16005` | Reliable | `MovementAuthorityTransferMessage` |
-| `MSG_TELEPORT` | `16006` | Reliable | `MovementTeleportMessage` |
+`MovementNetworkInputAuthority.TryAccept` 依次执行：
 
-在 composition root 中注册协议：
+1. 项目提供的 `IMovementNetworkInputValidator`。
+2. 发送方认证与 epoch 一致性。
+3. 通过 `MovementNetworkInputValidationContext` 检查 tick 与序号顺序。
+4. `MovementTimeDilationAuditor`，按服务器 tick 推导每条命令的预算。
+5. 写入 `MovementNetworkInputHistory`。
+
+首次出现的实体把时间膨胀窗口起点绑定到它的第一个 tick，迟到加入不会因此获得额外命令。每个 DTO 都携带 `Epoch`；权限迁移需更换 epoch 并调用 `Reset()`。
+
+发送前用 `GetEffectiveMaxPayloadSize(messageId, endpoint)` 合并描述符、通道、适配器与后端预算。
+
+## 历史与 reconciliation
+
+`MovementEntityHistory<TSnapshot>` 用开放寻址索引管理每实体连续槽，查找、插入与按 ack 剪枝均为 O(1)。容量在构造时通过 `MovementHistoryCapacity` 固定。
+
+`MovementNetworkReconciliation` 把校正与本地预测快照比较，产出待应用的状态。`MovementRemoteSampleAdapter` 把快照消息转换成 `MovementRemoteSample`，交给表现层抖动缓冲。
+
+`GetTeardownSet()` 返回两个 `INetworkSessionTeardownTarget`。`TeardownSession()` 在断开时清空历史与审计窗口。
+
+## 组合示例
+
+按步骤递进。
+
+### 第 1 步：创建协议
 
 ```csharp
-using CycloneGames.Networking;
 using CycloneGames.RPGFoundation.Movement.Networking;
 
-public static class MovementNetworkInstaller
-{
-    public static void Configure(INetworkMessageCatalog catalog)
-    {
-        MovementNetworkProtocol.RegisterMessageCatalog(catalog);
-    }
-}
+var protocol = new MovementNetworkProtocol(MovementWireCodecPolicy.Unspecified);
+MovementManifestHandshakeMessage handshake = protocol.CreateHandshake(0UL);
 ```
 
-## Snapshot 流程
-
-`MovementNetworkAuthorityBridge` 使用 `IMovementSnapshotProvider` 和可选 `IMovementValidator`：
+### 第 2 步：构建权限对象
 
 ```csharp
-using CycloneGames.RPGFoundation.Movement.Core;
-using CycloneGames.RPGFoundation.Movement.Networking;
-
-public sealed class MovementSnapshotEndpoint
-{
-    private readonly MovementNetworkAuthorityBridge _bridge;
-
-    public MovementSnapshotEndpoint(IMovementSnapshotProvider provider, IMovementValidator validator)
-    {
-        _bridge = new MovementNetworkAuthorityBridge(provider, validator);
-    }
-
-    public MovementNetworkSnapshotMessage Capture(ulong entityId, int serverTick, ushort sequence)
-    {
-        return _bridge.CaptureSnapshot(entityId, serverTick, sequence);
-    }
-
-    public bool Apply(MovementNetworkSnapshotMessage snapshot)
-    {
-        return _bridge.ApplySnapshot(snapshot);
-    }
-}
-```
-
-`ValidateTransition` 会通过可选 `IMovementValidator` 比较两个 network snapshot。
-
-## Input Command 流程
-
-`MovementInputCommandMessage` 使用 `ButtonMask` 和 `CustomFlags` 保持输入可扩展。项目 assembly 定义 bit 含义，并将本地输入转换成 DTO：
-
-```csharp
-using CycloneGames.Networking;
-using CycloneGames.RPGFoundation.Movement.Networking;
-
-public static class MovementInputFactory
-{
-    public const uint JumpButton = 1u << 0;
-
-    public static MovementInputCommandMessage CreateJump(
-        ulong entityId,
-        int clientTick,
-        int lastServerTick,
-        ushort sequence,
-        float deltaTime)
-    {
-        return new MovementInputCommandMessage(
-            entityId,
-            clientTick,
-            lastServerTick,
-            sequence,
-            JumpButton,
-            0u,
-            deltaTime,
-            new NetworkVector3(0f, 0f, 1f),
-            new NetworkVector3(0f, 0f, 1f),
-            predictionKey: sequence);
-    }
-}
-```
-
-## Authority Validation 流程
-
-Server-authoritative、owner-authoritative 和 client-predicted movement 可以使用同一个 validation 入口。validator 会把通用 timeline 校验委托给 `CycloneGames.Networking.Simulation` action contract，再执行 movement-specific 的 button mask、custom flag、move axes 和 aim direction 校验。
-
-```csharp
-using CycloneGames.Networking;
 using CycloneGames.Networking.Simulation;
-using CycloneGames.RPGFoundation.Movement.Networking;
 
-public sealed class ServerMovementInputEndpoint
-{
-    private readonly MovementNetworkInputAuthority _authority =
-        new MovementNetworkInputAuthority(new MovementNetworkInputHistory(capacity: 128));
-
-    public bool TryAcceptInput(
-        INetConnection sender,
-        MovementInputCommandMessage command,
-        NetworkTickId serverTick,
-        NetworkTickId lastAcceptedClientTick,
-        ushort lastAcceptedSequence)
-    {
-        var context = new MovementNetworkInputValidationContext(
-            sender,
-            serverTick,
-            lastAcceptedClientTick,
-            lastAcceptedSequence,
-            maxAcceptedTickDrift: 8,
-            allowedButtonMask: 0xFFFFu,
-            allowedCustomFlags: 0x00FFu,
-            maxMoveAxesMagnitude: 1.25f,
-            requireNormalizedAimDirection: true);
-
-        return _authority.TryAccept(command, context, out NetworkActionResult result)
-               && result.IsAccepted;
-    }
-}
+var history = new MovementNetworkInputHistory(
+    new MovementHistoryCapacity(entityCount: 128, perEntityCount: 128));
+var auditor = new MovementTimeDilationAuditor(MovementDilationPolicy.Default);
+var authority = new MovementNetworkInputAuthority(history, auditor);
 ```
 
-`MovementNetworkInputAuthority` 是输入接收边界。它负责校验并记录已接受 command；项目拥有的 server simulation 负责把 accepted command 应用到 movement state。
-
-## Reconciliation 流程
-
-Client 可以比较 predicted snapshot 和 authoritative snapshot，并在 drift 超出项目策略时创建 correction：
+### 第 3 步：接收命令
 
 ```csharp
-MovementNetworkCorrectionPolicy policy = MovementNetworkCorrectionPolicy.Default;
-if (MovementNetworkReconciliation.TryCreateCorrection(
-        predictedSnapshot,
-        authoritativeSnapshot,
-        policy,
-        out MovementCorrectionMessage correction))
-{
-    // Send correction through the project transport.
-}
+using CycloneGames.Networking;
+
+var context = new MovementNetworkInputValidationContext(
+    sender: connection,
+    epoch: epoch,
+    serverTick: new NetworkTickId(serverTick),
+    lastAcceptedClientTick: new NetworkTickId(lastTick));
+
+bool accepted = authority.TryAccept(in command, in context,
+                                    out NetworkActionResult result);
 ```
 
-大位置误差会通过 `MovementNetworkSnapshotFlags.Teleport` 标记为 hard reset；较小误差保持 regular correction，方便 presentation code 平滑处理。
+`MovementNetworkInputValidationContext` 还包含允许的按键掩码、自定义标志策略、瞄准方向范围与最大 tick 漂移。
 
-## 扩展点
+### 第 4 步：应用 ack 并生成校正
 
-- 项目自有 movement verb 通过独立的项目自有 manifest 定义，并使用未占用的 `NetworkMessageRanges.User` 子范围。
-- 后端 connection、ownership 和 host/session 逻辑保留在 network adapter 中。
-- `CustomFlags` 和项目自有 button mask 用于表达 generic DTO 字段之外的输入概念。
-- 当 ability tag、stamina、vehicle ownership、mounted state、anti-cheat rule 或平台特定 authority rule 必须在接受输入前检查时，提供项目自定义 `IMovementNetworkInputValidator`。
-- 将 `MovementNetworkInputHistory` 和 `MovementNetworkSnapshotHistory` 与 `CycloneGames.Networking` 中的 generic rollback 或 prediction system 配合，用于需要 deterministic re-simulation 的游戏。
+```csharp
+int pruned = authority.ApplyAck(in ack);
 
-## 持久化
-
-本包不写入文件、资产、偏好设置、缓存或运行时存档。它只定义 protocol metadata、value-type DTO、history buffer 和 bridge helper。History buffer 是运行时内存对象，由创建它的系统负责生命周期、清理和复用。
-
-## 验证
-
-修改本包后运行以下检查：
-
-```text
-Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Movement.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
+MovementFullState full = movementComponent.CaptureFullState();
+// 把 full 填入 MovementCorrectionMessage 后走可靠通道发送
 ```
 
-CLI 验证时，先让 Unity 刷新 generated project files，再编译：
+### 第 5 步：会话收尾
 
-```text
-dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Networking.Core.csproj --nologo
-dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor.csproj --nologo
+```csharp
+MovementSessionTeardownSet targets = authority.GetTeardownSet();
+targets.TeardownSession();
+authority.Reset();
 ```
+
+### 第 6 步：远端表现
+
+```csharp
+if (MovementRemoteSampleAdapter.TryConvert(in snapshot, out MovementRemoteSample sample))
+    session.TryAccept(in sample);
+```
+
+## 线布局规则
+
+- `MovementWireLayout.Digest` 覆盖每个 DTO 的有序字段列表。字段变更需同步描述符。
+- `MovementWireCodecPolicy.ComputeDigest()` 固定序列化类型、选项、压缩与量化。策略不同的对端无法通过握手。
+- `MovementFullState` 的 4 个 float 与 2 个 int 扩展槽承载确定性模拟标量，不存动画或表现数据。
+- 快照标志把 wire 位与本地位分开，保留值用于让接收方拒绝畸形载荷。
+- `NetworkTick`（`long`）与 `NetworkTimeSeconds`（`double`）来自适配器，wire 格式不使用 `Time.frameCount` 或浮点墙钟时间。
+
+## 自定义校验器
+
+实现 `IMovementNetworkInputValidator` 并传给 `MovementNetworkInputAuthority`。默认校验器执行内置规则；项目校验器可加入距离、能力或频率检查，无需改动 wire 格式。
+
+`MovementNetworkInputValidationContext.ToActionValidationContext()` 供已使用 `CycloneGames.Networking` 共享动作校验器的代码复用。
+
+## 运行时约束
+
+| 约束 | 数值 |
+| --- | --- |
+| 引擎引用 | 无，`noEngineReferences: true` |
+| LINQ、反射、静态可变容器 | 无 |
+| `public const` | 3 个契约文件共 36 个 wire 常量 |
+| 契约身份 | 签入的字符串，不使用 CLR 类型名 |
+| 可变状态 | 由组合根持有，通过 `GetTeardownSet()` 清理 |
+| 线程 | 由项目选择网络线程或主线程调用，包内不加锁 |
+
+## 故障排查
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 握手返回 `DomainStateMismatch` | 两端产品哈希不同 | 两侧传入同一个 `domainStateHash` |
+| 改序列化后握手被拒 | `WireCodecDigest` 不同 | 部署相同的 `MovementWireCodecPolicy` |
+| 命令全部被拒 | epoch 不一致或发送方未认证 | 检查每个 DTO 的 `Epoch` 与 `INetConnection.IsAuthenticated` |
+| 预测历史持续增长 | 未应用 ack | 对每条 `MovementInputAckMessage` 调用 `ApplyAck` |
+| 迟到加入获得额外命令 | 时间膨胀窗口绑定到 tick 0 | 让 auditor 绑定首次出现的 tick |
+| 断开后状态未清空 | 没有调用 teardown | 调用 `GetTeardownSet().TeardownSession()` |
+
+## 延伸阅读
+
+- [Movement 主文档](../CycloneGames.RPGFoundation/Movement/README.SCH.md)

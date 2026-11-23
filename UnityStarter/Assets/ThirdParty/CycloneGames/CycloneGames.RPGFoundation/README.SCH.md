@@ -118,7 +118,6 @@ Unity Physics 不是所有支持平台上的确定性 lockstep 真相来源。Un
 | `CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework` | `CycloneGames.GameplayFramework.Runtime` |
 | `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework` | DeterministicMath + GameplayFramework |
 | `CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath` | `CycloneGames.DeterministicMath.Core` |
-| `CycloneGames.RPGFoundation.Movement.Integrations.Animancer` | `Kybernetik.Animancer` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation` | `Unity.AI.Navigation` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AStar` | `AstarPathfindingProject` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation` | ProjectDawn Agents Navigation |
@@ -142,7 +141,6 @@ Unity Physics 不是所有支持平台上的确定性 lockstep 真相来源。Un
 | --- | --- |
 | `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` | Interaction、Movement、Projectile 和 Trajectory DeterministicMath 集成。 |
 | `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK` | Interaction GameplayFramework 集成。 |
-| `CYCLONE_RPGFOUNDATION_HAS_ANIMANCER` | Movement Animancer 集成。 |
 | `CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION` | Movement Unity AI Navigation 集成。 |
 | `CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING` | Movement A* Pathfinding 集成。 |
 | `CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION` | Movement Agents Navigation 集成。 |

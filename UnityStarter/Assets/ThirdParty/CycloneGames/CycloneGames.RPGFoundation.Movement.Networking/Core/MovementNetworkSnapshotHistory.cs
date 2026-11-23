@@ -1,69 +1,49 @@
-using CycloneGames.Networking;
-using CycloneGames.Networking.Simulation;
-
 namespace CycloneGames.RPGFoundation.Movement.Networking
 {
     public sealed class MovementNetworkSnapshotHistory
     {
-        private readonly NetworkActionHistory<MovementNetworkSnapshotMessage> _history;
+        private readonly MovementEntityHistory<MovementNetworkSnapshotMessage> _history;
 
-        public MovementNetworkSnapshotHistory(int capacity)
+        public MovementNetworkSnapshotHistory(MovementHistoryCapacity capacity)
         {
-            _history = new NetworkActionHistory<MovementNetworkSnapshotMessage>(capacity);
+            _history = new MovementEntityHistory<MovementNetworkSnapshotMessage>(capacity);
         }
 
-        public int Capacity
+        public MovementNetworkSnapshotHistory(int entityCount, int perEntityCount)
+            : this(new MovementHistoryCapacity(entityCount, perEntityCount))
         {
-            get
-            {
-                return _history.Capacity;
-            }
         }
 
-        public int Count
+        public MovementHistoryDiagnostics GetDiagnostics()
         {
-            get
-            {
-                return _history.Count;
-            }
+            return _history.GetDiagnostics();
         }
-
-        public long OverwriteCount => _history.OverwriteCount;
 
         public void Record(in MovementNetworkSnapshotMessage snapshot)
         {
-            _history.Record(
-                snapshot.EntityId,
-                new NetworkTickId(snapshot.ServerTick),
-                snapshot.Sequence,
-                snapshot);
+            _history.Record(snapshot.EntityId, snapshot.ServerTick, snapshot.Sequence, snapshot);
         }
 
-        public bool TryGet(
-            ulong entityId,
-            int serverTick,
-            ushort sequence,
-            out MovementNetworkSnapshotMessage snapshot)
+        public bool TryGet(ulong entityId, long serverTick, ushort sequence, out MovementNetworkSnapshotMessage snapshot)
         {
-            return _history.TryGet(
-                entityId,
-                new NetworkTickId(serverTick),
-                sequence,
-                out snapshot);
+            return _history.TryGet(entityId, serverTick, sequence, out snapshot);
         }
 
-        public bool TryGetLatest(
-            ulong entityId,
-            out MovementNetworkSnapshotMessage snapshot)
+        public bool TryGetLatest(ulong entityId, out MovementNetworkSnapshotMessage snapshot)
         {
-            if (_history.TryGetLatest(entityId, out NetworkActionHistoryEntry<MovementNetworkSnapshotMessage> entry))
-            {
-                snapshot = entry.Snapshot;
-                return true;
-            }
+            long tick;
+            ushort sequence;
+            return _history.TryGetLatest(entityId, out snapshot, out tick, out sequence);
+        }
 
-            snapshot = default;
-            return false;
+        public bool Contains(in MovementNetworkSnapshotMessage snapshot)
+        {
+            return _history.Contains(snapshot.EntityId, snapshot.ServerTick, snapshot.Sequence);
+        }
+
+        public int PruneUpTo(ulong entityId, long serverTick)
+        {
+            return _history.PruneUpTo(entityId, serverTick);
         }
 
         public int RemoveEntity(ulong entityId)

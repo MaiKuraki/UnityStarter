@@ -1,316 +1,172 @@
-# RPG Movement Component 2D
+# 2D movement reference
 
-[English | 简体中文](README.SCH.md)
+[English | 简体中文](README.SCH.md) | [Package overview](../../README.md)
 
-A state-based 2D character movement component for Unity. Supports Platformer, BeltScroll, and TopDown movement modes with ScriptableObject configuration, runtime attribute modification, snapshots, and an optional GameplayAbilities integration assembly.
+`MovementComponent2D` drives a 2D character through an explicit state machine.
+It uses `Rigidbody2D` and `Unity.Mathematics.float2` for velocity and context
+values. Configuration comes from a `MovementConfig2D` asset.
 
-## Table of Contents
+## Component setup
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
-- [Common Scenarios](#common-scenarios)
-- [Performance and Memory](#performance-and-memory)
-- [Troubleshooting](#troubleshooting)
+| Item | Value |
+| --- | --- |
+| Required component | `Rigidbody2D` |
+| Interpolation | `RigidbodyInterpolation2D.Interpolate` |
+| Collision detection | `CollisionDetectionMode2D.Continuous` |
+| Physics query | `Physics2D.OverlapBox` for ground detection |
+| Thread | Unity main thread |
 
-## Overview
+Create the config with
+`Create > CycloneGames > RPG Foundation > Movement > Movement Config 2D`,
+assign it to the component, then set `movementType`.
 
-`MovementComponent2D` provides explicit state-machine-driven movement for 2D characters. Movement calculations use `Unity.Mathematics`. The component, Physics2D, animation, and events all run on the Unity main thread.
+## Configuration
 
-### Key Features
+`MovementConfig2D` has 37 serialized fields. The table lists the values most
+often changed. Defaults come from the asset source.
 
-- **Three movement modes** — Platformer, BeltScroll (DNF-style), and TopDown
-- **State machine** — Explicit states (Idle, Walk, Run, Sprint, Jump, Fall, Climb, WallSlide)
-- **2D feel features** — Coyote time, jump buffering, air control, gap bridging
-- **ScriptableObject configuration** — Shared movement parameters via `MovementConfig2D`
-- **Rigidbody2D physics** — Gravity, ground detection via `Physics2D.OverlapBox`
-- **Attribute modification** — Runtime overrides for all movement attributes
-- **Time scaling** — Global and component-local controls
-- **Climbing system** — Ladder and wall climbing with wall jump support
+| Field | Default | Meaning |
+| --- | ---: | --- |
+| `movementType` | `Platformer` | `Platformer`, `BeltScroll` or `TopDown` |
+| `gravity` | `25f` | Positive downward magnitude |
+| `maxFallSpeed` | `20f` | Terminal fall speed |
+| `groundCheckDistance` | `0.1f` | Ground probe distance |
+| `groundCheckSize` | `(0.8, 0.1)` | Overlap box size |
+| `groundCheckOffset` | `(0, -0.5)` | Overlap box offset |
+| `coyoteTime` | `0.1f` | Late jump window |
+| `jumpBufferTime` | `0.1f` | Early jump window |
+| `airControlMultiplier` | `0.5f` | Air steering scale |
+| `slideSpeed` | `7f` | Wall slide speed |
+| `rollDistance` / `rollDuration` | `5f` / `0.5f` | Roll profile |
+| `lockZAxis` | `true` | Keeps the character on the 2D plane |
+| `facingRight` | `true` | Initial facing |
+| `groundLayer` | `1` | Ground layer mask |
 
-## Architecture
+`MovementConfigRules` checks every numeric field against finite bounds. Open the
+Inspector and use `Validate Configuration` for a read-only report. Presets
+`Platformer` and `TopDown` are built in; external projects can add
+`MovementConfigPresetAsset` instances.
 
-```mermaid
-flowchart LR
-    Input["Input (direction, jump, sprint, roll, climb)"] --> MCP["MovementComponent2D"]
-    MCP --> Config["MovementConfig2D (ScriptableObject)"]
-    MCP --> RB["Rigidbody2D"]
-    MCP --> Auth["IMovementAuthority<br/>(optional: attribute overrides, state gating)"]
-    Auth --> GAS["GASMovementAuthority2D<br/>(optional GameplayAbilities integration)"]
-    MCP --> Snap["MovementSnapshot<br/>(network handoff)"]
+The gravity sign differs from the 3D component. A 3D asset uses a negative
+value; copying it into a 2D asset inverts the fall direction.
+
+## State machine
+
+States are selected by `MovementStateType`: `Idle`, `Walk`, `Run`, `Sprint`,
+`Crouch`, `Jump`, `Fall`, `Roll`, `Climb`, `Swim`, `Fly`. The 2D implementation
+supplies these concrete states:
+
+```text
+IdleState2D, WalkState2D, RunState2D, SprintState2D, CrouchState2D,
+JumpState2D, FallState2D, RollState2D, LadderClimbState2D, WallClimbState2D
 ```
 
-### MovementConfig2D Parameters
+`RequestStateChange(MovementStateType, object)` asks the machine for a
+transition. `OnStateChanged` reports the transition that actually happened.
+Climbing uses `ClimbingMode.None`, `Ladder` or `Wall`.
 
-| Category    | Parameter      | Description            | Default |
-| ----------- | -------------- | ---------------------- | ------- |
-| **Ground**  | walkSpeed      | Walking speed          | 3.0     |
-| **Ground**  | runSpeed       | Running speed          | 5.0     |
-| **Ground**  | sprintSpeed    | Sprinting speed        | 8.0     |
-| **Air**     | jumpForce      | Jump velocity          | 12.0    |
-| **Air**     | maxJumpCount   | Multi-jump count       | 1       |
-| **Air**     | maxFallSpeed   | Terminal velocity      | 20.0    |
-| **Physics** | gravity        | Gravity force          | 25.0    |
-| **Physics** | groundLayer    | Ground detection layer | Default |
-| **Feel**    | coyoteTime     | Late jump window       | 0.1s    |
-| **Feel**    | jumpBufferTime | Early jump window      | 0.1s    |
-
-## Quick Start
-
-### Step 1: Create Configuration
-
-`Create > CycloneGames > RPG Foundation > Movement Config 2D`
-
-### Step 2: Add Component
-
-Add `MovementComponent2D` to your 2D character GameObject. Assign `MovementConfig2D` and `Rigidbody2D` (auto-added if missing).
-
-### Step 3: Basic Input
-
-**Platformer Mode:**
+## Input and queries
 
 ```csharp
 using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
+using UnityEngine;
 
-public class Player2DController : MonoBehaviour
+public sealed class PlatformerInput : MonoBehaviour
 {
     private MovementComponent2D _movement;
 
-    void Awake() => _movement = GetComponent<MovementComponent2D>();
+    private void Awake() => _movement = GetComponent<MovementComponent2D>();
 
-    void Update()
+    private void Update()
     {
-        float horizontal = Input.GetAxis("Horizontal");
-        _movement.SetInputDirection(new Vector2(horizontal, 0));
+        _movement.SetInputDirection(new Vector2(Input.GetAxisRaw("Horizontal"), 0f));
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
         _movement.SetSprintHeld(Input.GetButton("Sprint"));
+        _movement.SetCrouchHeld(Input.GetButton("Crouch"));
+        _movement.SetRollPressed(Input.GetButtonDown("Roll"));
     }
 }
 ```
 
-**BeltScroll Mode (DNF-style):**
+| Member | Purpose |
+| --- | --- |
+| `SetInputDirection(Vector2)` | Horizontal or planar movement intent |
+| `SetJumpPressed`, `SetSprintHeld`, `SetCrouchHeld`, `SetRollPressed` | Button intent |
+| `RequestClimb(ClimbingMode, int, object)`, `StopClimb()` | Ladder and wall climbing |
+| `SetLookDirection(Vector2)`, `ClearLookDirection()`, `SetRotation(...)` | Facing, separate from movement |
+| `IsGrounded`, `CurrentSpeed`, `Velocity`, `LookDirection`, `IsMoving` | State queries |
+| `LaunchCharacter`, `AddForce`, `AddExplosionForce` | External impulses |
+| `PauseGroundConstraint(float)` | Release the ground constraint briefly |
+| `Config` | Read-only view of the assigned asset |
 
-```csharp
-void Update()
-{
-    // X = horizontal movement, Y = depth movement
-    float horizontal = Input.GetAxis("Horizontal");
-    float vertical = Input.GetAxis("Vertical");
-    _movement.SetInputDirection(new Vector2(horizontal, vertical));
-    _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
-    _movement.SetSprintHeld(Input.GetButton("Sprint"));
-}
-```
-
-## Core Concepts
-
-### MovementType2D
-
-| Type           | Description            | Physics          |
-| -------------- | ---------------------- | ---------------- |
-| **Platformer** | Standard side-scroller | Y=gravity/jump   |
-| **BeltScroll** | DNF-style with depth   | Jump via physics |
-| **TopDown**    | Classic RPG view       | No gravity       |
-
-### BeltScroll Mode
-
-BeltScroll (DNF-style) uses pseudo-3D: X is horizontal movement, Y simulates depth (up = far, down = close), and jumping adds temporary Y offset via Rigidbody2D physics. Use SpriteRenderer's `Sorting Layer` or `Order in Layer` based on Y for proper depth rendering.
-
-### Coyote Time and Jump Buffering
-
-```csharp
-config.coyoteTime = 0.1f;     // 100ms grace period after leaving a platform
-config.jumpBufferTime = 0.1f; // 100ms buffer window — jump pressed early executes on land
-```
-
-### Air Control
-
-```csharp
-config.airControlMultiplier = 0.5f; // 50% horizontal control while airborne
-```
-
-### Gap Bridging
-
-When speed exceeds `minSpeedForGapBridge`, the component checks ahead before leaving grounded state across small gaps:
-
-| Parameter              | Description                      | Default |
-| ---------------------- | -------------------------------- | ------- |
-| `enableGapBridging`    | Enable/disable feature           | true    |
-| `minSpeedForGapBridge` | Minimum speed to trigger (m/s)   | 4.0     |
-| `maxGapDistance`       | Maximum bridgeable gap width (m) | 1.0     |
-
-Walking slowly will not trigger gap bridging — the character will fall normally.
-
-## Usage Guide
-
-### Animation BlendTree
-
-Use `Velocity.magnitude` for smooth BlendTree interpolation:
-
-```csharp
-void Update()
-{
-    var movement = GetComponent<MovementComponent2D>();
-    animator.SetFloat("Speed", movement.Velocity.magnitude);
-}
-```
-
-### Slow Motion
-
-```csharp
-// Global slow motion
-Time.timeScale = 0.2f;
-
-// Per-character time scale
-movementComponent.LocalTimeScale = 1.5f;
-movementComponent.IgnoreTimeScale = true;
-```
-
-### Component API
-
-```csharp
-// Properties
-MovementStateType CurrentState { get; }
-bool IsGrounded { get; }
-float CurrentSpeed { get; }
-Vector2 Velocity { get; }
-bool IsMoving { get; }
-IMovementAuthority MovementAuthority { get; set; }
-
-// Methods
-void SetInputDirection(Vector2 direction);
-void SetJumpPressed(bool pressed);
-void SetSprintHeld(bool held);
-void SetCrouchHeld(bool held);
-void SetRollPressed(bool pressed);
-bool RequestClimb(ClimbingMode climbingMode, int wallSide = 0, object context = null);
-bool StopClimb();
-bool RequestStateChange(MovementStateType type);
-MovementSnapshot GetSnapshot();
-void ApplySnapshot(in MovementSnapshot snapshot);
-void ResetFromSnapshot(in MovementSnapshot snapshot);
-
-// Events
-event Action<MovementStateType, MovementStateType> OnStateChanged;
-event Action OnJumpStart;
-event Action OnLanded;
-```
-
-## Advanced Topics
-
-### Attribute Modification (Without GAS)
+## Snapshot and correction
 
 ```csharp
 using CycloneGames.RPGFoundation.Movement.Core;
-using CycloneGames.RPGFoundation.Movement.Runtime;
-using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
 
-var movement = GetComponent<MovementComponent2D>();
-var authority = gameObject.AddComponent<MovementAttributeAuthority>();
-movement.MovementAuthority = authority;
+MovementSnapshot delta = _movement.GetSnapshot();
+MovementFullState full = _movement.CaptureFullState();
 
-authority.SetBaseValueOverride(MovementAttribute.RunSpeed, 7f);
-authority.SetMultiplier(MovementAttribute.JumpForce, 1.2f);
+_movement.BeginReplay();
+_movement.ApplyFullState(in full);
+_movement.EndReplay();
+
+// Other entry points:
+// _movement.ApplySnapshot(in delta);
+// _movement.ResetFromFullState(in full);
 ```
 
-### GameplayAbilities Integration
+`CaptureFullState` writes coyote time, pending depth and wall side into the
+four float and two integer extension slots. Those slots are simulation state and
+must not be used for presentation data.
 
-The GAS integration compiles only when `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` is enabled. When movement verbs (jump, roll, wall-climb) are owned by abilities, use `MovementStateRequestContext.FromAbility(this)` to request states — this keeps authority checks active without recursively activating the same ability.
+## Animation binding
 
 ```csharp
-#if CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES
-using CycloneGames.RPGFoundation.Movement.Core;
-using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
-using CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities;
-
-var movement = GetComponent<MovementComponent2D>();
-var gasAuthority = gameObject.AddComponent<GASMovementAttributeAuthority>();
-movement.MovementAuthority = gasAuthority;
-
-gasAuthority.AddAttributeMapping(
-    MovementAttribute.RunSpeed,
-    "Attribute.Secondary.Speed",
-    baseValue: 100f
-);
-#endif
+_movement.BindAnimation(locomotionSink, actionSink);
+_movement.BindRootMotion(rootMotionSource);
+_movement.SetUseRootMotion(true);
 ```
 
-**Supported attributes:** WalkSpeed, RunSpeed, SprintSpeed, CrouchSpeed, JumpForce, Gravity, AirControlMultiplier.
+`SetUseRootMotion(false)` clears pending root motion. Each physics step
+publishes one `MovementAnimationState` and zero or more actions. During a
+replay window, publication and action dispatch are suppressed.
 
-### Climbing and Wall Jump
+## Common scenarios
 
-| Mode       | Entry              | Movement           | Use Case          |
-| ---------- | ------------------ | ------------------ | ----------------- |
-| **Ladder** | Trigger + Up       | Up/Down/Left/Right | Standard ladders  |
-| **Wall**   | Air + Wall + Input | Up/Down            | Wall sliding      |
+| Scenario | Settings |
+| --- | --- |
+| Platformer | `movementType = Platformer`, `gravity = 25f`, `coyoteTime = 0.1f`, `jumpBufferTime = 0.1f` |
+| Top-down | `movementType = TopDown`, disable jump in the asset, use `SetInputDirection` with both axes |
+| Belt-scroll | `movementType = BeltScroll`, tune `groundCheckOffset` for the lane depth |
+| Wall jump | Enable wall climb states, set `slideSpeed`, call `RequestClimb(ClimbingMode.Wall, side)` |
 
-Setup: enable `enableLadderClimbing` or `enableWallClimbing` in config, assign `Ladder Layer` and `Wall Layer`, create Trigger Collider2D for ladder zones.
-
-Wall jump config:
+## Extension points
 
 ```csharp
-config.wallJumpForceX = 8f;
-config.wallJumpForceY = 10f;
-config.wallSlideSpeed = 2f;
+var arbiter = new MovementLayerArbiter();
+arbiter.TryAdd(new AimLayer());          // IMovementStateLayer
+_movement.BindMovementLayers(arbiter);
+_movement.BindSemantics(new MovementExtensionRegistry());
+_movement.BindPresentationBudget(budget);
+_movement.BindDeterministicStep(driver);
 ```
 
-### GAS Movement Authority
-
-```csharp
-public class GASMovementAuthority2D : MonoBehaviour, IMovementAuthority
-{
-    public bool CanEnterState(MovementStateType stateType, object context)
-    {
-        if (stateType == MovementStateType.Sprint) return HasStamina();
-        return true;
-    }
-    public void OnStateEntered(MovementStateType stateType) { }
-    public void OnStateExited(MovementStateType stateType) { }
-    public MovementAttributeModifier GetAttributeModifier(MovementAttribute attribute)
-        => new MovementAttributeModifier(null, 1f);
-    public float? GetBaseValue(MovementAttribute attribute) => null;
-    public float GetMultiplier(MovementAttribute attribute) => 1f;
-    public float GetFinalValue(MovementAttribute attribute, float configValue) => configValue;
-}
-```
-
-## Common Scenarios
-
-### Auto-facing
-
-Character automatically flips to face movement direction:
-```csharp
-_movement.SetInputDirection(new Vector2(1, 0));  // Faces right
-_movement.SetInputDirection(new Vector2(-1, 0)); // Faces left
-```
-
-### Climbing a ladder
-
-1. Enable `enableLadderClimbing` in config.
-2. Create a Trigger Collider2D on the ladder, set its layer to `Ladder Layer`.
-3. Player walks into the trigger and presses Up — `MovementComponent2D` enters the Climb state.
-
-### Multi-jump
-
-Set `maxJumpCount = 2` in config for double jump.
-
-## Performance and Memory
-
-- Movement calculations use `Unity.Mathematics` for SIMD-friendly vector operations.
-- `Rigidbody2D` and `Physics2D.OverlapBox` allocate per Unity's physics backend.
-- Snapshots are `readonly struct` — no heap allocation when passed by `in`.
-- `MovementComponent2D` is a Unity component; call from the main thread only. Threaded simulation belongs in pure data systems.
-- Use `MovementAttributeAuthority` instead of per-frame attribute recalculation.
+A layer that keeps its own timers should also implement `IMovementLayerReplay`
+so `BeginReplay` / `EndReplay` can save and restore them.
 
 ## Troubleshooting
 
-| Symptom | Cause | Resolution |
+| Symptom | Cause | Action |
 | --- | --- | --- |
-| Character doesn't move | Missing `Rigidbody2D` or `MovementConfig2D` | Add components via Inspector |
-| No ground detection | `groundLayer` not set or `groundCheck` Transform misplaced | Place `groundCheck` at character's feet, set correct layer |
-| Jump not triggering | `coyoteTime` / `jumpBufferTime` may be too short | Increase to 0.1–0.2s |
-| Gap bridging not working | Speed below `minSpeedForGapBridge` | Increase speed or reduce gap distance |
-| 3D physics errors | Mixing 2D and 3D components | Use only `Rigidbody2D` and `Collider2D`; use `MovementComponent` for 3D games |
+| Character rises instead of falling | Negative gravity copied from 3D | Use a positive 2D gravity |
+| Ground detection misses | `groundCheckSize` or `groundCheckOffset` does not match the collider | Adjust the overlap box |
+| Jump feels unresponsive | Coyote or buffer windows at zero | Set both to about `0.1f` |
+| Tunneling through thin colliders | Collision detection changed | Keep `CollisionDetectionMode2D.Continuous` |
+| Correction replays a roll | Replay window missing | Bracket `ApplyFullState` with `BeginReplay` / `EndReplay` |
+
+## See also
+
+- [Package overview](../../README.md)
+- [3D movement reference](../Movement3D/README.md)
+- [Movement.Networking](../../../../CycloneGames.RPGFoundation.Movement.Networking/README.md)

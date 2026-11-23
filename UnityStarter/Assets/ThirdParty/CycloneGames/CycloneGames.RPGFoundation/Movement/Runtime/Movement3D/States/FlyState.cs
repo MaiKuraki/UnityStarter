@@ -28,19 +28,13 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
             displacement = (horizontalMovement + verticalMovement) * context.DeltaTime;
             context.CurrentSpeed = math.length(horizontalMovement + verticalMovement);
             context.CurrentVelocity = horizontalMovement + verticalMovement;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                context.AnimationController.SetFloat(hash, context.CurrentSpeed);
-            }
         }
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
         {
             if (math.lengthsq(context.InputDirection) < 0.0001f)
             {
-                return StatePool<MovementStateBase>.GetState<IdleState>();
+                return context.StatePool.Get<IdleState>();
             }
 
             return null;

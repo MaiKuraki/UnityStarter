@@ -8,23 +8,19 @@ using CycloneGames.RPGFoundation.Movement.Runtime.States;
 
 namespace CycloneGames.RPGFoundation.Movement.Runtime
 {
-    /// <summary>
-    /// Physics-based movement component using Rigidbody + CapsuleCollider.
-    /// </summary>
     [RequireComponent(typeof(Rigidbody), typeof(CapsuleCollider))]
     public class MovementComponent : MonoBehaviour, IMovementStateQuery3D, IMovementSnapshotProvider
     {
         private static readonly LogChannel Log = RpgMovementLog.Channel;
 
-        /// <summary>Implementation safety ceiling for explicit collision-ignore policy entries.</summary>
         public const int MaximumIgnoredColliderCount = 65_536;
 
         #region Serialized Fields
 
         [SerializeField] private MovementConfig config;
-        [SerializeField] private Animator characterAnimator;
-        [SerializeField] private UnityEngine.Object animancerComponent;
         [SerializeField] private Transform worldUpSource;
+        [Tooltip("Consume root motion deltas from a bound IRootMotionSource and feed them "
+                 + "through the ordinary collision step.")]
         [SerializeField] private bool useRootMotion = false;
         [SerializeField] private bool ignoreTimeScale = false;
 
@@ -65,25 +61,20 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
         #region Constants
 
-        // Contact and penetration offsets
         private const float kContactOffset = 0.01f;
         private const float kPenetrationOffset = 0.001f;
 
-        // Ground distance thresholds
         private const float kMinGroundDistance = 0.001f;
         private const float kMaxGroundDistance = 0.05f;
         private const float kAvgGroundDistance = 0.02f;
 
-        // Capsule hemisphere detection threshold
         private const float kHemisphereLimit = 0.01f;
 
-        // Movement iteration limits
         private const int kMaxMovementIterations = 4;
-        private const float kMinMoveDistanceSqr = 0.0001f; // 0.01^2
+        private const float kMinMoveDistanceSqr = 0.0001f;
         private const int kMaxHitCount = 16;
         private const int kMaxOverlapCount = 8;
 
-        // Misc
         private const float kMinSqrMagnitude = 0.0001f;
         private const float kGroundedVerticalVelocity = -2f;
         private const float kSweepEdgeRejectDistance = 0.015f;
@@ -101,9 +92,77 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
         public float LocalTimeScale { get; set; } = 1f;
         public Vector3 WorldUp { get; set; } = Vector3.up;
-        public IMovementAuthority MovementAuthority { get; set; }
+        private IMovementAuthority _movementAuthority;
+
+        public IMovementAuthority MovementAuthority
+        {
+            get
+            {
+                if (_movementAuthority != null && !MovementUnityLifetime.IsAlive(_movementAuthority))
+                    _movementAuthority = null;
+                return _movementAuthority;
+            }
+            set { _movementAuthority = MovementUnityLifetime.Alive(value); }
+        }
         public IMovementConfig3DReadOnly Config => _configReadOnly ??= new MovementConfig3DReadOnlyWrapper(config);
-        public UnityEngine.Object ExternalAnimationComponent => animancerComponent;
+        public void BindAnimation(IMovementLocomotionSink locomotionSink, IMovementActionSink actionSink)
+        {
+            _locomotionSink = locomotionSink;
+            _actionSink = actionSink;
+        }
+
+        // Root motion is an input to the physics step, never a transform write.
+        public void BindRootMotion(IRootMotionSource source)
+        {
+            _rootMotionSource = source;
+            _animatorRootMotionSource = source as AnimatorRootMotionSource;
+            SyncRootMotionTimeSource();
+        }
+
+        private void SyncRootMotionTimeSource()
+        {
+            if (_animatorRootMotionSource != null)
+                _animatorRootMotionSource.SetTimeScale(LocalTimeScale, ignoreTimeScale);
+        }
+
+        public void BindSemantics(MovementExtensionRegistry registry) { _semantics = registry; }
+
+        public void BindPresentationBudget(IMovementPresentationBudget budget) { _presentationBudget = budget; }
+
+        public void SetSemanticStateId(uint id) { _semanticStateId = id; }
+
+        public MovementExtensionRegistry Semantics { get { return _semantics; } }
+
+        public void BindMovementLayers(MovementLayerArbiter arbiter) { _movementLayers = arbiter; }
+
+        public MovementLayerArbiter MovementLayers { get { return _movementLayers; } }
+
+        // Only the outermost window saves layer state and restores it. Nested
+        // corrections must not replay actions or reset timers twice.
+        public void BeginReplay()
+        {
+            if (_replayDepth == 0 && _movementLayers != null) _movementLayers.SaveReplayState();
+            if (_replayDepth < int.MaxValue) _replayDepth++;
+        }
+
+        public void EndReplay()
+        {
+            if (_replayDepth <= 0) return;
+            _replayDepth--;
+            if (_replayDepth == 0 && _movementLayers != null) _movementLayers.RestoreReplayState();
+        }
+
+        public void BindDeterministicStep(IMovementDeterministicStep driver) { _deterministicStep = driver; }
+
+        public void SetPresentationEnabled(bool enabled)
+        {
+            _presentationEnabled = enabled;
+        }
+
+        public MovementAnimationState LastPublishedAnimationState
+        {
+            get { return _lastPublishedState; }
+        }
 
         public float Radius => _radius;
         public float Height => _height;
@@ -125,6 +184,30 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         private CapsuleCollider _capsuleCollider;
         private MovementStateBase _currentState;
         private MovementContext _context;
+        private readonly MovementStatePool<MovementStateBase> _statePool = new MovementStatePool<MovementStateBase>();
+        private IMovementLocomotionSink _locomotionSink;
+        private IMovementActionSink _actionSink;
+        private IRootMotionSource _rootMotionSource;
+        private readonly MovementAnimationFrameBuilder _animationFrame = new MovementAnimationFrameBuilder();
+        private readonly MovementAnimationAction[] _actionBuffer =
+            new MovementAnimationAction[MovementAnimationActionWriter.MaximumActionsPerStep];
+        private MovementAnimationState _lastPublishedState;
+        private bool _presentationEnabled = true;
+        private bool _rootMotionAppliedThisStep;
+        private float _rootMotionYawThisStep;
+        private MovementExtensionRegistry _semantics;
+        private IMovementPresentationBudget _presentationBudget;
+        private uint _semanticStateId;
+        private bool _presentationPaused;
+        private MovementLayerArbiter _movementLayers;
+        private IMovementDeterministicStep _deterministicStep;
+        private int _replayDepth;
+        private uint _layerSequence;
+        private static readonly Unity.Profiling.ProfilerMarker AnimationPublishMarker =
+            new Unity.Profiling.ProfilerMarker("CycloneGames.Movement.PublishAnimationFrame");
+        private AnimatorRootMotionSource _animatorRootMotionSource;
+        private readonly MovementRootMotionAccumulator _rootMotionAccumulator =
+            new MovementRootMotionAccumulator();
 
         #endregion
 
@@ -148,8 +231,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         private Vector3 _velocity;
         private Vector3 _updatedPosition;
 
-        // Set to false to disable ground constraint entirely (e.g. for flying/swimming states).
-        // Currently always true; ground constraint is managed per-frame via _unconstrainedTimer.
         private bool _isConstrainedToGround = true;
         private float _unconstrainedTimer;
 
@@ -178,13 +259,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
         #endregion
 
-        #region Private Fields - Animation
+        #region Private Fields - Rotation
 
-        private bool _isUsingAnimancer;
-        private bool _isUsingHybridAnimancer;
-        private Animator _hybridAnimancerAnimator;
-        private Animator _cachedTargetAnimator;
-        private Dictionary<int, string> _cachedParameterMap;
         private static readonly float3 UnityUpVector = new float3(0, 1, 0);
 
         #endregion
@@ -195,7 +271,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         private Vector3 _inheritedPlatformVelocity;
         private Vector3 _lastGroundVelocity;
 
-        // For smooth platform following in LateUpdate
         private Vector3 _lastPlatformPosAtFixedUpdate;
         private Quaternion _lastPlatformRotAtFixedUpdate;
 
@@ -207,16 +282,13 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         private Vector3 _pendingForce;
         private float _gapBridgeCooldown;
 
-        // Coyote time and jump buffer (mirrors 2D behavior)
         private float _coyoteTimeCounter;
         private float _jumpBufferCounter;
 
         #endregion
 
-        // Use fixedDeltaTime in FixedUpdate context for physics consistency
         private float DeltaTime => (ignoreTimeScale ? Time.fixedUnscaledDeltaTime : Time.fixedDeltaTime) * LocalTimeScale;
 
-        // Use collisionLayer if set, otherwise fall back to groundLayer
         private LayerMask CollisionLayers => config != null && config.CollisionLayer != 0
             ? config.CollisionLayer
             : (config != null ? config.GroundLayer : Physics.DefaultRaycastLayers);
@@ -240,15 +312,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             InitializeRigidbody();
             InitializeCapsule();
-            SetupAnimationController();
-            PreWarmAnimationParameters();
             InitializeContext();
 
-            _currentState = StatePool<MovementStateBase>.GetState<IdleState>();
+            _currentState = _statePool.Get<IdleState>();
             _currentRotation = transform.rotation;
-            CacheTargetAnimator();
 
-            // Auto-find MovementAuthority if not set
             if (MovementAuthority == null)
             {
                 MovementAuthority = GetComponent<IMovementAuthority>();
@@ -263,9 +331,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
         private void FixedUpdate()
         {
+            SyncRootMotionTimeSource();
+            if (_deterministicStep != null && _deterministicStep.Step(DeltaTime)) return;
             if (_currentState == null)
             {
-                _currentState = StatePool<MovementStateBase>.GetState<IdleState>();
+                _currentState = _statePool.Get<IdleState>();
                 _currentState?.OnEnter(ref _context);
             }
 
@@ -280,17 +350,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             HandleCoyoteTime(deltaTime);
             HandleJumpBuffer(deltaTime);
 
-            // Use transform.position for stability (rigidbody.position may be interpolated)
             _updatedPosition = transform.position;
 
-            // Moving platform: First apply platform movement using LAST frame's localPosition
-            // This moves the character WITH the platform before any other processing
             ApplyMovingPlatform();
 
-            // Update context (ground detection, etc.) - uses _updatedPosition which now includes platform movement
             UpdateContext();
 
-            // Now update platform tracking with current ground info
             UpdateMovingPlatformTracking();
 
             if (_context.IsGrounded && config != null && config.EnableGapBridging)
@@ -299,11 +364,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             ExecuteStateMachine();
             ApplyPendingForces();
 
-            // Update moving platform local position AFTER character movement
-            // This ensures next frame's ApplyMovingPlatform uses the correct offset
             UpdateMovingPlatformLocalPosition();
 
-            // Save platform state at end of FixedUpdate for LateUpdate interpolation
             if (_movingPlatform.isOnPlatform && _movingPlatform.platformTransform != null)
             {
                 _lastPlatformPosAtFixedUpdate = _movingPlatform.platformTransform.position;
@@ -311,35 +373,24 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
         }
 
-        /// <summary>
-        /// LateUpdate handles smooth visual following for moving platforms.
-        /// Since platforms often move in Update (e.g., LitMotion, DOTween), 
-        /// we need to compensate for platform movement that occurred after FixedUpdate.
-        /// </summary>
         private void LateUpdate()
         {
             if (!smoothPlatformFollow) return;
             if (!_movingPlatform.isOnPlatform || _movingPlatform.platformTransform == null) return;
 
-            // Get current platform state
             Vector3 currentPlatformPos = _movingPlatform.platformTransform.position;
 
-            // Calculate how much the platform moved since we last synced
             Vector3 platformPosDelta = currentPlatformPos - _lastPlatformPosAtFixedUpdate;
 
-            // Only apply if platform actually moved (avoid floating point noise)
             if (platformPosDelta.sqrMagnitude < 0.0000001f)
                 return;
 
-            // Simply add platform delta to character position
             Vector3 newPos = transform.position + platformPosDelta;
             transform.position = newPos;
             _rigidbody.position = newPos;
 
-            // Update tracking for next frame
             _lastPlatformPosAtFixedUpdate = currentPlatformPos;
 
-            // Keep localPosition in sync so FixedUpdate doesn't fight with us
             _movingPlatform.UpdateLocalPosition(newPos);
         }
 
@@ -367,11 +418,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         {
             _radius = _capsuleCollider.radius;
             _height = _capsuleCollider.height;
-            _capsuleCollider.direction = 1; // Y-axis
+            _capsuleCollider.direction = 1;
 
             if (config != null)
             {
-                // cosine of slope limit angle - surfaces with normal.y >= this are walkable
                 _minSlopeLimit = Mathf.Cos(config.SlopeLimit * Mathf.Deg2Rad);
             }
             else
@@ -392,95 +442,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             _capsuleBottomCenter = _capsuleCenter - Vector3.up * halfHeightMinusRadius;
         }
 
-        private void SetupAnimationController()
-        {
-            IAnimationController animationController = null;
-
-            if (animancerComponent != null)
-            {
-                Log.Warning(
-                    "[MovementComponent] External animation component is assigned, but no Movement animation integration has bound it yet. " +
-                    "Falling back to Unity Animator.");
-            }
-
-            if (animationController == null)
-            {
-                if (characterAnimator == null)
-                    characterAnimator = GetComponent<Animator>();
-                if (characterAnimator != null)
-                    animationController = new AnimatorAnimationController(characterAnimator);
-            }
-
-            _context.AnimationController = animationController;
-        }
-
-        public void SetExternalAnimationController(IAnimationController animationController, Animator targetAnimator, bool supportsRootMotion)
-        {
-            if (animationController == null)
-            {
-                Log.Warning("[MovementComponent] External animation controller is null.");
-                return;
-            }
-
-            _isUsingAnimancer = true;
-            _isUsingHybridAnimancer = supportsRootMotion;
-            _hybridAnimancerAnimator = targetAnimator;
-
-            if (_hybridAnimancerAnimator != null && characterAnimator == null)
-            {
-                characterAnimator = _hybridAnimancerAnimator;
-            }
-
-            _context.AnimationController = animationController;
-
-            CacheTargetAnimator();
-
-            if (useRootMotion && !supportsRootMotion)
-            {
-                Log.Warning("[MovementComponent] Root motion requires an external animation controller that supports root motion.");
-            }
-        }
-
-        private Dictionary<int, string> CreateParameterNameMap()
-        {
-            var map = new Dictionary<int, string>();
-            if (config == null) return map;
-
-            AddParameterToMap(map, config.MovementSpeedParameter);
-            AddParameterToMap(map, config.IsGroundedParameter);
-            AddParameterToMap(map, config.JumpTrigger);
-            AddParameterToMap(map, config.RollTrigger);
-
-            return map;
-        }
-
-        private void AddParameterToMap(Dictionary<int, string> map, string paramName)
-        {
-            if (!string.IsNullOrEmpty(paramName))
-            {
-                int hash = AnimationParameterCache.GetHash(paramName);
-                map[hash] = paramName;
-            }
-        }
-
-        private void PreWarmAnimationParameters()
-        {
-            if (config == null) return;
-            AnimationParameterCache.PreWarm(config.MovementSpeedParameter, config.IsGroundedParameter, config.JumpTrigger);
-            if (!string.IsNullOrEmpty(config.RollTrigger))
-                AnimationParameterCache.PreWarm(config.RollTrigger);
-        }
-
-        private void CacheTargetAnimator()
-        {
-            if (_isUsingHybridAnimancer && _hybridAnimancerAnimator != null)
-                _cachedTargetAnimator = _hybridAnimancerAnimator;
-            else if (characterAnimator != null && !_isUsingAnimancer)
-                _cachedTargetAnimator = characterAnimator;
-            else
-                _cachedTargetAnimator = null;
-        }
-
         private void InitializeContext()
         {
             _context = new MovementContext
@@ -493,7 +454,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 VerticalVelocity = kGroundedVerticalVelocity,
                 UseRootMotion = useRootMotion,
                 JumpCount = 0,
-                MovementAuthority = null
+                MovementAuthority = null,
+                StatePool = _statePool
             };
 
             _previousWorldUp = WorldUp;
@@ -524,30 +486,21 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             _context.DeltaTime = DeltaTime;
             _context.WorldUp = WorldUp;
             _context.WasGrounded = _context.IsGrounded;
-            _context.Config = config; // Ensure config is always up to date
+            _context.Config = config;
 
-            // Ground detection
             FindGround();
             _context.IsGrounded = _isGrounded && _isConstrainedToGround && _unconstrainedTimer <= 0;
             _context.IsOnNonWalkableSlope = _isOnNonWalkableSlope;
             _context.GroundNormal = _groundNormal;
 
-            // Root motion handling
-            if (useRootMotion && _isUsingHybridAnimancer)
-                _context.UseRootMotion = true;
-            else if (useRootMotion && !_isUsingAnimancer && characterAnimator != null)
-                _context.UseRootMotion = true;
-            else if (!useRootMotion)
-                _context.UseRootMotion = false;
+            _context.UseRootMotion = useRootMotion;
 
-            // Project vertical velocity onto new WorldUp when it changes mid-air
             if (_worldUpChanged && !_context.IsGrounded)
             {
                 Vector3 prevVertical = _previousWorldUp * _context.VerticalVelocity;
                 _context.VerticalVelocity = Vector3.Dot(prevVertical, WorldUp);
             }
 
-            // Reset jump count on landing
             bool isAirState = _currentState != null &&
                              (_currentState.StateType == MovementStateType.Jump ||
                               _currentState.StateType == MovementStateType.Fall);
@@ -564,40 +517,38 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             _previousWorldUp = WorldUp;
 
-            // Update animation grounded parameter
-            if (_context.AnimationController != null && _context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(config.IsGroundedParameter);
-                _context.AnimationController.SetBool(hash, _context.IsGrounded);
-            }
-
-            // Sync root motion
-            if (_cachedTargetAnimator != null)
-            {
-                bool shouldUseRootMotion = _context.UseRootMotion && useRootMotion;
-                if (_cachedTargetAnimator.applyRootMotion != shouldUseRootMotion)
-                    _cachedTargetAnimator.applyRootMotion = shouldUseRootMotion;
-            }
-
             _context.MovementAuthority = MovementAuthority;
 
 #if UNITY_EDITOR
-            // Update runtime debug info
             _debugConfigAssigned = config != null;
             _debugConfigRunSpeed = config != null ? config.RunSpeed : -1f;
             _debugCurrentSpeed = _context.CurrentSpeed;
             _debugDeltaTime = DeltaTime;
-            _debugCurrentState = _currentState?.StateType.ToString() ?? "None";
+            int debugStateId = _currentState != null ? (int)_currentState.StateType : -1;
+            if (debugStateId != _lastDebugStateId)
+            {
+                _lastDebugStateId = debugStateId;
+                _debugCurrentState = debugStateId >= 0
+                    ? ((MovementStateType)debugStateId).ToString()
+                    : "None";
+            }
             _debugInputDirection = _context.InputDirection;
             _debugInputMagnitude = math.length(_context.InputDirection);
 
-            // Moving platform debug info
             _debugOnPlatform = _movingPlatform.isOnPlatform;
-            _debugPlatformName = _movingPlatform.platformTransform != null ? _movingPlatform.platformTransform.name : "None";
+            Transform platformTransform = _movingPlatform.platformTransform;
+            if (platformTransform != _lastDebugPlatformTransform)
+            {
+                _lastDebugPlatformTransform = platformTransform;
+                _debugPlatformName = platformTransform != null ? platformTransform.name : "None";
+            }
             _debugPlatformVelocity = _movingPlatform.platformVelocity;
             _debugLocalPosition = _movingPlatform.localPosition;
-            // _debugPlatformDeltaPos is set in ApplyMovingPlatform
-            _debugGroundColliderName = _groundCollider != null ? _groundCollider.name : "None";
+            if (_groundCollider != _lastDebugGroundCollider)
+            {
+                _lastDebugGroundCollider = _groundCollider;
+                _debugGroundColliderName = _groundCollider != null ? _groundCollider.name : "None";
+            }
             _debugGroundHasRigidbody = _groundCollider != null && _groundCollider.attachedRigidbody != null;
             if (_groundCollider != null && config != null)
             {
@@ -615,7 +566,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         {
             if (_currentState == null)
             {
-                _currentState = StatePool<MovementStateBase>.GetState<IdleState>();
+                _currentState = _statePool.Get<IdleState>();
                 _currentState?.OnEnter(ref _context);
                 if (_currentState == null) return;
             }
@@ -623,13 +574,28 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             float3 displacement;
             _currentState.OnUpdate(ref _context, out displacement);
 
-            bool shouldUseRootMotion = _context.UseRootMotion && useRootMotion && _cachedTargetAnimator != null && _cachedTargetAnimator.applyRootMotion;
+            MovementRootMotionDelta captured = default;
+            if (_rootMotionSource != null && _rootMotionSource.TryConsume(out captured))
+                _rootMotionAccumulator.Push(in captured);
+            else if (!useRootMotion)
+                _rootMotionAccumulator.Discard();
+            MovementRootMotionDelta stepDelta = default;
+            bool rootMotionAvailable = _rootMotionAccumulator.TryConsumeStep(DeltaTime, out stepDelta);
+            bool shouldUseRootMotion = useRootMotion && rootMotionAvailable;
+            _rootMotionAppliedThisStep = shouldUseRootMotion;
+            _rootMotionYawThisStep = shouldUseRootMotion ? stepDelta.YawVelocity : 0f;
 
-            if (!shouldUseRootMotion)
+            Vector3 desiredVelocity;
+            if (shouldUseRootMotion)
             {
-                Vector3 desiredVelocity = (Vector3)displacement / Mathf.Max(DeltaTime, 0.0001f);
+                MovementVector3 rootVelocity = stepDelta.LinearVelocity;
+                desiredVelocity = new Vector3(rootVelocity.X, rootVelocity.Y, rootVelocity.Z)
+                    + WorldUp * _context.VerticalVelocity;
+            }
+            else
+            {
+                desiredVelocity = (Vector3)displacement / Mathf.Max(DeltaTime, 0.0001f);
 
-                // Track momentum for air movement
                 if (_context.IsGrounded)
                 {
                     Vector3 horizontal = new Vector3(displacement.x, 0, displacement.z);
@@ -637,7 +603,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 }
                 else
                 {
-                    // Apply inherited momentum in air
                     Vector3 totalInherited = _inheritedPlatformVelocity + _lastGroundVelocity;
                     if (totalInherited.sqrMagnitude > kMinSqrMagnitude)
                     {
@@ -652,40 +617,40 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                     }
                 }
 
-                PerformMovement(desiredVelocity, DeltaTime);
-
-#if UNITY_EDITOR
-                _debugActualVelocity = _velocity;
-                _debugActualSpeed = _velocity.magnitude;
-#endif
             }
 
-            // Evaluate state transitions
+            if (_movementLayers != null)
+            {
+                var layerFrame = new MovementLayerFrame(
+                    ++_layerSequence, DeltaTime,
+                    new MovementVector3(desiredVelocity.x, desiredVelocity.y, desiredVelocity.z),
+                    new MovementVector3(WorldUp.x, WorldUp.y, WorldUp.z),
+                    _context.IsGrounded);
+                MovementLayerOutput layers = _movementLayers.Resolve(in layerFrame);
+                desiredVelocity += new Vector3(
+                    layers.VelocityDelta.X, layers.VelocityDelta.Y, layers.VelocityDelta.Z);
+                desiredVelocity += new Vector3(
+                    layers.PositionDelta.X, layers.PositionDelta.Y, layers.PositionDelta.Z)
+                    / Mathf.Max(DeltaTime, 0.0001f);
+            }
+
+            PerformMovement(desiredVelocity, DeltaTime);
+
+#if UNITY_EDITOR
+            _debugActualVelocity = _velocity;
+            _debugActualSpeed = _velocity.magnitude;
+#endif
+
             MovementStateBase nextState = _currentState.EvaluateTransition(ref _context);
             if (nextState != null && nextState != _currentState)
                 RequestStateChangeInternal(nextState);
 
-            // Update rotation
             if (math.lengthsq(_lookDirection) > kMinSqrMagnitude)
                 UpdateRotation();
             else
                 UpdateRotationForWorldUp();
-        }
 
-        private void OnAnimatorMove()
-        {
-            if (!useRootMotion || !_context.UseRootMotion || _cachedTargetAnimator == null)
-                return;
-            if (!_cachedTargetAnimator.applyRootMotion)
-                return;
-
-            Vector3 rootMotionDelta = _cachedTargetAnimator.deltaPosition;
-            if (rootMotionDelta.sqrMagnitude > kMinSqrMagnitude)
-            {
-                Vector3 desiredVelocity = rootMotionDelta / Mathf.Max(DeltaTime, 0.0001f);
-                desiredVelocity += WorldUp * _context.VerticalVelocity;
-                PerformMovement(desiredVelocity, DeltaTime);
-            }
+            PublishAnimationFrame();
         }
 
         #endregion
@@ -698,10 +663,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             _collisionCount = 0;
             _hasLanded = false;
 
-            // Resolve initial overlaps first
             ResolveOverlaps();
 
-            // If grounded, project velocity onto ground plane
             if (_isGrounded && _isConstrainedToGround && _unconstrainedTimer <= 0)
             {
                 _velocity = Vector3.ProjectOnPlane(_velocity, WorldUp);
@@ -709,17 +672,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             Vector3 displacement = _velocity * deltaTime;
 
-            // Skip movement logic if negligible, but still apply position
-            // (important for moving platform - _updatedPosition may have been modified)
             if (displacement.sqrMagnitude < kMinMoveDistanceSqr)
             {
-                // Even with small displacement, we need to snap to ground if grounded
-                // This is critical for landing from stationary jumps
                 if (_isGrounded && _isConstrainedToGround)
                 {
                     AdjustGroundHeight();
 
-                    // If we were in air (had vertical velocity), clear it and reset timer
                     if (_context.VerticalVelocity < 0)
                     {
                         _context.VerticalVelocity = kGroundedVerticalVelocity;
@@ -727,13 +685,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                     }
                 }
 
-                // Apply position for kinematic rigidbody
                 _rigidbody.position = _updatedPosition;
                 transform.position = _updatedPosition;
                 return;
             }
 
-            // Pre-check: If grounded, probe ahead for non-walkable slopes and block early
             if (_isGrounded && _isConstrainedToGround && _unconstrainedTimer <= 0)
             {
                 Vector3 probeDir = Vector3.ProjectOnPlane(displacement, WorldUp).normalized;
@@ -741,14 +697,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 {
                     if (ProbeForNonWalkableSlope(probeDir, displacement.magnitude, out Vector3 blockingNormal))
                     {
-                        // Block horizontal movement into non-walkable slope
                         displacement = Vector3.ProjectOnPlane(displacement, blockingNormal);
                         _velocity = Vector3.ProjectOnPlane(_velocity, blockingNormal);
                     }
                 }
             }
 
-            // If grounded, reorient displacement along ground normal (slope handling)
             if (_isGrounded && _isConstrainedToGround && _unconstrainedTimer <= 0)
             {
                 displacement = ComputeTangentToSurface(displacement, _groundNormal);
@@ -756,7 +710,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             Vector3 inputDisplacement = displacement;
 
-            // Iterative collision detection and slide
             int iteration = 0;
             Vector3 prevNormal = Vector3.zero;
             int maxSlideCount = kMaxMovementIterations;
@@ -767,30 +720,25 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
                 if (!collided)
                 {
-                    // No collision - apply full displacement
                     _updatedPosition += displacement;
                     break;
                 }
 
-                // Move to hit point
                 _updatedPosition += collisionResult.displacementToHit;
                 displacement = collisionResult.remainingDisplacement;
 
-                // If grounded and hit non-walkable, try step up
                 if (_isGrounded && !collisionResult.isWalkable && collisionResult.hitLocation == HitLocation.Sides)
                 {
                     if (config != null && config.StepHeight > 0f)
                     {
                         if (TryStepUp(ref displacement, collisionResult))
                         {
-                            // Step succeeded, displacement consumed
                             displacement = Vector3.zero;
                             break;
                         }
                     }
                 }
 
-                // Check for landing (falling and hit ground)
                 if (!_isGrounded && collisionResult.hitLocation == HitLocation.Below)
                 {
                     if (collisionResult.isWalkable)
@@ -802,32 +750,25 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                     }
                     else
                     {
-                        // Hit non-walkable ground - update ground info but don't land
                         _foundGround.SetFromSweepResult(true, false, _updatedPosition,
                             collisionResult.hitResult.distance, ref collisionResult.hitResult, collisionResult.surfaceNormal);
                     }
                 }
 
-                // Slide along the surface
                 iteration = SlideAlongSurface(iteration, inputDisplacement, ref _velocity, ref displacement,
                     ref collisionResult, ref prevNormal);
 
-                // Cache collision
                 if (_collisionCount < kMaxHitCount)
                 {
                     _collisionResults[_collisionCount++] = collisionResult;
                 }
             }
 
-            // Apply remaining displacement
             if (displacement.sqrMagnitude > kMinMoveDistanceSqr)
             {
                 _updatedPosition += displacement;
             }
 
-            // Snap to ground when grounded or just landed
-            // Note: _hasLanded overrides _unconstrainedTimer check because landing detection is more reliable
-            // during the transition from air to ground (e.g., after jump)
             bool canSnapToGround = _isConstrainedToGround &&
                 ((_isGrounded && _unconstrainedTimer <= 0) || _hasLanded);
 
@@ -835,34 +776,28 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             {
                 AdjustGroundHeight();
 
-                // Discard vertical velocity component but preserve horizontal speed
                 _velocity = Vector3.ProjectOnPlane(_velocity, WorldUp);
 
-                // If we just landed, clear the unconstrained timer to re-enable ground constraints
                 if (_hasLanded && _unconstrainedTimer > 0)
                 {
                     _unconstrainedTimer = 0;
                 }
             }
 
-            // Apply slope sliding - on non-walkable ground OR when we hit non-walkable slopes during movement
             bool shouldSlide = _isGrounded && _isConstrainedToGround && _unconstrainedTimer <= 0;
             if (shouldSlide)
             {
-                // Check if we're on non-walkable ground
                 if (!_currentGround.isWalkable && _currentGround.hitGround)
                 {
                     ApplySlopeSliding(deltaTime, _currentGround.surfaceNormal);
                 }
                 else
                 {
-                    // Check if we hit any non-walkable surfaces during movement
                     for (int i = 0; i < _collisionCount; i++)
                     {
                         ref CollisionResult col = ref _collisionResults[i];
                         if (!col.isWalkable && col.hitLocation == HitLocation.Sides)
                         {
-                            // Check if this is a steep slope (has upward component)
                             float verticalDot = Vector3.Dot(col.surfaceNormal, WorldUp);
                             if (verticalDot > kHemisphereLimit && verticalDot < _minSlopeLimit)
                             {
@@ -874,14 +809,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 }
             }
 
-            // Apply final position
             _rigidbody.position = _updatedPosition;
             transform.position = _updatedPosition;
         }
 
-        /// <summary>
-        /// Sweeps the capsule along displacement vector, detecting collisions.
-        /// </summary>
         private bool MovementSweepTest(Vector3 characterPosition, Vector3 inVelocity, Vector3 displacement,
             out CollisionResult collisionResult)
         {
@@ -895,7 +826,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             float sweepRadius = _radius - kContactOffset;
 
-            // Compute capsule endpoints
             Vector3 top = characterPosition + transform.rotation * _capsuleTopCenter;
             Vector3 bottom = characterPosition + transform.rotation * _capsuleBottomCenter;
 
@@ -905,7 +835,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             if (hitCount == 0)
                 return false;
 
-            // Find closest valid hit
             float closestDist = float.MaxValue;
             int closestIdx = -1;
             bool startPenetrating = false;
@@ -932,19 +861,16 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             if (closestIdx < 0)
             {
-                // Only penetration, no valid hit
                 return startPenetrating;
             }
 
             RaycastHit hitResult = _hits[closestIdx];
             HitLocation hitLocation = ComputeHitLocation(hitResult.normal);
 
-            // Compute actual displacement to hit
             float safeDistance = Mathf.Max(0f, hitResult.distance - kContactOffset);
             Vector3 displacementToHit = sweepDirection * safeDistance;
             Vector3 remainingDisplacement = displacement - displacementToHit;
 
-            // Get surface normal (may differ from hit normal for geometry)
             Vector3 surfaceNormal = hitResult.normal;
             bool isWalkable = false;
             bool hitGround = hitLocation == HitLocation.Below;
@@ -954,14 +880,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 surfaceNormal = FindSurfaceNormal(hitResult);
                 isWalkable = IsWalkable(hitResult.collider, surfaceNormal);
 
-                // If we're grounded and hit a non-walkable "ground" while moving horizontally,
-                // treat it as a side hit (wall/barrier) to block movement
                 if (_isGrounded && !isWalkable)
                 {
                     Vector3 horizontalDisp = Vector3.ProjectOnPlane(displacement, WorldUp);
                     if (horizontalDisp.sqrMagnitude > kKindaSmallNumber)
                     {
-                        // Check if the slope opposes our movement
                         Vector3 horizontalNormal = Vector3.ProjectOnPlane(surfaceNormal, WorldUp);
                         if (horizontalNormal.sqrMagnitude > kKindaSmallNumber &&
                             Vector3.Dot(horizontalNormal.normalized, horizontalDisp.normalized) < 0f)
@@ -988,15 +911,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 hitResult = hitResult
             };
 
-            // Adjust blocking normal for non-walkable surfaces
             collisionResult.normal = ComputeBlockingNormal(collisionResult.normal, isWalkable);
 
             return true;
         }
 
-        /// <summary>
-        /// Computes where on the capsule a hit occurred based on normal.
-        /// </summary>
         private HitLocation ComputeHitLocation(Vector3 normal)
         {
             float verticalComponent = Vector3.Dot(normal, WorldUp);
@@ -1007,15 +926,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             return verticalComponent < -kHemisphereLimit ? HitLocation.Above : HitLocation.Sides;
         }
 
-        /// <summary>
-        /// Computes the blocking normal for a hit surface.
-        /// For non-walkable surfaces when grounded, projects to horizontal to prevent climbing.
-        /// </summary>
         private Vector3 ComputeBlockingNormal(Vector3 inNormal, bool isWalkable)
         {
             if ((_isGrounded || _hasLanded) && !isWalkable)
             {
-                // Project to horizontal to block vertical movement up unwalkable slopes
                 Vector3 actualGroundNormal = _hasLanded ? _foundGround.surfaceNormal : _groundNormal;
 
                 Vector3 forward = Vector3.Cross(actualGroundNormal, inNormal);
@@ -1033,26 +947,19 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             return inNormal;
         }
 
-        /// <summary>
-        /// Slides movement along a surface after collision.
-        /// </summary>
         private int SlideAlongSurface(int iteration, Vector3 inputDisplacement, ref Vector3 inVelocity,
             ref Vector3 displacement, ref CollisionResult inHit, ref Vector3 prevNormal)
         {
-            // Compute blocking normal for non-walkable surfaces
-            // This prevents the character from being pushed up steep slopes
             Vector3 hitNormal = ComputeBlockingNormal(inHit.normal, inHit.isWalkable);
             inHit.normal = hitNormal;
 
             if (inHit.isWalkable && _isConstrainedToGround && _unconstrainedTimer <= 0)
             {
-                // Walkable slope - slide along surface
                 inVelocity = ComputeSlideVector(inVelocity, hitNormal, true);
                 displacement = ComputeSlideVector(displacement, hitNormal, true);
             }
             else
             {
-                // Non-walkable surface or in air
                 if (iteration == 0)
                 {
                     inVelocity = ComputeSlideVector(inVelocity, hitNormal, inHit.isWalkable);
@@ -1061,7 +968,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 }
                 else if (iteration == 1)
                 {
-                    // Hit second surface - find crease between surfaces
                     Vector3 crease = Vector3.Cross(prevNormal, hitNormal);
 
                     if (crease.sqrMagnitude > kKindaSmallNumber)
@@ -1074,7 +980,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
                         if (Vector3.Dot(oVel, nVel) <= 0f || Vector3.Dot(prevNormal, hitNormal) < 0f)
                         {
-                            // Opposing surfaces - slide along crease only
                             inVelocity = Vector3.Project(inVelocity, crease);
                             displacement = Vector3.Project(displacement, crease);
                             iteration++;
@@ -1093,7 +998,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 }
                 else
                 {
-                    // Hit too many surfaces - stop
                     inVelocity = Vector3.zero;
                     displacement = Vector3.zero;
                 }
@@ -1104,29 +1008,21 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             return iteration;
         }
 
-        /// <summary>
-        /// Computes slide vector along a surface.
-        /// </summary>
         private Vector3 ComputeSlideVector(Vector3 displacement, Vector3 normal, bool isWalkable)
         {
             if (_isGrounded && _isConstrainedToGround && _unconstrainedTimer <= 0)
             {
                 if (isWalkable)
                 {
-                    // Slide along walkable slope - reorient along surface
                     return ComputeTangentToSurface(displacement, normal);
                 }
                 else
                 {
-                    // Non-walkable surface (steep slope)
-                    // Find the direction along the intersection of ground plane and blocking normal
                     Vector3 right = Vector3.Cross(normal, _groundNormal);
                     Vector3 up = Vector3.Cross(right, normal);
 
-                    // Project displacement onto blocking plane
                     Vector3 result = Vector3.ProjectOnPlane(displacement, normal);
 
-                    // Then reorient along the intersection with ground (tangent to up)
                     result = ComputeTangentToSurface(result, up);
 
                     return result;
@@ -1134,10 +1030,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
             else
             {
-                // In air - standard slide
                 if (isWalkable)
                 {
-                    // Project displacement onto horizontal, then onto surface
                     if (_isConstrainedToGround)
                         displacement = Vector3.ProjectOnPlane(displacement, WorldUp);
                     return Vector3.ProjectOnPlane(displacement, normal);
@@ -1146,7 +1040,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 {
                     Vector3 result = Vector3.ProjectOnPlane(displacement, normal);
 
-                    // Prevent slope boosting when falling
                     if (_isConstrainedToGround)
                         result = HandleSlopeBoosting(result, displacement, normal);
 
@@ -1155,9 +1048,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
         }
 
-        /// <summary>
-        /// Prevents slope boosting - limits upward deflection when falling.
-        /// </summary>
         private Vector3 HandleSlopeBoosting(Vector3 slideResult, Vector3 displacement, Vector3 normal)
         {
             float yResult = Vector3.Dot(slideResult, WorldUp);
@@ -1176,7 +1066,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                         slideResult = Vector3.zero;
                     }
 
-                    // Redistribute remaining horizontal displacement parallel to impact normal
                     Vector3 lateralRemainder = Vector3.ProjectOnPlane(displacement - slideResult, WorldUp);
                     Vector3 lateralNormal = Vector3.ProjectOnPlane(normal, WorldUp).normalized;
                     Vector3 adjust = Vector3.ProjectOnPlane(lateralRemainder, lateralNormal);
@@ -1186,9 +1075,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             return slideResult;
         }
 
-        /// <summary>
-        /// Computes displacement tangent to a surface (for slope walking).
-        /// </summary>
         private Vector3 ComputeTangentToSurface(Vector3 displacement, Vector3 surfaceNormal)
         {
             Vector3 right = Vector3.Cross(displacement, surfaceNormal);
@@ -1199,9 +1085,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             return tangent.normalized * displacement.magnitude;
         }
 
-        /// <summary>
-        /// Attempts to step up onto an obstacle.
-        /// </summary>
         private bool TryStepUp(ref Vector3 displacement, CollisionResult obstacleHit)
         {
             if (config == null || config.StepHeight <= 0f) return false;
@@ -1214,7 +1097,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             float forwardDist = displacement.magnitude;
 
-            // Step 1: Move up
             Vector3 stepUpPos = _updatedPosition + WorldUp * stepHeight;
 
             Vector3 top = _updatedPosition + transform.rotation * _capsuleTopCenter;
@@ -1232,7 +1114,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 }
             }
 
-            // Step 2: Move forward at step height
             Vector3 stepTop = stepUpPos + transform.rotation * _capsuleTopCenter;
             Vector3 stepBottom = stepUpPos + transform.rotation * _capsuleBottomCenter;
 
@@ -1249,7 +1130,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             Vector3 stepForwardPos = stepUpPos + forwardDir * actualForwardDist;
 
-            // Step 3: Move down to find ground
             Vector3 finalTop = stepForwardPos + transform.rotation * _capsuleTopCenter;
             Vector3 finalBottom = stepForwardPos + transform.rotation * _capsuleBottomCenter;
             float downDist = stepHeight + kMaxGroundDistance * 2f;
@@ -1264,7 +1144,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             if (!IsWalkable(downHit.collider, surfaceNormal))
                 return false;
 
-            // Apply step
             float downOffset = Mathf.Max(0f, downHit.distance - kContactOffset);
             _updatedPosition = stepForwardPos - WorldUp * downOffset;
             _groundNormal = surfaceNormal;
@@ -1273,10 +1152,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             return true;
         }
 
-        /// <summary>
-        /// Applies sliding force on non-walkable slopes.
-        /// Character will slide down slopes steeper than slopeLimit.
-        /// </summary>
         private void ApplySlopeSliding(float deltaTime, Vector3 slopeNormal)
         {
             if (config == null)
@@ -1285,28 +1160,22 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             float slopeDot = Vector3.Dot(slopeNormal, WorldUp);
             float slopeAngle = Mathf.Acos(Mathf.Clamp01(slopeDot)) * Mathf.Rad2Deg;
 
-            // Only slide on slopes steeper than limit
             if (slopeAngle <= config.SlopeLimit)
                 return;
 
-            // Calculate slide direction (down the slope, perpendicular to normal in vertical plane)
             Vector3 slideDirection = Vector3.ProjectOnPlane(-WorldUp, slopeNormal);
             if (slideDirection.sqrMagnitude < kKindaSmallNumber)
                 return;
             slideDirection = slideDirection.normalized;
 
-            // Slide speed increases with slope angle
-            // At slopeLimit: 0, at 90 degrees: full gravity
             float angleRatio = (slopeAngle - config.SlopeLimit) / (90f - config.SlopeLimit);
             angleRatio = Mathf.Clamp01(angleRatio);
 
-            // Apply gravity-based sliding
             float slideAcceleration = Mathf.Abs(config.Gravity) * angleRatio;
             float slideSpeed = slideAcceleration * deltaTime;
 
             Vector3 slideDisplacement = slideDirection * slideSpeed;
 
-            // Check for obstacles in slide direction
             Vector3 top = _updatedPosition + transform.rotation * _capsuleTopCenter;
             Vector3 bottom = _updatedPosition + transform.rotation * _capsuleBottomCenter;
             float sweepRadius = _radius - kContactOffset;
@@ -1316,7 +1185,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             {
                 if (!ShouldIgnore(slideHit.collider))
                 {
-                    // Hit something - limit slide
                     float safeDist = Mathf.Max(0f, slideHit.distance - kContactOffset);
                     slideDisplacement = slideDirection * safeDist;
                 }
@@ -1328,21 +1196,15 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
         }
 
-        /// <summary>
-        /// Probes ahead in the horizontal direction to detect non-walkable slopes.
-        /// Returns true if a non-walkable slope is found, with the blocking normal.
-        /// </summary>
         private bool ProbeForNonWalkableSlope(Vector3 probeDirection, float probeDistance, out Vector3 blockingNormal)
         {
             blockingNormal = Vector3.zero;
 
-            // Use a short probe distance to check for immediate obstacles
             float actualProbeDistance = Mathf.Max(_radius + kContactOffset, probeDistance);
 
-            // Compute capsule points - raise slightly to avoid ground
             Vector3 top = _updatedPosition + transform.rotation * _capsuleTopCenter;
             Vector3 bottom = _updatedPosition + transform.rotation * _capsuleBottomCenter;
-            bottom += WorldUp * (kContactOffset * 2f); // Raise to avoid current ground
+            bottom += WorldUp * (kContactOffset * 2f);
 
             float sweepRadius = _radius - kContactOffset;
 
@@ -1359,24 +1221,18 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 if (hit.distance <= 0f)
                     continue;
 
-                // Check if this is a steep slope (not walkable) opposing our movement
                 Vector3 surfaceNormal = FindSurfaceNormal(hit);
                 float verticalDot = Vector3.Dot(surfaceNormal, WorldUp);
 
-                // Is it a slope/ground (normal points somewhat up)?
                 if (verticalDot > kHemisphereLimit)
                 {
-                    // Is it non-walkable (too steep)?
                     if (verticalDot < _minSlopeLimit)
                     {
-                        // Does it oppose our movement?
                         Vector3 horizontalNormal = Vector3.ProjectOnPlane(surfaceNormal, WorldUp);
                         if (horizontalNormal.sqrMagnitude > kKindaSmallNumber)
                         {
                             if (Vector3.Dot(horizontalNormal.normalized, probeDirection) < -0.1f)
                             {
-                                // This is a non-walkable slope blocking our path
-                                // Compute blocking normal (horizontal component only)
                                 blockingNormal = horizontalNormal.normalized;
                                 return true;
                             }
@@ -1392,9 +1248,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
         #region Ground Detection
 
-        /// <summary>
-        /// Performs comprehensive ground detection using sweep and raycast.
-        /// </summary>
         private void FindGround()
         {
             _wasGrounded = _isGrounded;
@@ -1406,7 +1259,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             if (config == null) return;
 
-            // Compute sweep distance - larger when previously grounded
             float heightCheckAdjust = _wasGrounded ? kMaxGroundDistance + kKindaSmallNumber : -kMaxGroundDistance;
             float sweepDistance = Mathf.Max(kMaxGroundDistance, config.StepHeight + heightCheckAdjust);
 
@@ -1423,14 +1275,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
             else if (_currentGround.hitGround)
             {
-                // Hit non-walkable ground (steep slope)
-                // Treat as NOT grounded so character will slide/fall
                 _groundNormal = _currentGround.surfaceNormal;
                 _groundPoint = _currentGround.point;
                 _groundCollider = _currentGround.collider;
                 _groundDistance = _currentGround.groundDistance;
 
-                // NOT grounded on non-walkable slopes - this makes character fall/slide
                 _isGrounded = false;
                 _isOnNonWalkableSlope = true;
             }
@@ -1440,9 +1289,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
         }
 
-        /// <summary>
-        /// Computes ground distance using sweep test with raycast fallback.
-        /// </summary>
         private void ComputeGroundDistance(Vector3 characterPosition, float sweepDistance, out FindGroundResult outGroundResult)
         {
             outGroundResult = default;
@@ -1450,17 +1296,14 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             float capsuleRadius = _radius;
             float capsuleHalfHeight = _height * 0.5f;
 
-            // Shrink capsule slightly to avoid false positives
             const float kShrinkScale = 0.9f;
             float shrinkHeight = (capsuleHalfHeight - capsuleRadius) * (1f - kShrinkScale);
             float actualSweepRadius = capsuleRadius - kContactOffset;
             float actualSweepDistance = sweepDistance + shrinkHeight;
 
-            // Compute capsule points
             Vector3 top = characterPosition + transform.rotation * _capsuleTopCenter;
             Vector3 bottom = characterPosition + transform.rotation * _capsuleBottomCenter;
 
-            // Shrink bottom up slightly
             bottom += WorldUp * shrinkHeight;
 
             bool foundGround = Physics.CapsuleCast(bottom, top, actualSweepRadius, -WorldUp, out RaycastHit hitResult,
@@ -1474,7 +1317,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 }
                 else
                 {
-                    // Check if hit is on bottom hemisphere
                     HitLocation hitLocation = ComputeHitLocation(hitResult.normal);
                     if (hitLocation != HitLocation.Below)
                     {
@@ -1485,7 +1327,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             if (foundGround)
             {
-                // Adjust distance for shrink
                 float adjustedDistance = Mathf.Max(-kMaxGroundDistance, hitResult.distance - shrinkHeight);
 
                 Vector3 surfaceNormal = FindSurfaceNormal(hitResult);
@@ -1496,10 +1337,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
             else
             {
-                // Fallback to raycast for more accurate ground detection
                 float raycastDistance = sweepDistance + capsuleRadius;
 
-                // Ray from capsule center bottom
                 float capsuleBottomY = _capsuleCenter.y - capsuleHalfHeight;
                 Vector3 rayOrigin = characterPosition + WorldUp * (capsuleBottomY + capsuleRadius);
 
@@ -1511,7 +1350,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                         Vector3 surfaceNormal = FindSurfaceNormal(rayHit);
                         bool isWalkable = IsWalkable(rayHit.collider, surfaceNormal);
 
-                        // Ground distance from capsule bottom sphere
                         float groundDist = rayHit.distance - capsuleRadius;
 
                         outGroundResult.SetFromRaycastResult(true, isWalkable, characterPosition,
@@ -1521,13 +1359,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
         }
 
-        /// <summary>
-        /// Adjusts character height to maintain proper ground distance.
-        /// Uses sweep test to validate movement before applying.
-        /// </summary>
         private void AdjustGroundHeight()
         {
-            // If we have a ground check that hasn't hit anything walkable, don't adjust height.
             if (!_currentGround.isWalkableGround || !_isConstrainedToGround)
                 return;
 
@@ -1537,18 +1370,14 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             {
                 if (lastGroundDistance < kMinGroundDistance && _currentGround.raycastDistance >= kMinGroundDistance)
                 {
-                    // This would cause us to scale unwalkable walls
                     return;
                 }
                 else
                 {
-                    // Falling back to a raycast means the sweep was unwalkable (or in penetration).
-                    // Use the ray distance for the vertical adjustment.
                     lastGroundDistance = _currentGround.raycastDistance;
                 }
             }
 
-            // Move up or down to maintain ground height.
             if (lastGroundDistance < kMinGroundDistance || lastGroundDistance > kMaxGroundDistance)
             {
                 float initialY = Vector3.Dot(_updatedPosition, WorldUp);
@@ -1558,16 +1387,13 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 Vector3 sweepDirection = displacement.normalized;
                 float sweepDistance = displacement.magnitude;
 
-                // Compute capsule endpoints for sweep
                 Vector3 top = _updatedPosition + transform.rotation * _capsuleTopCenter;
                 Vector3 bottom = _updatedPosition + transform.rotation * _capsuleBottomCenter;
                 float sweepRadius = _radius - kContactOffset;
 
-                // Perform sweep test to validate movement
                 bool hit = Physics.CapsuleCast(bottom, top, sweepRadius, sweepDirection, out RaycastHit hitResult,
                     sweepDistance + kContactOffset, CollisionLayers, QueryTriggerInteraction.Ignore);
 
-                // Check for penetration
                 bool startPenetrating = false;
                 if (hit && hitResult.distance <= 0f)
                 {
@@ -1577,13 +1403,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
                 if (!hit && !startPenetrating)
                 {
-                    // No collision, apply full displacement
                     _updatedPosition += displacement;
                     _currentGround.groundDistance += moveDistance;
                 }
                 else if (hit && moveDistance > 0.0f)
                 {
-                    // Moving up - apply displacement up to hit
                     float safeDistance = Mathf.Max(0f, hitResult.distance - kContactOffset);
                     _updatedPosition += sweepDirection * safeDistance;
 
@@ -1592,7 +1416,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 }
                 else if (hit && moveDistance < 0.0f)
                 {
-                    // Moving down - apply displacement up to hit
                     float safeDistance = Mathf.Max(0f, hitResult.distance - kContactOffset);
                     _updatedPosition += sweepDirection * safeDistance;
 
@@ -1602,9 +1425,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
         }
 
-        /// <summary>
-        /// Gets the true surface normal, handling terrain and mesh surfaces.
-        /// </summary>
         private Vector3 FindSurfaceNormal(RaycastHit hit)
         {
 #if UNITY_TERRAIN_PHYSICS
@@ -1616,7 +1436,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
 #endif
 
-            // For mesh surfaces, do a raycast from above for accurate normal
             Vector3 rayOrigin = hit.point + WorldUp * 0.1f;
             if (Physics.Raycast(rayOrigin, -WorldUp, out RaycastHit rayHit, 0.2f, config.GroundLayer, QueryTriggerInteraction.Ignore))
             {
@@ -1627,17 +1446,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             return hit.normal;
         }
 
-        /// <summary>
-        /// Determines if a surface is walkable based on slope angle.
-        /// </summary>
         private bool IsWalkable(Collider inCollider, Vector3 inNormal)
         {
-            // Must be on bottom hemisphere
             float verticalComponent = Vector3.Dot(inNormal, WorldUp);
             if (verticalComponent <= kHemisphereLimit)
                 return false;
 
-            // Check against slope limit (use >= to include slopes at exactly the limit)
             return verticalComponent >= _minSlopeLimit;
         }
 
@@ -1645,9 +1459,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
         #region Collision Queries
 
-        /// <summary>
-        /// Resolves overlapping colliders by depenetrating the character.
-        /// </summary>
         private void ResolveOverlaps()
         {
             Vector3 top = _updatedPosition + transform.rotation * _capsuleTopCenter;
@@ -1663,13 +1474,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 if (ShouldIgnore(other))
                     continue;
 
-                // Use ComputePenetration for accurate depenetration
                 if (Physics.ComputePenetration(
                     _capsuleCollider, _updatedPosition, transform.rotation,
                     other, other.transform.position, other.transform.rotation,
                     out Vector3 direction, out float distance))
                 {
-                    // Apply separation with safety margin
                     _updatedPosition += direction * (distance + kPenetrationOffset);
                 }
             }
@@ -1692,10 +1501,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
         }
 
-        /// <summary>
-        /// Attempts to add or remove an explicit collision-ignore entry. Returns false only when
-        /// a new entry would exceed the implementation ceiling.
-        /// </summary>
         public bool TryIgnoreCollision(Collider other, bool ignore = true)
         {
             if (!ignore)
@@ -1723,7 +1528,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             return true;
         }
 
-        /// <summary>Returns an allocation-free O(1) retained-policy snapshot.</summary>
         public MovementComponentMemorySnapshot GetMemorySnapshot()
         {
             return new MovementComponentMemorySnapshot(
@@ -1747,8 +1551,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 return;
             }
 
-            // When smoothPlatformFollow is enabled, LateUpdate handles the visual smoothing
-            // FixedUpdate still needs to apply delta for correct physics, but we use a simpler approach
             Vector3 targetWorldPos = _movingPlatform.platformTransform.TransformPoint(_movingPlatform.localPosition);
             Vector3 deltaPos = targetWorldPos - transform.position;
 
@@ -1756,7 +1558,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             _debugPlatformDeltaPos = deltaPos;
 #endif
 
-            // Apply delta if significant
             if (deltaPos.sqrMagnitude > 0.0000001f && deltaPos.sqrMagnitude < 1f)
             {
                 _updatedPosition += deltaPos;
@@ -1803,10 +1604,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 {
                     if (_movingPlatform.platform != groundRb)
                     {
-                        // New platform - set up tracking
                         _movingPlatform.SetPlatform(groundRb, transform);
                     }
-                    // Existing platform - delta was already calculated in ApplyMovingPlatform
                     return;
                 }
             }
@@ -1814,16 +1613,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             if (_movingPlatform.isOnPlatform) _movingPlatform.Clear();
         }
 
-        /// <summary>
-        /// Updates the character's local position on the moving platform.
-        /// Called AFTER character movement to ensure next frame uses the correct offset.
-        /// </summary>
         private void UpdateMovingPlatformLocalPosition()
         {
             if (!_movingPlatform.isOnPlatform || _movingPlatform.platformTransform == null)
                 return;
 
-            // Update local position based on character's final position this frame
             _movingPlatform.UpdateLocalPosition(_updatedPosition);
             _movingPlatform.UpdateLocalRotation(transform.rotation);
         }
@@ -2109,11 +1903,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             MovementStateType newStateType = newState.StateType;
 
             _currentState?.OnExit(ref _context);
-            MovementAuthority?.OnStateExited(oldStateType);
+            if (MovementAuthority != null) MovementAuthority.OnStateExited(oldStateType);
 
             _currentState = newState;
             _currentState.OnEnter(ref _context);
-            MovementAuthority?.OnStateEntered(newStateType);
+            if (MovementAuthority != null) MovementAuthority.OnStateEntered(newStateType);
 
             OnStateChanged?.Invoke(oldStateType, newStateType);
 
@@ -2132,23 +1926,23 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         {
             return stateType switch
             {
-                MovementStateType.Idle => StatePool<MovementStateBase>.GetState<IdleState>(),
-                MovementStateType.Walk => StatePool<MovementStateBase>.GetState<WalkState>(),
-                MovementStateType.Run => StatePool<MovementStateBase>.GetState<RunState>(),
-                MovementStateType.Sprint => StatePool<MovementStateBase>.GetState<SprintState>(),
-                MovementStateType.Crouch => StatePool<MovementStateBase>.GetState<CrouchState>(),
-                MovementStateType.Jump => StatePool<MovementStateBase>.GetState<JumpState>(),
-                MovementStateType.Fall => StatePool<MovementStateBase>.GetState<FallState>(),
-                MovementStateType.Roll => StatePool<MovementStateBase>.GetState<RollState>(),
-                MovementStateType.Swim => StatePool<MovementStateBase>.GetState<SwimState>(),
-                MovementStateType.Fly => StatePool<MovementStateBase>.GetState<FlyState>(),
+                MovementStateType.Idle => _statePool.Get<IdleState>(),
+                MovementStateType.Walk => _statePool.Get<WalkState>(),
+                MovementStateType.Run => _statePool.Get<RunState>(),
+                MovementStateType.Sprint => _statePool.Get<SprintState>(),
+                MovementStateType.Crouch => _statePool.Get<CrouchState>(),
+                MovementStateType.Jump => _statePool.Get<JumpState>(),
+                MovementStateType.Fall => _statePool.Get<FallState>(),
+                MovementStateType.Roll => _statePool.Get<RollState>(),
+                MovementStateType.Swim => _statePool.Get<SwimState>(),
+                MovementStateType.Fly => _statePool.Get<FlyState>(),
                 MovementStateType.Climb => _context.ClimbingMode switch
                 {
-                    ClimbingMode.Ladder => StatePool<MovementStateBase>.GetState<LadderClimbState>(),
-                    ClimbingMode.Wall => StatePool<MovementStateBase>.GetState<WallClimbState>(),
+                    ClimbingMode.Ladder => _statePool.Get<LadderClimbState>(),
+                    ClimbingMode.Wall => _statePool.Get<WallClimbState>(),
                     _ => null
                 },
-                _ => StatePool<MovementStateBase>.GetState<IdleState>()
+                _ => _statePool.Get<IdleState>()
             };
         }
 
@@ -2251,83 +2045,257 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         public void MoveWithVelocity(Vector3 worldVelocity)
         {
             if (config == null) return;
-
             SetInputDirection(worldVelocity.normalized);
-
-            if (useRootMotion && _cachedTargetAnimator != null)
-            {
-                _context.UseRootMotion = true;
-                _cachedTargetAnimator.applyRootMotion = true;
-
-                float speed = worldVelocity.magnitude;
-                if (_context.AnimationController != null && _context.AnimationController.IsValid)
-                {
-                    int hash = AnimationParameterCache.GetHash(config.MovementSpeedParameter);
-                    _context.AnimationController.SetFloat(hash, speed);
-                }
-            }
         }
 
         public void SetUseRootMotion(bool enable)
         {
             useRootMotion = enable;
             _context.UseRootMotion = enable;
+        }
 
-            if (_cachedTargetAnimator != null)
-                _cachedTargetAnimator.applyRootMotion = enable;
-            else if (enable && _isUsingAnimancer && !_isUsingHybridAnimancer)
-                Log.Warning("[MovementComponent] Root motion requires HybridAnimancerComponent.");
+        #region Animation Presentation
+
+        protected virtual void PublishAnimationFrame()
+        {
+            MovementStepEvent events = _context.StepEvents;
+            _context.StepEvents = MovementStepEvent.None;
+
+            MovementStateType state = _currentState != null
+                ? _currentState.StateType
+                : MovementStateType.Idle;
+
+            events |= _animationFrame.DeriveEdges(
+                _context.IsGrounded,
+                state == MovementStateType.Climb,
+                _context.IsWallSliding,
+                state == MovementStateType.Swim,
+                state == MovementStateType.Fly);
+
+            if (!_presentationEnabled || _presentationPaused || _replayDepth > 0) return;
+
+            uint sequence = _animationFrame.AdvanceSequence();
+            MovementAnimationState frame = BuildAnimationFrame(state, sequence)
+                .WithSemanticState(_semanticStateId);
+            _lastPublishedState = frame;
+
+            if (_presentationBudget != null && !_presentationBudget.ShouldPublish(in frame, 0f)) return;
+
+            using (AnimationPublishMarker.Auto())
+            {
+                if (_locomotionSink != null) _locomotionSink.Apply(in frame);
+
+                if (_actionSink == null) return;
+                int count = MovementAnimationActionWriter.Write(events, sequence, _actionBuffer);
+                for (int i = 0; i < count; i++)
+                {
+                    MovementAnimationAction action = _actionBuffer[i];
+                    _actionSink.Play(in action);
+                }
+            }
+        }
+
+        private void OnApplicationPause(bool paused)
+        {
+            _presentationPaused = paused;
+            if (paused) _rootMotionAccumulator.Discard();
+        }
+
+        private void OnApplicationFocus(bool focused)
+        {
+            _presentationPaused = !focused;
+        }
+
+        protected virtual MovementAnimationState BuildAnimationFrame(MovementStateType state, uint sequence)
+        {
+            MovementAnimationFlags flags = MovementAnimationFlags.None;
+            if (_context.IsGrounded) flags |= MovementAnimationFlags.Grounded;
+            if (_context.SprintHeld) flags |= MovementAnimationFlags.Sprinting;
+            if (_context.CrouchHeld) flags |= MovementAnimationFlags.Crouching;
+            if (state == MovementStateType.Climb) flags |= MovementAnimationFlags.Climbing;
+            if (_context.IsWallSliding) flags |= MovementAnimationFlags.WallSliding;
+            if (state == MovementStateType.Swim) flags |= MovementAnimationFlags.Swimming;
+            if (state == MovementStateType.Fly) flags |= MovementAnimationFlags.Flying;
+            if (state == MovementStateType.Roll) flags |= MovementAnimationFlags.Rolling;
+            if (_context.IsWallJumping) flags |= MovementAnimationFlags.WallJumping;
+            if (_rootMotionAppliedThisStep) flags |= MovementAnimationFlags.RootMotionDriven;
+
+            MovementAnimationState frame = new MovementAnimationState(
+                sequence,
+                DeltaTime,
+                state,
+                flags,
+                new MovementVector3(_velocity.x, _velocity.y, _velocity.z),
+                new MovementVector3(_context.InputDirection.x, _context.InputDirection.z, 0f),
+                new MovementVector3(WorldUp.x, WorldUp.y, WorldUp.z),
+                new MovementVector3(_groundNormal.x, _groundNormal.y, _groundNormal.z),
+                new MovementVector3(_lookDirection.x, _lookDirection.z, 0f));
+            return frame.WithExtensions(_rootMotionAppliedThisStep ? 1u : 0u,
+                _rootMotionYawThisStep, 0f, 0f, 0f);
         }
 
         #endregion
 
+        #endregion
+
+#if UNITY_EDITOR
+        private int _lastDebugStateId = -1;
+        private Transform _lastDebugPlatformTransform;
+        private Collider _lastDebugGroundCollider;
+#endif
+
         #region Network Snapshot
+
+        public long NetworkTick { get; set; }
+        public double NetworkTimeSeconds { get; set; }
 
         public MovementSnapshot GetSnapshot()
         {
-            return new MovementSnapshot
-            {
-                Position = transform.position.ToMovementVector3(),
-                Velocity = _velocity.ToMovementVector3(),
-                WorldUp = WorldUp.ToMovementVector3(),
-                StateType = CurrentState,
-                VerticalVelocity = _context.VerticalVelocity,
-                IsGrounded = _context.IsGrounded,
-                JumpCount = _context.JumpCount,
-                Tick = Time.frameCount,
-                Timestamp = Time.time
-            };
+            MovementSnapshot snapshot = default;
+            snapshot.Position = transform.position.ToMovementVector3();
+            snapshot.Velocity = _velocity.ToMovementVector3();
+            snapshot.WorldUp = WorldUp.ToMovementVector3();
+            snapshot.StateId = (ushort)CurrentState;
+            snapshot.Flags = 0;
+            int jumps = _context.JumpCount;
+            snapshot.JumpCount = (byte)(jumps < 0 ? 0 : (jumps > 32 ? 32 : jumps));
+            snapshot.VerticalVelocity = _context.VerticalVelocity;
+            snapshot.IsGrounded = _context.IsGrounded;
+            snapshot.NetworkTick = NetworkTick;
+            snapshot.NetworkTimeSeconds = NetworkTimeSeconds;
+            return snapshot;
+        }
+
+        public MovementFullState CaptureFullState()
+        {
+            MovementFullState state = default;
+            state.NetworkTick = NetworkTick;
+            state.NetworkTimeSeconds = NetworkTimeSeconds;
+            state.Position = transform.position.ToMovementVector3();
+            state.Velocity = _velocity.ToMovementVector3();
+            state.WorldUp = WorldUp.ToMovementVector3();
+            state.GroundNormal = _context.GroundNormal.ToMovementVector3();
+            state.InputDirection = _context.InputDirection.ToMovementVector3();
+            state.FacingDirection = _lookDirection.ToMovementVector3();
+            state.RollDirection = _context.RollDirection.ToMovementVector3();
+            state.WallJumpDirection = _context.WallJumpDirection.ToMovementVector3();
+            state.LastWallNormal = _context.LastWallNormal.ToMovementVector3();
+            state.WallClimbNormal = _context.WallClimbNormal.ToMovementVector3();
+            state.PendingImpulse = _pendingImpulse.ToMovementVector3();
+            state.PendingForce = _pendingForce.ToMovementVector3();
+            state.PlatformLocalPosition = _movingPlatform.localPosition.ToMovementVector3();
+            state.PlatformVelocity = _movingPlatform.platformVelocity.ToMovementVector3();
+            state.PlatformLocalRotationX = _movingPlatform.localRotation.x;
+            state.PlatformLocalRotationY = _movingPlatform.localRotation.y;
+            state.PlatformLocalRotationZ = _movingPlatform.localRotation.z;
+            state.PlatformLocalRotationW = _movingPlatform.localRotation.w;
+            state.VerticalVelocity = _context.VerticalVelocity;
+            state.SlopeAngle = _context.SlopeAngle;
+            state.RollTimer = _context.RollTimer;
+            state.WallClingTimer = _context.WallClingTimer;
+            state.LastWallJumpTime = _context.LastWallJumpTime;
+            state.StateElapsed = 0f;
+            state.UnconstrainedTimer = _unconstrainedTimer;
+            state.CurrentSpeed = _context.CurrentSpeed;
+            state.JumpCount = _context.JumpCount;
+            state.StateTick = 0;
+            state.StateId = (ushort)CurrentState;
+            state.ClimbingMode = (byte)_context.ClimbingMode;
+            state.IsGrounded = _context.IsGrounded;
+            state.WasGrounded = _context.WasGrounded;
+            state.IsOnNonWalkableSlope = _context.IsOnNonWalkableSlope;
+            state.IsWallJumping = _context.IsWallJumping;
+            state.IsWallSliding = _context.IsWallSliding;
+            state.IsOnPlatform = _movingPlatform.isOnPlatform;
+            state.UseRootMotion = _context.UseRootMotion;
+            state.JumpPressed = _context.JumpPressed;
+            state.SprintHeld = _context.SprintHeld;
+            state.CrouchHeld = _context.CrouchHeld;
+            state.RollPressed = _context.RollPressed;
+            return state;
         }
 
         public void ApplySnapshot(in MovementSnapshot snapshot)
         {
-            _updatedPosition = snapshot.Position.ToVector3();
-            _velocity = snapshot.Velocity.ToFloat3();
-            WorldUp = snapshot.WorldUp.ToFloat3();
+            Vector3 position = snapshot.Position.ToVector3();
+            _updatedPosition = position;
+            _velocity = snapshot.Velocity.ToVector3();
+            WorldUp = snapshot.WorldUp.ToVector3();
             _context.VerticalVelocity = snapshot.VerticalVelocity;
             _context.IsGrounded = snapshot.IsGrounded;
             _context.JumpCount = snapshot.JumpCount;
+            NetworkTick = snapshot.NetworkTick;
+            NetworkTimeSeconds = snapshot.NetworkTimeSeconds;
 
-            Vector3 snapshotPosition = snapshot.Position.ToVector3();
-            transform.position = snapshotPosition;
-            _rigidbody.position = snapshotPosition;
+            transform.position = position;
+            _rigidbody.position = position;
 
-            if (_currentState?.StateType != snapshot.StateType)
-            {
-                RequestStateChange(snapshot.StateType);
-            }
+            if (_currentState == null || (ushort)_currentState.StateType != snapshot.StateId)
+                RequestStateChange((MovementStateType)snapshot.StateId);
         }
 
-        public void ResetFromSnapshot(in MovementSnapshot snapshot)
+        public void ApplyFullState(in MovementFullState state)
         {
-            ApplySnapshot(snapshot);
-            _context.WasGrounded = snapshot.IsGrounded;
-            _context.CurrentSpeed = 0f;
-            _context.CurrentVelocity = float3.zero;
-            _context.InputDirection = float3.zero;
-            _pendingImpulse = Vector3.zero;
-            _pendingForce = Vector3.zero;
-            _unconstrainedTimer = 0f;
+            Vector3 position = state.Position.ToVector3();
+            _updatedPosition = position;
+            _velocity = state.Velocity.ToVector3();
+            WorldUp = state.WorldUp.ToVector3();
+            transform.position = position;
+            _rigidbody.position = position;
+
+            NetworkTick = state.NetworkTick;
+            NetworkTimeSeconds = state.NetworkTimeSeconds;
+            _context.GroundNormal = state.GroundNormal.ToFloat3();
+            _context.InputDirection = state.InputDirection.ToFloat3();
+            _lookDirection = state.FacingDirection.ToFloat3();
+            _context.RollDirection = state.RollDirection.ToFloat3();
+            _context.WallJumpDirection = state.WallJumpDirection.ToVector3();
+            _context.LastWallNormal = state.LastWallNormal.ToVector3();
+            _context.WallClimbNormal = state.WallClimbNormal.ToVector3();
+            _pendingImpulse = state.PendingImpulse.ToVector3();
+            _pendingForce = state.PendingForce.ToVector3();
+            _movingPlatform.localPosition = state.PlatformLocalPosition.ToVector3();
+            _movingPlatform.platformVelocity = state.PlatformVelocity.ToVector3();
+            _movingPlatform.localRotation = new Quaternion(
+                state.PlatformLocalRotationX, state.PlatformLocalRotationY,
+                state.PlatformLocalRotationZ, state.PlatformLocalRotationW);
+            _context.VerticalVelocity = state.VerticalVelocity;
+            _context.SlopeAngle = state.SlopeAngle;
+            _context.RollTimer = state.RollTimer;
+            _context.WallClingTimer = state.WallClingTimer;
+            _context.LastWallJumpTime = state.LastWallJumpTime;
+            _unconstrainedTimer = state.UnconstrainedTimer;
+            _context.CurrentSpeed = state.CurrentSpeed;
+            _context.CurrentVelocity = state.Velocity.ToFloat3();
+            _context.JumpCount = state.JumpCount;
+            _context.ClimbingMode = (ClimbingMode)state.ClimbingMode;
+            _context.IsGrounded = state.IsGrounded;
+            _context.WasGrounded = state.WasGrounded;
+            _context.IsOnNonWalkableSlope = state.IsOnNonWalkableSlope;
+            _context.IsWallJumping = state.IsWallJumping;
+            _context.IsWallSliding = state.IsWallSliding;
+            _movingPlatform.isOnPlatform = state.IsOnPlatform;
+            _context.UseRootMotion = state.UseRootMotion;
+            _context.JumpPressed = state.JumpPressed;
+            _context.SprintHeld = state.SprintHeld;
+            _context.CrouchHeld = state.CrouchHeld;
+            _context.RollPressed = state.RollPressed;
+
+            if (_currentState == null || (ushort)_currentState.StateType != state.StateId)
+                RequestStateChange((MovementStateType)state.StateId);
+
+            _context.StepEvents = MovementStepEvent.None;
+            _animationFrame.ResetBaseline();
+            _rootMotionAccumulator.Discard();
+        }
+
+        public void ResetFromFullState(in MovementFullState state)
+        {
+            ApplyFullState(state);
+            _inheritedPlatformVelocity = Vector3.zero;
+            _lastGroundVelocity = Vector3.zero;
+            _hasLanded = false;
+            _collisionCount = 0;
         }
 
         #endregion
@@ -2347,13 +2315,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             float halfHeight = capsule.height * 0.5f;
             Vector3 center = capsule.center;
 
-            // Draw capsule outline
             DrawCapsuleGizmo(pos, center, radius, halfHeight, currentWorldUp,
                 _isGrounded ? Color.green : Color.red);
 
             if (showGroundDetection)
             {
-                // Ground detection ray
                 float capsuleBottomY = center.y - halfHeight;
                 Vector3 rayOrigin = pos + currentWorldUp * (capsuleBottomY + radius);
                 float rayDist = config.StepHeight + 0.1f;
@@ -2361,23 +2327,19 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 Gizmos.color = Color.yellow;
                 Gizmos.DrawLine(rayOrigin, rayOrigin - currentWorldUp * rayDist);
 
-                // Ground hit point
                 if (_isGrounded)
                 {
                     Gizmos.color = Color.cyan;
                     Gizmos.DrawWireSphere(_groundPoint, 0.05f);
 
-                    // Ground normal
                     Gizmos.color = Color.magenta;
                     Gizmos.DrawLine(_groundPoint, _groundPoint + _groundNormal * 0.3f);
 
-                    // Slope angle indicator
                     float slopeAngle = Vector3.Angle(_groundNormal, currentWorldUp);
                     Gizmos.color = slopeAngle <= config.SlopeLimit ? Color.green : Color.red;
                     DrawAngleArc(_groundPoint, _groundNormal, currentWorldUp, slopeAngle);
                 }
 
-                // Step height indicator
                 Gizmos.color = new Color(1f, 0.5f, 0f, 0.5f);
                 Vector3 stepBottom = pos + currentWorldUp * capsuleBottomY;
                 Vector3 stepTop = stepBottom + currentWorldUp * config.StepHeight;
@@ -2389,14 +2351,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             if (showVelocity && Application.isPlaying)
             {
-                // Velocity vector
                 Vector3 velStart = pos + center;
                 if (_velocity.sqrMagnitude > 0.01f)
                 {
                     Gizmos.color = Color.blue;
                     Gizmos.DrawLine(velStart, velStart + _velocity * 0.5f);
 
-                    // Horizontal velocity
                     Vector3 horizontalVel = Vector3.ProjectOnPlane(_velocity, currentWorldUp);
                     if (horizontalVel.sqrMagnitude > 0.01f)
                     {
@@ -2408,7 +2368,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             if (showCollisionSweep && Application.isPlaying)
             {
-                // Show recent collision points
                 for (int i = 0; i < _collisionCount; i++)
                 {
                     ref CollisionResult col = ref _collisionResults[i];
@@ -2416,11 +2375,9 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                     Gizmos.color = col.isWalkable ? Color.green : Color.red;
                     Gizmos.DrawWireSphere(col.point, 0.03f);
 
-                    // Collision normal
                     Gizmos.color = Color.white;
                     Gizmos.DrawLine(col.point, col.point + col.normal * 0.2f);
 
-                    // Surface normal (if different)
                     if (col.surfaceNormal != col.normal)
                     {
                         Gizmos.color = Color.yellow;
@@ -2438,11 +2395,9 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             Vector3 topSphere = worldCenter + up * (halfHeight - radius);
             Vector3 bottomSphere = worldCenter - up * (halfHeight - radius);
 
-            // Draw spheres
             Gizmos.DrawWireSphere(topSphere, radius);
             Gizmos.DrawWireSphere(bottomSphere, radius);
 
-            // Draw connecting lines
             Vector3 right = Vector3.Cross(up, transform.forward).normalized * radius;
             Vector3 forward = Vector3.Cross(right, up).normalized * radius;
 
@@ -2473,7 +2428,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
         }
 
-        // Debug info for Inspector
         public string GetDebugInfo()
         {
             if (!Application.isPlaying)
@@ -2487,7 +2441,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             if (_isGrounded)
             {
                 float slopeAngle = Vector3.Angle(_groundNormal, WorldUp);
-                sb.AppendLine($"Slope Angle: {slopeAngle:F1} deg (Limit: {config?.SlopeLimit ?? 45} deg)");
+                sb.AppendLine($"Slope Angle: {slopeAngle:F1} deg (Limit: {(config != null ? config.SlopeLimit : 45f):F1} deg)");
             }
 
             sb.AppendLine($"Velocity: {_velocity.magnitude:F2} m/s");

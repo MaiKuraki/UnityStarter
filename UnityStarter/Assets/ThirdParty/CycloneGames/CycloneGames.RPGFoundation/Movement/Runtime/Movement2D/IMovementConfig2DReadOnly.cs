@@ -3,10 +3,6 @@ using CycloneGames.RPGFoundation.Movement.Core;
 
 namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 {
-    /// <summary>
-    /// Read-only interface for accessing 2D movement configuration values.
-    /// Extends base config with 2D-specific properties.
-    /// </summary>
     public interface IMovementConfig2DReadOnly : IMovementConfigReadOnly
     {
         MovementType2D movementType { get; }
@@ -24,9 +20,5 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         float wallJumpForceX { get; }
         float wallJumpForceY { get; }
         bool facingRight { get; }
-        string verticalSpeedParameter { get; }
-        string rollTrigger { get; }
-        string inputXParameter { get; }
-        string inputYParameter { get; }
     }
 }

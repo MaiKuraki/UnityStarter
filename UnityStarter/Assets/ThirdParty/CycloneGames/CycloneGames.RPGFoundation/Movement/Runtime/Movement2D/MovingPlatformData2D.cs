@@ -3,9 +3,6 @@ using CycloneGames.RPGFoundation.Movement.Core;
 
 namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 {
-    /// <summary>
-    /// Tracks moving platform state for 2D character movement.
-    /// </summary>
     public struct MovingPlatformData2D
     {
         public Rigidbody2D platform;
@@ -51,19 +48,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             isOnPlatform = true;
         }
 
-        /// <summary>
-        /// Updates the velocity by calculating character's actual world velocity on the platform.
-        /// This includes both linear velocity from platform translation AND tangential velocity
-        /// from platform rotation (v = ω × r for rotating platforms).
-        /// </summary>
         public void UpdatePlatformVelocity(float deltaTime)
         {
             if (!isOnPlatform || platformTransform == null) return;
 
             if (deltaTime > 0.0001f)
             {
-                // Calculate character's world position based on local position
-                // For 2D, we need to manually apply rotation to local position
                 float lastRadians = lastPlatformRotationZ * Mathf.Deg2Rad;
                 float cosLast = Mathf.Cos(lastRadians);
                 float sinLast = Mathf.Sin(lastRadians);
@@ -74,7 +64,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
                 Vector2 currentCharacterWorldPos = platformTransform.TransformPoint(localPosition);
 
-                // Character's actual velocity = delta position / time
                 platformVelocity = (currentCharacterWorldPos - lastCharacterWorldPos) / deltaTime;
             }
             lastPlatformPosition = platformTransform.position;

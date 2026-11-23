@@ -7,38 +7,38 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
         public readonly float PositionCorrectionThresholdSqr;
         public readonly float PositionHardSnapThresholdSqr;
         public readonly float VelocityCorrectionThresholdSqr;
+        public readonly int MinServerTicksBetweenCorrections;
 
         public MovementNetworkCorrectionPolicy(
             float positionCorrectionThreshold = 0.05f,
             float positionHardSnapThreshold = 2f,
-            float velocityCorrectionThreshold = 0.5f)
+            float velocityCorrectionThreshold = 0.5f,
+            int minServerTicksBetweenCorrections = 6)
         {
             if (!float.IsFinite(positionCorrectionThreshold) || positionCorrectionThreshold < 0f)
-            {
                 throw new ArgumentOutOfRangeException(nameof(positionCorrectionThreshold));
-            }
-
             if (!float.IsFinite(positionHardSnapThreshold) || positionHardSnapThreshold < positionCorrectionThreshold)
-            {
                 throw new ArgumentOutOfRangeException(nameof(positionHardSnapThreshold));
-            }
-
             if (!float.IsFinite(velocityCorrectionThreshold) || velocityCorrectionThreshold < 0f)
-            {
                 throw new ArgumentOutOfRangeException(nameof(velocityCorrectionThreshold));
-            }
+            if (minServerTicksBetweenCorrections < 0)
+                throw new ArgumentOutOfRangeException(nameof(minServerTicksBetweenCorrections));
 
             PositionCorrectionThresholdSqr = positionCorrectionThreshold * positionCorrectionThreshold;
             PositionHardSnapThresholdSqr = positionHardSnapThreshold * positionHardSnapThreshold;
             VelocityCorrectionThresholdSqr = velocityCorrectionThreshold * velocityCorrectionThreshold;
+            MinServerTicksBetweenCorrections = minServerTicksBetweenCorrections;
+        }
+
+        public bool IsThrottled(long lastCorrectionServerTick, long currentServerTick)
+        {
+            return lastCorrectionServerTick >= 0L
+                   && currentServerTick - lastCorrectionServerTick < MinServerTicksBetweenCorrections;
         }
 
         public static MovementNetworkCorrectionPolicy Default
         {
-            get
-            {
-                return new MovementNetworkCorrectionPolicy();
-            }
+            get { return new MovementNetworkCorrectionPolicy(0.05f, 2f, 0.5f, 6); }
         }
     }
 }

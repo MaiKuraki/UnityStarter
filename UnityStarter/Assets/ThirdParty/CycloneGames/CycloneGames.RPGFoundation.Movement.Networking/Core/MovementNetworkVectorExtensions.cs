@@ -18,25 +18,28 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
         public static MovementNetworkSnapshotMessage ToMovementNetworkSnapshot(
             this MovementSnapshot snapshot,
             ulong entityId,
-            int serverTick,
+            ulong epoch,
+            long serverTick,
             ushort sequence = 0,
             byte flags = MovementNetworkSnapshotFlags.None)
         {
-            byte snapshotFlags = MovementNetworkSnapshotFlags.Set(
-                flags,
+            byte wireFlags = MovementNetworkSnapshotFlags.Wire(flags);
+            wireFlags = MovementNetworkSnapshotFlags.Set(
+                wireFlags,
                 MovementNetworkSnapshotFlags.Grounded,
                 snapshot.IsGrounded);
 
             return new MovementNetworkSnapshotMessage(
                 entityId,
-                snapshot.Tick,
+                epoch,
+                snapshot.NetworkTick,
                 serverTick,
                 sequence,
-                (ushort)snapshot.StateType,
-                snapshotFlags,
+                snapshot.StateId,
+                wireFlags,
                 snapshot.JumpCount,
-                snapshot.Timestamp,
                 snapshot.VerticalVelocity,
+                snapshot.NetworkTimeSeconds,
                 snapshot.Position.ToNetworkVector3(),
                 snapshot.Velocity.ToNetworkVector3(),
                 snapshot.WorldUp.ToNetworkVector3());

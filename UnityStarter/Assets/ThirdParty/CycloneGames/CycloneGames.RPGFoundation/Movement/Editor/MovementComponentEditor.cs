@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
 using CycloneGames.RPGFoundation.Movement.Runtime;
@@ -10,8 +11,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
     public class MovementComponentEditor : UnityEditor.Editor
     {
         private SerializedProperty _config;
-        private SerializedProperty _characterAnimator;
-        private SerializedProperty _animancerComponent;
         private SerializedProperty _worldUpSource;
         private SerializedProperty _useRootMotion;
         private SerializedProperty _ignoreTimeScale;
@@ -21,7 +20,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
         private SerializedProperty _showCollisionSweep;
         private SerializedProperty _showVelocity;
         
-        // Runtime debug properties
         private SerializedProperty _debugConfigRunSpeed;
         private SerializedProperty _debugCurrentSpeed;
         private SerializedProperty _debugDeltaTime;
@@ -32,7 +30,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
         private SerializedProperty _debugActualVelocity;
         private SerializedProperty _debugActualSpeed;
         
-        // Moving platform debug properties
         private SerializedProperty _debugOnPlatform;
         private SerializedProperty _debugPlatformName;
         private SerializedProperty _debugPlatformVelocity;
@@ -42,30 +39,79 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
         private SerializedProperty _debugPlatformDeltaPos;
         private SerializedProperty _debugLocalPosition;
         
-        // Foldout states
         private bool _showDebugVisualization = true;
         private bool _showRuntimeDebug = true;
         private bool _showPlatformDebug = true;
 #endif
 
-        private enum AnimationSystemType
+        private readonly Dictionary<(string, bool), GUIContent> _statusLabelCache =
+            new Dictionary<(string, bool), GUIContent>();
+        private readonly Dictionary<string, GUIContent> _contentCache =
+            new Dictionary<string, GUIContent>();
+        private readonly Dictionary<(string, string), GUIContent> _detailLineCache =
+            new Dictionary<(string, string), GUIContent>();
+        private readonly Dictionary<(float, float), GUIContent> _numericDetailLineCache =
+            new Dictionary<(float, float), GUIContent>();
+
+        private GUIContent CachedDetailLine(string current, string recommended, string fullRecommended)
         {
-            UnityAnimator,
-            Animancer
+            (string, string) key = (current, recommended);
+            GUIContent content;
+            if (_detailLineCache.TryGetValue(key, out content)) return content;
+            content = new GUIContent(
+                CurrentTag + ": " + current + "  \u2192  " + RecommendedTag + ": " + recommended,
+                "Recommended full value: " + (fullRecommended ?? recommended) +
+                ". Use the Apply button below to change this setting.");
+            _detailLineCache.Add(key, content);
+            return content;
         }
 
-        private AnimationSystemType _selectedSystem = AnimationSystemType.UnityAnimator;
+        private GUIContent CachedNumericDetailLine(float current, float recommended)
+        {
+            (float, float) key = (current, recommended);
+            GUIContent content;
+            if (_numericDetailLineCache.TryGetValue(key, out content)) return content;
+            content = new GUIContent(
+                CurrentTag + ": " + current.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) +
+                "  \u2192  " + RecommendedTag + ": " +
+                recommended.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
+                "Use the Apply button below to change this setting.");
+            _numericDetailLineCache.Add(key, content);
+            return content;
+        }
 
-        // Foldout states for collapsible help boxes
-        private bool _showRootMotionHelp = false;
+        private GUIContent CachedStatusLabel(string label, bool isCorrect, string fullLabel)
+        {
+            (string, bool) key = (label, isCorrect);
+            GUIContent content;
+            if (_statusLabelCache.TryGetValue(key, out content)) return content;
+            string display = (isCorrect ? "\u2713 " : "\u2717 ") + label;
+            string explanation = isCorrect
+                ? "Matches the recommended setting."
+                : "Needs change. The line below shows the Current and Recommended values.";
+            content = new GUIContent(display, (fullLabel ?? label) + " | " + explanation);
+            _statusLabelCache.Add(key, content);
+            return content;
+        }
+
+        private GUIContent CachedContent(string text, string tooltip)
+        {
+            GUIContent content;
+            if (_contentCache.TryGetValue(text, out content)) return content;
+            content = new GUIContent(text, tooltip ?? string.Empty);
+            _contentCache.Add(text, content);
+            return content;
+        }
+        private GUIStyle _statusOkStyle;
+        private GUIStyle _statusWarningStyle;
+
         private bool _showTimeScaleHelp = false;
         private bool _showWorldUpHelp = false;
         private bool _showQuickSetup = false;
 
-        // Static excluded properties list to avoid GC allocation every inspector draw
         private static readonly string[] ExcludedProperties = new string[]
         {
-            "config", "characterAnimator", "animancerComponent", "worldUpSource",
+            "config", "worldUpSource",
             "useRootMotion", "ignoreTimeScale", "smoothPlatformFollow",
             "showDebugGizmos", "showGroundDetection", "showCollisionSweep", "showVelocity",
             "_debugConfigRunSpeed", "_debugCurrentSpeed", "_debugDeltaTime", "_debugCurrentState",
@@ -77,23 +123,16 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             "m_Script"
         };
 
-        /// <summary>
-        /// Gets a color for emphasis text that is visible in both light and dark Unity editor themes.
-        /// </summary>
         private Color GetEmphasisColor()
         {
-            // For dark theme (Pro): use light gray/white for visibility
-            // For light theme: use dark gray for emphasis
             return EditorGUIUtility.isProSkin
-                ? new Color(0.85f, 0.85f, 0.85f)  // Light gray for dark theme
-                : new Color(0.25f, 0.25f, 0.25f); // Dark gray for light theme
+                ? new Color(0.85f, 0.85f, 0.85f)
+                : new Color(0.25f, 0.25f, 0.25f);
         }
 
         private void OnEnable()
         {
             _config = serializedObject.FindProperty("config");
-            _characterAnimator = serializedObject.FindProperty("characterAnimator");
-            _animancerComponent = serializedObject.FindProperty("animancerComponent");
             _worldUpSource = serializedObject.FindProperty("worldUpSource");
             _useRootMotion = serializedObject.FindProperty("useRootMotion");
             _ignoreTimeScale = serializedObject.FindProperty("ignoreTimeScale");
@@ -103,7 +142,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             _showCollisionSweep = serializedObject.FindProperty("showCollisionSweep");
             _showVelocity = serializedObject.FindProperty("showVelocity");
             
-            // Runtime debug properties
             _debugConfigRunSpeed = serializedObject.FindProperty("_debugConfigRunSpeed");
             _debugCurrentSpeed = serializedObject.FindProperty("_debugCurrentSpeed");
             _debugDeltaTime = serializedObject.FindProperty("_debugDeltaTime");
@@ -114,7 +152,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             _debugActualVelocity = serializedObject.FindProperty("_debugActualVelocity");
             _debugActualSpeed = serializedObject.FindProperty("_debugActualSpeed");
             
-            // Moving platform debug properties
             _debugOnPlatform = serializedObject.FindProperty("_debugOnPlatform");
             _debugPlatformName = serializedObject.FindProperty("_debugPlatformName");
             _debugPlatformVelocity = serializedObject.FindProperty("_debugPlatformVelocity");
@@ -125,15 +162,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             _debugLocalPosition = serializedObject.FindProperty("_debugLocalPosition");
 #endif
 
-            // Determine current system based on assigned references
-            if (_animancerComponent.objectReferenceValue != null)
-            {
-                _selectedSystem = AnimationSystemType.Animancer;
-            }
-            else if (_characterAnimator.objectReferenceValue != null)
-            {
-                _selectedSystem = AnimationSystemType.UnityAnimator;
-            }
         }
 
         public override void OnInspectorGUI()
@@ -146,48 +174,29 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
             EditorGUILayout.Space(10);
 
-            // Animation system selection
-            EditorGUI.BeginChangeCheck();
-            _selectedSystem = (AnimationSystemType)EditorGUILayout.EnumPopup(
-                new GUIContent("Animation System", "Choose between Unity Animator or Animancer"),
-                _selectedSystem);
-
-            if (EditorGUI.EndChangeCheck())
-            {
-                // Clear references when switching systems
-                if (_selectedSystem == AnimationSystemType.UnityAnimator)
-                {
-                    _animancerComponent.objectReferenceValue = null;
-                }
-                else
-                {
-                    _characterAnimator.objectReferenceValue = null;
-                }
-            }
-
-            EditorGUILayout.Space(5);
-
-            // Display fields based on selected system
-            if (_selectedSystem == AnimationSystemType.UnityAnimator)
-            {
-                DrawUnityAnimatorFields();
-            }
-            else
-            {
-                DrawAnimancerFields();
-            }
+            EditorGUILayout.Space(10);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Animation", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField(
+                "Movement publishes one immutable animation frame per simulation step.",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.LabelField(
+                "Bind a backend with BindAnimation(locomotionSink, actionSink) and root motion with BindRootMotion(source).",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.LabelField(
+                "Parameter names belong to the backend, not to this component.",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.EndVertical();
 
             EditorGUILayout.Space(10);
 
-            // World Up Source Section
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.PropertyField(_worldUpSource, new GUIContent(
+            EditorGUILayout.PropertyField(_worldUpSource, CachedContent(
                 "World Up Source",
                 "Optional Transform to use as world up direction reference.\n" +
                 "If assigned, character will use this Transform's up direction as the world up.\n" +
                 "If null, uses Vector3.up (standard Unity world up)."));
 
-            // Collapsible help section - inside helpBox with proper indentation
             EditorGUILayout.Space(3);
             EditorGUI.indentLevel++;
             _showWorldUpHelp = EditorGUILayout.Foldout(_showWorldUpHelp, "Help & Details", EditorStyles.foldout);
@@ -235,192 +244,29 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
             EditorGUILayout.Space(5);
 
-            // Root Motion Section
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            EditorGUILayout.PropertyField(_useRootMotion, new GUIContent(
+            EditorGUILayout.PropertyField(_useRootMotion, CachedContent(
                 "Use Root Motion",
-                "Enable root motion support for animations.\n" +
-                "When enabled, animations with root motion will drive character movement."));
-
-            // Check Animancer type for Root Motion compatibility
-            bool isUsingAnimancer = _animancerComponent.objectReferenceValue != null;
-            bool isHybridAnimancer = false;
-            bool isRegularAnimancer = false;
-
-            if (isUsingAnimancer)
-            {
-                var animancerObj = _animancerComponent.objectReferenceValue;
-                var animancerType = animancerObj.GetType();
-                isHybridAnimancer = animancerType.Name == "HybridAnimancerComponent" ||
-                                   animancerType.FullName == "Animancer.HybridAnimancerComponent";
-                isRegularAnimancer = animancerType.Name == "AnimancerComponent" ||
-                                    animancerType.FullName == "Animancer.AnimancerComponent";
-            }
-
-            // Show Root Motion compatibility warning if using regular AnimancerComponent
-            if (_useRootMotion.boolValue && isUsingAnimancer && isRegularAnimancer)
-            {
-                EditorGUILayout.Space(2);
-                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-                // Compact visual emphasis with theme-aware color and larger font
-                var statusStyle = new GUIStyle(EditorStyles.boldLabel);
-                statusStyle.normal.textColor = GetEmphasisColor();
-                statusStyle.fontSize = 13;
-
-                EditorGUILayout.LabelField("ROOT MOTION NOT SUPPORTED", statusStyle);
-                EditorGUILayout.Space(2);
-
-                EditorGUILayout.HelpBox(
-                    "AnimancerComponent does NOT support Root Motion.\n" +
-                    "Root Motion will be automatically disabled at runtime.\n" +
-                    "To use Root Motion, switch to HybridAnimancerComponent (requires Pro license).",
-                    MessageType.Info);
-                EditorGUILayout.EndVertical();
-            }
-
-            // Collapsible help section - inside helpBox with proper indentation
-            EditorGUILayout.Space(3);
-            EditorGUI.indentLevel++;
-            _showRootMotionHelp = EditorGUILayout.Foldout(_showRootMotionHelp, "Help & Details", EditorStyles.foldout);
-            EditorGUI.indentLevel--;
-            if (_showRootMotionHelp)
-            {
-                EditorGUI.indentLevel++;
-                if (_useRootMotion.boolValue)
-                {
-                    if (isHybridAnimancer)
-                    {
-                        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-                        // Compact visual emphasis for Root Motion supported
-                        var statusStyle = new GUIStyle(EditorStyles.boldLabel);
-                        statusStyle.normal.textColor = new Color(0.2f, 0.8f, 0.2f); // Green for supported
-                        statusStyle.fontSize = 13;
-
-                        EditorGUILayout.LabelField("Root Motion: FULLY SUPPORTED (HybridAnimancerComponent)", statusStyle);
-                        EditorGUILayout.Space(2);
-
-                        EditorGUILayout.HelpBox(
-                            "Fully supported via Animator API\n" +
-                            "• Animations with root motion will control character position\n" +
-                            "• Use for: Attack lunges, dodge rolls, special movement animations\n" +
-                            "• States can override this setting via MovementContext.UseRootMotion\n" +
-                            "• Requires Animator component with RuntimeAnimatorController\n" +
-                            "• Root motion is applied in OnAnimatorMove callback",
-                            MessageType.Info);
-                        EditorGUILayout.EndVertical();
-                    }
-                    else if (isRegularAnimancer)
-                    {
-                        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-                        // Compact visual emphasis with theme-aware color
-                        var statusStyle = new GUIStyle(EditorStyles.boldLabel);
-                        statusStyle.normal.textColor = GetEmphasisColor();
-                        statusStyle.fontSize = 13;
-
-                        EditorGUILayout.LabelField("Root Motion: NOT SUPPORTED (AnimancerComponent)", statusStyle);
-                        EditorGUILayout.Space(2);
-
-                        EditorGUILayout.HelpBox(
-                            "Will be disabled at runtime\n" +
-                            "• AnimancerComponent uses Parameters mode (no Animator API)\n" +
-                            "• Root Motion requires Animator.applyRootMotion and OnAnimatorMove\n" +
-                            "• Switch to HybridAnimancerComponent to use Root Motion",
-                            MessageType.Info);
-                        EditorGUILayout.EndVertical();
-                    }
-                    else if (isUsingAnimancer)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "Root Motion Enabled (Unknown Animancer Type):\n" +
-                            "• Root Motion support depends on component type\n" +
-                            "• HybridAnimancerComponent: SUPPORTED\n" +
-                            "• AnimancerComponent: NOT SUPPORTED",
-                            MessageType.Warning);
-                    }
-                    else
-                    {
-                        EditorGUILayout.HelpBox(
-                            "Root Motion Enabled:\n" +
-                            "• Animations with root motion will control character position\n" +
-                            "• Use for: Attack lunges, dodge rolls, special movement animations\n" +
-                            "• States can override this setting via MovementContext.UseRootMotion\n" +
-                            "• Requires Animator component and animations with root motion enabled\n" +
-                            "• Root motion is applied in OnAnimatorMove callback",
-                            MessageType.Info);
-                    }
-
-                    // Check for Animator
-                    Animator targetAnimator = null;
-                    if (isHybridAnimancer && _animancerComponent.objectReferenceValue != null)
-                    {
-                        var animancerObj = _animancerComponent.objectReferenceValue;
-                        var animancerType = animancerObj.GetType();
-                        var animatorProperty = animancerType.GetProperty("Animator",
-                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                        if (animatorProperty != null)
-                        {
-                            targetAnimator = animatorProperty.GetValue(animancerObj) as Animator;
-                        }
-                    }
-                    else
-                    {
-                        targetAnimator = _characterAnimator.objectReferenceValue as Animator;
-                    }
-
-                    if (targetAnimator == null)
-                    {
-                        if (isHybridAnimancer)
-                        {
-                            EditorGUILayout.HelpBox(
-                                "[WARNING] HybridAnimancerComponent has no Animator assigned.\n" +
-                                "Root Motion requires an Animator component.",
-                                MessageType.Warning);
-                        }
-                        else if (!isUsingAnimancer)
-                        {
-                            EditorGUILayout.HelpBox(
-                                "[WARNING] No Animator assigned. Root motion requires an Animator component.",
-                                MessageType.Warning);
-                        }
-                    }
-                    else if (!targetAnimator.applyRootMotion)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "[INFO] Animator's 'Apply Root Motion' is currently disabled.\n" +
-                            "It will be automatically enabled at runtime when root motion is used.",
-                            MessageType.Info);
-                    }
-                }
-                else
-                {
-                    EditorGUILayout.HelpBox(
-                        "Root Motion Disabled:\n" +
-                        "• Character movement is controlled by script (state machine)\n" +
-                        "• Use for: Standard walk/run/jump movements\n" +
-                        "• You can enable root motion per-state by setting MovementContext.UseRootMotion",
-                        MessageType.None);
-                }
-                EditorGUI.indentLevel--;
-            }
-
+                "Consume root motion deltas from the bound IRootMotionSource.\n" +
+                "The delta is converted to velocity and resolved by the same physics step."));
+            EditorGUILayout.LabelField(
+                "Add AnimatorRootMotionSource on the GameObject that owns the Animator, then bind it with BindRootMotion(source).",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.LabelField(
+                "Root motion never bypasses collision, gravity or replay.",
+                EditorStyles.wordWrappedMiniLabel);
             EditorGUILayout.EndVertical();
 
             EditorGUILayout.Space(5);
 
-            // Time Scale Section
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            EditorGUILayout.PropertyField(_ignoreTimeScale, new GUIContent(
+            EditorGUILayout.PropertyField(_ignoreTimeScale, CachedContent(
                 "Ignore Time Scale",
                 "Ignore global Time.timeScale for this character.\n" +
                 "When enabled, uses Time.unscaledDeltaTime instead of Time.deltaTime.\n" +
                 "Can be changed at runtime via IgnoreTimeScale property for dynamic switching."));
 
-            // Collapsible help section - inside helpBox with proper indentation
             EditorGUILayout.Space(3);
             EditorGUI.indentLevel++;
             _showTimeScaleHelp = EditorGUILayout.Foldout(_showTimeScaleHelp, "Help & Details", EditorStyles.foldout);
@@ -456,29 +302,21 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
             EditorGUILayout.Space(10);
             
-            // ===== QUICK SETUP SECTION =====
             DrawQuickSetupSection();
 
 #if UNITY_EDITOR
             EditorGUILayout.Space(10);
             
-            // ===== DEBUG SECTION =====
             DrawDebugSection();
 #endif
 
-            // Validate configuration settings
             ValidateConfiguration();
 
-            // Draw any additional fields from derived classes
-            // This allows inheritance without modifying this editor
             DrawAdditionalProperties();
 
             serializedObject.ApplyModifiedProperties();
         }
 
-        /// <summary>
-        /// Draws the Quick Setup section with recommended Rigidbody and CapsuleCollider settings.
-        /// </summary>
         private void DrawQuickSetupSection()
         {
             var component = target as MovementComponent;
@@ -487,16 +325,13 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             var rigidbody = component.GetComponent<Rigidbody>();
             var capsuleCollider = component.GetComponent<CapsuleCollider>();
 
-            // Check if components exist
             bool hasRigidbody = rigidbody != null;
             bool hasCapsule = capsuleCollider != null;
 
-            // Recommended settings
             const float recommendedHeight = 1.8f;
             const float recommendedRadius = 0.3f;
             Vector3 recommendedCenter = new Vector3(0f, 0f, 0f);
 
-            // Check current settings against recommended
             bool rigidbodyNeedsSetup = hasRigidbody && (
                 !rigidbody.isKinematic ||
                 rigidbody.useGravity ||
@@ -509,10 +344,9 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                 Mathf.Abs(capsuleCollider.height - recommendedHeight) > 0.01f ||
                 Mathf.Abs(capsuleCollider.radius - recommendedRadius) > 0.01f ||
                 Vector3.Distance(capsuleCollider.center, recommendedCenter) > 0.01f ||
-                capsuleCollider.direction != 1 // Y-Axis
+                capsuleCollider.direction != 1
             );
 
-            // Header style
             Color headerColor = EditorGUIUtility.isProSkin
                 ? new Color(0.4f, 0.8f, 0.4f)
                 : new Color(0.2f, 0.6f, 0.2f);
@@ -524,23 +358,21 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             };
             headerStyle.normal.textColor = headerColor;
 
-            EditorGUILayout.LabelField("⚙️ Quick Setup", headerStyle);
+            EditorGUILayout.LabelField("Quick Setup", headerStyle);
 
-            // Determine background color based on status
             Color bgColor;
             if (!hasRigidbody || !hasCapsule)
-                bgColor = new Color(0.8f, 0.3f, 0.3f, 0.2f); // Red - missing components
+                bgColor = new Color(0.8f, 0.3f, 0.3f, 0.2f);
             else if (rigidbodyNeedsSetup || capsuleNeedsSetup)
-                bgColor = new Color(0.8f, 0.6f, 0.2f, 0.2f); // Orange - needs setup
+                bgColor = new Color(0.8f, 0.6f, 0.2f, 0.2f);
             else
-                bgColor = new Color(0.3f, 0.7f, 0.3f, 0.15f); // Green - all good
+                bgColor = new Color(0.3f, 0.7f, 0.3f, 0.15f);
 
             Color oldBg = GUI.backgroundColor;
             GUI.backgroundColor = bgColor;
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             GUI.backgroundColor = oldBg;
 
-            // Foldout
             var foldoutStyle = new GUIStyle(EditorStyles.foldout) { fontStyle = FontStyle.Bold };
             EditorGUI.indentLevel++;
             _showQuickSetup = EditorGUILayout.Foldout(_showQuickSetup, "Physics Components", true, foldoutStyle);
@@ -550,7 +382,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             {
                 EditorGUILayout.Space(3);
 
-                // Missing components warning
                 if (!hasRigidbody || !hasCapsule)
                 {
                     EditorGUILayout.HelpBox(
@@ -580,22 +411,22 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                 }
                 else
                 {
-                    // Status colors
-                    Color okColor = new Color(0.3f, 0.8f, 0.4f);
-                    Color warningColor = new Color(1f, 0.7f, 0.2f);
-
-                    // ===== RIGIDBODY STATUS =====
                     EditorGUILayout.LabelField("Rigidbody", EditorStyles.boldLabel);
                     EditorGUI.indentLevel++;
 
-                    DrawSettingStatus("Is Kinematic", rigidbody.isKinematic, "true", rigidbody.isKinematic.ToString());
-                    DrawSettingStatus("Use Gravity", !rigidbody.useGravity, "false", rigidbody.useGravity.ToString());
-                    DrawSettingStatus("Interpolation", rigidbody.interpolation == RigidbodyInterpolation.Interpolate, 
-                        RigidbodyInterpolation.Interpolate.ToString(), rigidbody.interpolation.ToString());
-                    DrawSettingStatus("Collision Detection", rigidbody.collisionDetectionMode == CollisionDetectionMode.ContinuousSpeculative,
-                        "ContinuousSpeculative", rigidbody.collisionDetectionMode.ToString());
-                    DrawSettingStatus("Freeze Rotation", rigidbody.constraints == RigidbodyConstraints.FreezeRotation,
-                        "FreezeRotation", rigidbody.constraints.ToString());
+                    DrawSettingStatus("Is Kinematic", rigidbody.isKinematic, "true",
+                        rigidbody.isKinematic ? "true" : "false");
+                    DrawSettingStatus("Use Gravity", !rigidbody.useGravity, "false",
+                        rigidbody.useGravity ? "true" : "false");
+                    DrawSettingStatus("Interpolation", rigidbody.interpolation == RigidbodyInterpolation.Interpolate,
+                        "Interp.", rigidbody.interpolation == RigidbodyInterpolation.Interpolate ? "Interp." : InterpolationName(rigidbody.interpolation),
+                        "Interpolation", "RigidbodyInterpolation.Interpolate");
+                    DrawSettingStatus("Collision", rigidbody.collisionDetectionMode == CollisionDetectionMode.ContinuousSpeculative,
+                        "Cont.", rigidbody.collisionDetectionMode == CollisionDetectionMode.ContinuousSpeculative ? "Cont." : CollisionName(rigidbody.collisionDetectionMode),
+                        "Collision Detection", "CollisionDetectionMode.ContinuousSpeculative");
+                    DrawSettingStatus("Freeze Rot.", rigidbody.constraints == RigidbodyConstraints.FreezeRotation,
+                        "Freeze", rigidbody.constraints == RigidbodyConstraints.FreezeRotation ? "Freeze" : ConstraintsName(rigidbody.constraints),
+                        "Freeze Rotation", "RigidbodyConstraints.FreezeRotation");
 
                     EditorGUI.indentLevel--;
 
@@ -614,16 +445,23 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
                     EditorGUILayout.Space(5);
 
-                    // ===== CAPSULE COLLIDER STATUS =====
                     EditorGUILayout.LabelField("CapsuleCollider", EditorStyles.boldLabel);
                     EditorGUI.indentLevel++;
 
-                    DrawSettingStatus("Height", Mathf.Abs(capsuleCollider.height - recommendedHeight) < 0.01f,
-                        recommendedHeight.ToString("F2"), capsuleCollider.height.ToString("F2"));
-                    DrawSettingStatus("Radius", Mathf.Abs(capsuleCollider.radius - recommendedRadius) < 0.01f,
-                        recommendedRadius.ToString("F2"), capsuleCollider.radius.ToString("F2"));
-                    DrawSettingStatus("Center", Vector3.Distance(capsuleCollider.center, recommendedCenter) < 0.01f,
-                        $"(0, 0, 0)", $"({capsuleCollider.center.x:F2}, {capsuleCollider.center.y:F2}, {capsuleCollider.center.z:F2})");
+                    DrawNumericSettingStatus("Height",
+                        Mathf.Abs(capsuleCollider.height - recommendedHeight) < 0.01f,
+                        capsuleCollider.height, recommendedHeight);
+                    DrawNumericSettingStatus("Radius",
+                        Mathf.Abs(capsuleCollider.radius - recommendedRadius) < 0.01f,
+                        capsuleCollider.radius, recommendedRadius);
+                    EditorGUILayout.BeginHorizontal();
+                    EditorGUILayout.LabelField(CachedContent("Center", "Recommended center: (0, 0, 0)"),
+                        GUILayout.Width(58f));
+                    EditorGUI.BeginDisabledGroup(true);
+                    EditorGUILayout.Vector3Field(GUIContent.none, capsuleCollider.center,
+                        GUILayout.ExpandWidth(true));
+                    EditorGUI.EndDisabledGroup();
+                    EditorGUILayout.EndHorizontal();
                     DrawSettingStatus("Direction", capsuleCollider.direction == 1,
                         "Y-Axis", capsuleCollider.direction == 0 ? "X-Axis" : (capsuleCollider.direction == 1 ? "Y-Axis" : "Z-Axis"));
 
@@ -644,17 +482,15 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
                     EditorGUILayout.Space(3);
 
-                    // All good message
                     if (!rigidbodyNeedsSetup && !capsuleNeedsSetup)
                     {
                         var allGoodStyle = new GUIStyle(EditorStyles.label);
-                        allGoodStyle.normal.textColor = okColor;
+                        allGoodStyle.normal.textColor = new Color(0.3f, 0.8f, 0.4f);
                         allGoodStyle.fontStyle = FontStyle.Bold;
                         EditorGUILayout.LabelField("✓ All settings are optimal!", allGoodStyle);
                     }
                     else
                     {
-                        // Apply all button
                         EditorGUILayout.Space(3);
                         EditorGUILayout.BeginHorizontal();
                         GUILayout.FlexibleSpace();
@@ -680,58 +516,88 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                     }
                 }
 
-                // Help info
                 EditorGUILayout.Space(3);
                 EditorGUI.indentLevel++;
-                EditorGUILayout.HelpBox(
-                    "Recommended settings for kinematic character movement:\n\n" +
-                    "Rigidbody:\n" +
-                    "• isKinematic=true - Character handles own physics\n" +
-                    "• useGravity=false - Gravity applied via MovementConfig\n" +
-                    "• Interpolate - Smooth visual movement\n" +
-                    "• FreezeRotation - Prevent physics rotation\n\n" +
-                    "CapsuleCollider (1.8m humanoid):\n" +
-                    "• Height=1.8 - Standard human height\n" +
-                    "• Radius=0.3 - Shoulder width\n" +
-                    "• Center=(0, 0, 0) - Default center\n",
-                    MessageType.Info);
+                EditorGUILayout.LabelField("Rigidbody: isKinematic=true, useGravity=false, Interpolate, FreezeRotation.",
+                    EditorStyles.wordWrappedMiniLabel);
+                EditorGUILayout.LabelField("The component applies gravity and collision in its own step.",
+                    EditorStyles.wordWrappedMiniLabel);
+                EditorGUILayout.LabelField("CapsuleCollider defaults: Height=1.8, Radius=0.3, Center=(0, 0, 0).",
+                    EditorStyles.wordWrappedMiniLabel);
                 EditorGUI.indentLevel--;
             }
 
             EditorGUILayout.EndVertical();
         }
 
-        /// <summary>
-        /// Draws a setting status line with checkmark or warning.
-        /// </summary>
-        private void DrawSettingStatus(string label, bool isCorrect, string recommended, string current)
-        {
-            Color okColor = new Color(0.3f, 0.8f, 0.4f);
-            Color warningColor = new Color(1f, 0.7f, 0.2f);
+        private const string CurrentTag = "Current";
+        private const string RecommendedTag = "Recommended";
 
-            EditorGUILayout.BeginHorizontal();
-            
-            var statusStyle = new GUIStyle(EditorStyles.label);
-            statusStyle.normal.textColor = isCorrect ? okColor : warningColor;
-            
-            string statusIcon = isCorrect ? "✓" : "⚠";
-            EditorGUILayout.LabelField($"{statusIcon} {label}:", GUILayout.Width(140));
-            
-            if (isCorrect)
-            {
-                EditorGUILayout.LabelField(current, statusStyle);
-            }
-            else
-            {
-                EditorGUILayout.LabelField($"{current} → {recommended}", statusStyle);
-            }
-            
-            EditorGUILayout.EndHorizontal();
+        private void EnsureStatusStyles()
+        {
+            if (_statusOkStyle != null) return;
+            _statusOkStyle = new GUIStyle(EditorStyles.label);
+            _statusOkStyle.normal.textColor = new Color(0.3f, 0.8f, 0.4f);
+            _statusWarningStyle = new GUIStyle(EditorStyles.label);
+            _statusWarningStyle.normal.textColor = new Color(1f, 0.7f, 0.2f);
         }
 
-        /// <summary>
-        /// Applies recommended Rigidbody settings for kinematic character movement.
-        /// </summary>
+        private static string InterpolationName(RigidbodyInterpolation value)
+        {
+            if (value == RigidbodyInterpolation.None) return "None";
+            if (value == RigidbodyInterpolation.Interpolate) return "Interpolate";
+            if (value == RigidbodyInterpolation.Extrapolate) return "Extrapolate";
+            return "Custom";
+        }
+
+        private static string CollisionName(CollisionDetectionMode value)
+        {
+            if (value == CollisionDetectionMode.Discrete) return "Discrete";
+            if (value == CollisionDetectionMode.Continuous) return "Continuous";
+            if (value == CollisionDetectionMode.ContinuousSpeculative) return "ContinuousSpeculative";
+            if (value == CollisionDetectionMode.ContinuousDynamic) return "ContinuousDynamic";
+            return "Custom";
+        }
+
+        private static string ConstraintsName(RigidbodyConstraints value)
+        {
+            if (value == RigidbodyConstraints.None) return "None";
+            if (value == RigidbodyConstraints.FreezeRotation) return "FreezeRotation";
+            if (value == RigidbodyConstraints.FreezeAll) return "FreezeAll";
+            return "Custom";
+        }
+
+        private void DrawSettingStatus(string label, bool isCorrect, string recommended, string current,
+            string fullLabel = null, string fullRecommended = null)
+        {
+            EnsureStatusStyles();
+            GUIStyle statusStyle = isCorrect ? _statusOkStyle : _statusWarningStyle;
+            EditorGUILayout.LabelField(
+                CachedStatusLabel(label, isCorrect, fullLabel ?? label), statusStyle);
+            if (!isCorrect)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.LabelField(
+                    CachedDetailLine(current, recommended, fullRecommended), EditorStyles.miniLabel);
+                EditorGUI.indentLevel--;
+            }
+        }
+
+        private void DrawNumericSettingStatus(string label, bool isCorrect, float current, float recommended)
+        {
+            EnsureStatusStyles();
+            GUIStyle statusStyle = isCorrect ? _statusOkStyle : _statusWarningStyle;
+
+            EditorGUILayout.LabelField(CachedStatusLabel(label, isCorrect, label), statusStyle);
+            if (!isCorrect)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.LabelField(
+                    CachedNumericDetailLine(current, recommended), EditorStyles.miniLabel);
+                EditorGUI.indentLevel--;
+            }
+        }
+
         private void ApplyRecommendedRigidbodySettings(Rigidbody rb)
         {
             rb.isKinematic = true;
@@ -742,22 +608,15 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             EditorUtility.SetDirty(rb);
         }
 
-        /// <summary>
-        /// Applies recommended CapsuleCollider settings for a 1.8m humanoid character.
-        /// </summary>
         private void ApplyRecommendedCapsuleSettings(CapsuleCollider capsule)
         {
             capsule.height = 1.8f;
             capsule.radius = 0.3f;
             capsule.center = new Vector3(0f, 0f, 0f);
-            capsule.direction = 1; // Y-Axis
+            capsule.direction = 1;
             EditorUtility.SetDirty(capsule);
         }
 
-        /// <summary>
-        /// Validates MovementConfig settings for the Rigidbody + CapsuleCollider setup.
-        /// Shows warnings for potentially problematic configurations.
-        /// </summary>
         private void ValidateConfiguration()
         {
             var component = target as MovementComponent;
@@ -769,32 +628,32 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             var config = _config.objectReferenceValue as MovementConfig;
             if (config == null) return;
 
-            // Check if stepHeight is appropriate
             if (config.StepHeight > capsuleCollider.radius)
             {
                 EditorGUILayout.Space(5);
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
                 var warningStyle = new GUIStyle(EditorStyles.boldLabel);
-                warningStyle.normal.textColor = new Color(1f, 0.6f, 0f); // Orange
+                warningStyle.normal.textColor = new Color(1f, 0.6f, 0f);
 
                 EditorGUILayout.LabelField("⚠️ Step Height Configuration Warning", warningStyle);
                 EditorGUILayout.Space(3);
 
                 EditorGUILayout.HelpBox(
-                    $"Step Height ({config.StepHeight:F3}) is larger than Capsule Radius ({capsuleCollider.radius:F3}).\n\n" +
+                    "Step Height is larger than the Capsule Radius.\n\n" +
                     "This may cause issues:\n" +
-                    "• Character may clip through geometry when stepping up\n" +
-                    "• Step detection may fail for stairs\n\n" +
-                    "Recommendation:\n" +
-                    $"• Set Step Height to at most {capsuleCollider.radius:F3}\n" +
-                    "• Typical: stepHeight = 0.3 for a radius of 0.3-0.5",
+                    "Character may clip through geometry when stepping up.\n" +
+                    "Step detection may fail for stairs.\n\n" +
+                    "Recommendation: keep Step Height at or below the Capsule Radius.",
                     MessageType.Warning);
+                EditorGUI.BeginDisabledGroup(true);
+                EditorGUILayout.FloatField("Step Height", config.StepHeight);
+                EditorGUILayout.FloatField("Capsule Radius", capsuleCollider.radius);
+                EditorGUI.EndDisabledGroup();
 
                 EditorGUILayout.EndVertical();
             }
 
-            // Check for missing layer masks
             if (config.GroundLayer == 0)
             {
                 EditorGUILayout.Space(5);
@@ -805,14 +664,8 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             }
         }
 
-        /// <summary>
-        /// Draws any additional properties from derived classes.
-        /// Excludes already-drawn properties to avoid duplication.
-        /// This method allows derived classes to add new fields without modifying this editor.
-        /// </summary>
         private void DrawAdditionalProperties()
         {
-            // Get all serialized properties
             SerializedProperty property = serializedObject.GetIterator();
             bool enterChildren = true;
             bool hasAdditionalProperties = false;
@@ -821,11 +674,9 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             {
                 enterChildren = false;
 
-                // Skip script field (always drawn by default)
                 if (property.propertyPath == "m_Script")
                     continue;
 
-                // Check if this property is not in the excluded list
                 bool isExcluded = false;
                 foreach (string excludedName in ExcludedProperties)
                 {
@@ -840,7 +691,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                 {
                     if (!hasAdditionalProperties)
                     {
-                        // Only add space and label if there are additional properties
                         EditorGUILayout.Space(10);
                         EditorGUILayout.LabelField("Additional Properties", EditorStyles.boldLabel);
                         EditorGUILayout.HelpBox(
@@ -855,323 +705,9 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             }
         }
 
-        private void DrawUnityAnimatorFields()
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Unity Animator Setup", EditorStyles.miniLabel);
-
-            EditorGUILayout.PropertyField(_characterAnimator, new GUIContent(
-                "Animator",
-                "The Animator component that controls character animations.\n" +
-                "If not assigned, will auto-find on the same GameObject."));
-
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Auto-Find Animator", GUILayout.Width(150)))
-            {
-                var component = (MovementComponent)target;
-                var animator = component.GetComponent<Animator>();
-                if (animator != null)
-                {
-                    _characterAnimator.objectReferenceValue = animator;
-                    EditorUtility.SetDirty(target);
-                }
-                else
-                {
-                    EditorUtility.DisplayDialog("Animator Not Found",
-                        "No Animator component found on this GameObject.", "OK");
-                }
-            }
-
-            if (_characterAnimator.objectReferenceValue != null)
-            {
-                if (GUILayout.Button("Clear", GUILayout.Width(80)))
-                {
-                    _characterAnimator.objectReferenceValue = null;
-                    EditorUtility.SetDirty(target);
-                }
-            }
-            EditorGUILayout.EndHorizontal();
-
-            if (_characterAnimator.objectReferenceValue == null)
-            {
-                var component = (MovementComponent)target;
-                var autoFoundAnimator = component.GetComponent<Animator>();
-                if (autoFoundAnimator != null)
-                {
-                    EditorGUILayout.HelpBox(
-                        $"Auto-detected Animator: {autoFoundAnimator.name}\n" +
-                        "Click 'Auto-Find Animator' to assign it.",
-                        MessageType.Info);
-                }
-                else
-                {
-                    EditorGUILayout.HelpBox(
-                        "No Animator found. Add an Animator component to this GameObject.",
-                        MessageType.Warning);
-                }
-            }
-            else
-            {
-                var animator = _characterAnimator.objectReferenceValue as Animator;
-                if (animator != null && animator.runtimeAnimatorController != null)
-                {
-                    EditorGUILayout.HelpBox(
-                        $"Animator Controller: {animator.runtimeAnimatorController.name}",
-                        MessageType.Info);
-                }
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
-        private void DrawAnimancerFields()
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Animancer Setup", EditorStyles.miniLabel);
-
-            EditorGUILayout.PropertyField(_animancerComponent, new GUIContent(
-                "Animancer Component",
-                "The AnimancerComponent that controls character animations.\n" +
-                "Animancer uses Unity's Playables API and requires an Animator component."));
-
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Auto-Find Animancer", GUILayout.Width(150)))
-            {
-                var component = (MovementComponent)target;
-                var animancer = component.GetComponent<MonoBehaviour>();
-                if (animancer != null)
-                {
-                    var animancerType = animancer.GetType();
-                    if (animancerType.Name.Contains("AnimancerComponent"))
-                    {
-                        _animancerComponent.objectReferenceValue = animancer;
-                        EditorUtility.SetDirty(target);
-                    }
-                }
-
-                if (_animancerComponent.objectReferenceValue == null)
-                {
-                    EditorUtility.DisplayDialog("Animancer Not Found",
-                        "No AnimancerComponent found on this GameObject.", "OK");
-                }
-            }
-
-            if (_animancerComponent.objectReferenceValue != null)
-            {
-                if (GUILayout.Button("Clear", GUILayout.Width(80)))
-                {
-                    _animancerComponent.objectReferenceValue = null;
-                    EditorUtility.SetDirty(target);
-                }
-            }
-            EditorGUILayout.EndHorizontal();
-
-            if (_animancerComponent.objectReferenceValue != null)
-            {
-                // Detect Animancer component type
-                var animancerObj = _animancerComponent.objectReferenceValue;
-                var animancerType = animancerObj.GetType();
-                bool isHybridAnimancer = animancerType.Name == "HybridAnimancerComponent" ||
-                                        animancerType.FullName == "Animancer.HybridAnimancerComponent";
-                bool isRegularAnimancer = animancerType.Name == "AnimancerComponent" ||
-                                         animancerType.FullName == "Animancer.AnimancerComponent";
-
-                EditorGUILayout.Space(3);
-
-                // Display component type and Root Motion support info
-                if (isHybridAnimancer)
-                {
-                    // Create a custom style for the status label
-                    var statusStyle = new GUIStyle(EditorStyles.boldLabel);
-                    statusStyle.normal.textColor = new Color(0.2f, 0.8f, 0.2f); // Green
-
-                    EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                    EditorGUILayout.LabelField("Component Type: HybridAnimancerComponent", statusStyle);
-
-                    // Compact Root Motion notice with visual emphasis (theme-aware)
-                    var rootMotionStyle = new GUIStyle(EditorStyles.boldLabel);
-                    rootMotionStyle.normal.textColor = new Color(0.2f, 0.8f, 0.2f); // Green for supported
-                    rootMotionStyle.fontSize = 12;
-
-                    EditorGUILayout.Space(2);
-                    EditorGUILayout.LabelField("ROOT MOTION: FULLY SUPPORTED", rootMotionStyle);
-                    EditorGUILayout.Space(2);
-
-                    EditorGUILayout.HelpBox(
-                        "• Supports Root Motion via Animator API\n" +
-                        "• Can use RuntimeAnimatorController\n" +
-                        "• Can also play individual AnimationClips\n" +
-                        "• Requires Animancer Pro license",
-                        MessageType.Info);
-                    EditorGUILayout.EndVertical();
-                }
-                else if (isRegularAnimancer)
-                {
-                    // Create a custom style for the status label
-                    var statusStyle = new GUIStyle(EditorStyles.boldLabel);
-                    statusStyle.normal.textColor = EditorGUIUtility.isProSkin
-                        ? new Color(0.7f, 0.7f, 0.7f)  // Light gray for dark theme
-                        : new Color(0.5f, 0.5f, 0.5f); // Medium gray for light theme
-
-                    EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                    EditorGUILayout.LabelField("Component Type: AnimancerComponent", statusStyle);
-
-                    // Compact Root Motion notice with visual emphasis (theme-aware)
-                    var rootMotionStyle = new GUIStyle(EditorStyles.boldLabel);
-                    rootMotionStyle.normal.textColor = GetEmphasisColor();
-                    rootMotionStyle.fontSize = 12;
-
-                    EditorGUILayout.Space(2);
-                    EditorGUILayout.LabelField("ROOT MOTION: NOT SUPPORTED", rootMotionStyle);
-                    EditorGUILayout.Space(2);
-
-                    EditorGUILayout.HelpBox(
-                        "• Uses Parameters mode (string-based parameters)\n" +
-                        "• Pure code-driven animation control\n" +
-                        "• No RuntimeAnimatorController needed",
-                        MessageType.Info);
-                    EditorGUILayout.EndVertical();
-                }
-                else
-                {
-                    EditorGUILayout.HelpBox(
-                        "WARNING: Unknown Animancer Component Type\n" +
-                        $"Type: {animancerType.Name}\n" +
-                        "Root Motion support depends on component type.",
-                        MessageType.Warning);
-                }
-
-                // Check if Animancer has an Animator
-                var animatorProperty = animancerType.GetProperty("Animator",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-
-                if (animatorProperty != null)
-                {
-                    var animancerAnimator = animatorProperty.GetValue(animancerObj) as Animator;
-                    if (animancerAnimator == null)
-                    {
-                        if (isHybridAnimancer)
-                        {
-                            EditorGUILayout.HelpBox(
-                                "[WARNING] HybridAnimancerComponent does not have an Animator assigned.\n" +
-                                "Root Motion will not work without an Animator.\n" +
-                                "Assign an Animator to the HybridAnimancerComponent to enable Root Motion support.",
-                                MessageType.Warning);
-                        }
-                        else
-                        {
-                            EditorGUILayout.HelpBox(
-                                "[INFO] AnimancerComponent does not have an Animator assigned.\n" +
-                                "It will use Parameters mode instead of Animator mode.\n" +
-                                "This is expected for AnimancerComponent (not HybridAnimancerComponent).",
-                                MessageType.Info);
-                        }
-                    }
-                    else
-                    {
-                        EditorGUILayout.BeginHorizontal();
-                        EditorGUILayout.LabelField("Animancer's Animator:", GUILayout.Width(140));
-                        EditorGUI.BeginDisabledGroup(true);
-                        EditorGUILayout.ObjectField(animancerAnimator, typeof(Animator), true);
-                        EditorGUI.EndDisabledGroup();
-                        EditorGUILayout.EndHorizontal();
-
-                        if (isHybridAnimancer)
-                        {
-                            if (animancerAnimator.runtimeAnimatorController != null)
-                            {
-                                EditorGUILayout.HelpBox(
-                                    $"[OK] Animator Controller: {animancerAnimator.runtimeAnimatorController.name}\n" +
-                                    "This is correct for HybridAnimancerComponent.\n" +
-                                    "Root Motion is supported when enabled.",
-                                    MessageType.Info);
-                            }
-                            else
-                            {
-                                EditorGUILayout.HelpBox(
-                                    "[INFO] Animator has no Controller assigned.\n" +
-                                    "For HybridAnimancerComponent, you can assign a simple Controller\n" +
-                                    "(even just a default state) to enable Root Motion support.",
-                                    MessageType.Info);
-                            }
-                        }
-                        else
-                        {
-                            if (animancerAnimator.runtimeAnimatorController != null)
-                            {
-                                EditorGUILayout.HelpBox(
-                                    $"[NOTE] Animator has Controller '{animancerAnimator.runtimeAnimatorController.name}' assigned.\n" +
-                                    "For AnimancerComponent, the Controller should typically be empty.\n" +
-                                    "Consider using HybridAnimancerComponent if you need Controller support.",
-                                    MessageType.Warning);
-                            }
-                        }
-                    }
-                }
-
-                // Root Motion compatibility warning
-                if (_useRootMotion.boolValue)
-                {
-                    EditorGUILayout.Space(3);
-                    if (isHybridAnimancer)
-                    {
-                        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-                        // Compact visual emphasis for Root Motion supported (theme-aware)
-                        var rootMotionStyle = new GUIStyle(EditorStyles.boldLabel);
-                        rootMotionStyle.normal.textColor = new Color(0.2f, 0.8f, 0.2f); // Green for supported
-                        rootMotionStyle.fontSize = 13;
-
-                        EditorGUILayout.LabelField("ROOT MOTION: ENABLED AND SUPPORTED", rootMotionStyle);
-                        EditorGUILayout.Space(2);
-
-                        EditorGUILayout.HelpBox(
-                            "HybridAnimancerComponent fully supports Root Motion.\n" +
-                            "States can control Root Motion via MovementContext.UseRootMotion.",
-                            MessageType.Info);
-                        EditorGUILayout.EndVertical();
-                    }
-                    else if (isRegularAnimancer)
-                    {
-                        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-                        // Compact visual emphasis for Root Motion not supported (theme-aware)
-                        var rootMotionStyle = new GUIStyle(EditorStyles.boldLabel);
-                        rootMotionStyle.normal.textColor = GetEmphasisColor();
-                        rootMotionStyle.fontSize = 13;
-
-                        EditorGUILayout.LabelField("ROOT MOTION: ENABLED BUT NOT SUPPORTED", rootMotionStyle);
-                        EditorGUILayout.Space(2);
-
-                        EditorGUILayout.HelpBox(
-                            "AnimancerComponent does NOT support Root Motion.\n" +
-                            "Root Motion will be automatically disabled at runtime.\n" +
-                            "To use Root Motion, switch to HybridAnimancerComponent.",
-                            MessageType.Info);
-                        EditorGUILayout.EndVertical();
-                    }
-                }
-            }
-            else
-            {
-                EditorGUILayout.Space(3);
-                EditorGUILayout.HelpBox(
-                    "Assign an AnimancerComponent to use Animancer for animation control.\n" +
-                    "• AnimancerComponent: Pure code control, no Root Motion\n" +
-                    "• HybridAnimancerComponent: Supports Root Motion, requires Pro license",
-                    MessageType.Info);
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
 #if UNITY_EDITOR
-        /// <summary>
-        /// Draws the debug section with colored modules and foldouts.
-        /// </summary>
         private void DrawDebugSection()
         {
-            // Cache colors for performance
             Color headerColor = EditorGUIUtility.isProSkin 
                 ? new Color(0.3f, 0.5f, 0.7f)
                 : new Color(0.2f, 0.4f, 0.6f);
@@ -1185,7 +721,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             Color speedOkColor = new Color(0.3f, 0.8f, 0.4f);
             Color speedWarningColor = new Color(1f, 0.7f, 0.2f);
             
-            // ===== MAIN DEBUG HEADER =====
             var headerStyle = new GUIStyle(EditorStyles.boldLabel)
             {
                 fontSize = 12,
@@ -1195,7 +730,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             
             EditorGUILayout.LabelField("🔧 Debug", headerStyle);
             
-            // ===== SCENE VISUALIZATION =====
             DrawFoldoutPanel(
                 ref _showDebugVisualization,
                 "Scene Visualization",
@@ -1205,7 +739,7 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                 {
                     if (_showDebugGizmos != null)
                     {
-                        EditorGUILayout.PropertyField(_showDebugGizmos, new GUIContent(
+                        EditorGUILayout.PropertyField(_showDebugGizmos, CachedContent(
                             "Enable Gizmos", "Master toggle for all debug visualization."));
 
                         if (_showDebugGizmos.boolValue)
@@ -1235,7 +769,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             
             EditorGUILayout.Space(3);
             
-            // ===== RUNTIME DEBUG INFO =====
             if (Application.isPlaying)
             {
                 DrawFoldoutPanel(
@@ -1245,7 +778,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                     new Color(0.6f, 0.4f, 0.8f, 0.15f),
                     () =>
                     {
-                        // State indicator with color
                         EditorGUILayout.BeginHorizontal();
                         EditorGUILayout.PrefixLabel("State");
                         
@@ -1260,7 +792,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                         
                         EditorGUILayout.Space(2);
                         
-                        // Speed info with comparison
                         if (_debugConfigRunSpeed != null && _debugActualSpeed != null)
                         {
                             float configSpeed = _debugConfigRunSpeed.floatValue;
@@ -1273,12 +804,13 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                             var speedStyle = new GUIStyle(EditorStyles.label);
                             speedStyle.normal.textColor = speedOk ? speedOkColor : speedWarningColor;
                             
-                            string speedText = $"{actualSpeed:F2} / {configSpeed:F1} m/s";
-                            EditorGUILayout.LabelField(speedText, speedStyle);
+                            EditorGUI.BeginDisabledGroup(true);
+                            EditorGUILayout.FloatField("Actual", actualSpeed);
+                            EditorGUILayout.FloatField("Config", configSpeed);
+                            EditorGUI.EndDisabledGroup();
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // Input info
                         if (_debugInputDirection != null && _debugInputMagnitude != null)
                         {
                             Vector3 inputDir = _debugInputDirection.vector3Value;
@@ -1286,31 +818,36 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                             
                             EditorGUILayout.BeginHorizontal();
                             EditorGUILayout.PrefixLabel("Input");
-                            EditorGUILayout.LabelField($"({inputDir.x:F2}, {inputDir.z:F2}) mag: {inputMag:F2}");
+                            EditorGUI.BeginDisabledGroup(true);
+                            EditorGUILayout.Vector3Field(GUIContent.none, inputDir);
+                            EditorGUILayout.FloatField("Mag", inputMag);
+                            EditorGUI.EndDisabledGroup();
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // Velocity
                         if (_debugActualVelocity != null)
                         {
                             Vector3 vel = _debugActualVelocity.vector3Value;
                             EditorGUILayout.BeginHorizontal();
                             EditorGUILayout.PrefixLabel("Velocity");
-                            EditorGUILayout.LabelField($"({vel.x:F2}, {vel.y:F2}, {vel.z:F2})");
+                            EditorGUI.BeginDisabledGroup(true);
+                            EditorGUILayout.Vector3Field(GUIContent.none, vel);
+                            EditorGUI.EndDisabledGroup();
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // DeltaTime
                         if (_debugDeltaTime != null)
                         {
                             EditorGUILayout.BeginHorizontal();
                             EditorGUILayout.PrefixLabel("DeltaTime");
                             float dt = _debugDeltaTime.floatValue;
-                            EditorGUILayout.LabelField($"{dt:F4}s ({(dt > 0 ? 1f/dt : 0):F0} FPS)");
+                            EditorGUI.BeginDisabledGroup(true);
+                            EditorGUILayout.FloatField("Seconds", dt);
+                            EditorGUILayout.FloatField("FPS", dt > 0 ? 1f / dt : 0f);
+                            EditorGUI.EndDisabledGroup();
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // Config status
                         if (_debugConfigAssigned != null)
                         {
                             EditorGUILayout.BeginHorizontal();
@@ -1325,7 +862,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                 
                 EditorGUILayout.Space(3);
                 
-                // ===== MOVING PLATFORM DEBUG =====
                 Color platformColor = new Color(1f, 0.6f, 0.3f);
                 Color platformOkColor = new Color(0.3f, 0.8f, 0.4f);
                 Color platformWarningColor = new Color(1f, 0.7f, 0.2f);
@@ -1338,7 +874,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                     new Color(0.8f, 0.5f, 0.2f, 0.15f),
                     () =>
                     {
-                        // Ground collider info
                         if (_debugGroundColliderName != null)
                         {
                             EditorGUILayout.BeginHorizontal();
@@ -1347,7 +882,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // Has Rigidbody check
                         if (_debugGroundHasRigidbody != null)
                         {
                             EditorGUILayout.BeginHorizontal();
@@ -1359,7 +893,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // Layer match check
                         if (_debugGroundLayerMatch != null)
                         {
                             EditorGUILayout.BeginHorizontal();
@@ -1373,7 +906,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                         
                         EditorGUILayout.Space(3);
                         
-                        // On platform status
                         if (_debugOnPlatform != null)
                         {
                             EditorGUILayout.BeginHorizontal();
@@ -1385,7 +917,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // Platform name
                         if (_debugPlatformName != null && _debugOnPlatform != null && _debugOnPlatform.boolValue)
                         {
                             EditorGUILayout.BeginHorizontal();
@@ -1394,17 +925,17 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // Platform velocity
                         if (_debugPlatformVelocity != null && _debugOnPlatform != null && _debugOnPlatform.boolValue)
                         {
                             Vector3 vel = _debugPlatformVelocity.vector3Value;
                             EditorGUILayout.BeginHorizontal();
                             EditorGUILayout.PrefixLabel("Platform Vel");
-                            EditorGUILayout.LabelField($"({vel.x:F2}, {vel.y:F2}, {vel.z:F2})");
+                            EditorGUI.BeginDisabledGroup(true);
+                            EditorGUILayout.Vector3Field(GUIContent.none, vel);
+                            EditorGUI.EndDisabledGroup();
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // Platform delta position (actual movement applied this frame)
                         if (_debugPlatformDeltaPos != null && _debugOnPlatform != null && _debugOnPlatform.boolValue)
                         {
                             Vector3 delta = _debugPlatformDeltaPos.vector3Value;
@@ -1412,21 +943,23 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                             EditorGUILayout.PrefixLabel("Frame Delta");
                             var deltaStyle = new GUIStyle(EditorStyles.label);
                             deltaStyle.normal.textColor = delta.sqrMagnitude > 0.00001f ? platformOkColor : disabledColor;
-                            EditorGUILayout.LabelField($"({delta.x:F4}, {delta.y:F4}, {delta.z:F4})", deltaStyle);
+                            EditorGUI.BeginDisabledGroup(true);
+                            EditorGUILayout.Vector3Field(GUIContent.none, delta);
+                            EditorGUI.EndDisabledGroup();
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // Local position on platform
                         if (_debugLocalPosition != null && _debugOnPlatform != null && _debugOnPlatform.boolValue)
                         {
                             Vector3 localPos = _debugLocalPosition.vector3Value;
                             EditorGUILayout.BeginHorizontal();
                             EditorGUILayout.PrefixLabel("Local Pos");
-                            EditorGUILayout.LabelField($"({localPos.x:F2}, {localPos.y:F2}, {localPos.z:F2})");
+                            EditorGUI.BeginDisabledGroup(true);
+                            EditorGUILayout.Vector3Field(GUIContent.none, localPos);
+                            EditorGUI.EndDisabledGroup();
                             EditorGUILayout.EndHorizontal();
                         }
                         
-                        // Help text if not on platform
                         if (_debugOnPlatform != null && !_debugOnPlatform.boolValue)
                         {
                             EditorGUILayout.Space(3);
@@ -1439,12 +972,10 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                         }
                     });
                 
-                // Force repaint when playing for live updates
                 Repaint();
             }
             else
             {
-                // Not playing - show placeholder
                 DrawFoldoutPanel(
                     ref _showRuntimeDebug,
                     "Runtime Info",
@@ -1458,20 +989,14 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             }
         }
         
-        /// <summary>
-        /// Draws a foldout panel with colored title inside the helpBox.
-        /// Uses the same pattern as "Help & Details" foldouts.
-        /// </summary>
         private void DrawFoldoutPanel(ref bool foldout, string title, Color titleColor, Color bgColor, 
             System.Action drawContent, bool forceExpanded = false)
         {
-            // Begin outer box with background color
             Color oldBg = GUI.backgroundColor;
             GUI.backgroundColor = bgColor;
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             GUI.backgroundColor = oldBg;
             
-            // Create foldout style with custom color
             var foldoutStyle = new GUIStyle(EditorStyles.foldout)
             {
                 fontStyle = FontStyle.Bold
@@ -1483,12 +1008,10 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             foldoutStyle.active.textColor = titleColor;
             foldoutStyle.onActive.textColor = titleColor;
             
-            // Use indentLevel to keep foldout arrow inside the box (same as "Help & Details")
             EditorGUI.indentLevel++;
             foldout = EditorGUILayout.Foldout(foldout, title, true, foldoutStyle);
             EditorGUI.indentLevel--;
             
-            // Draw content if expanded
             if (foldout || forceExpanded)
             {
                 drawContent?.Invoke();
@@ -1497,9 +1020,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             EditorGUILayout.EndVertical();
         }
         
-        /// <summary>
-        /// Draws a compact legend for gizmo colors.
-        /// </summary>
         private void DrawMiniLegend()
         {
             EditorGUILayout.BeginHorizontal();
