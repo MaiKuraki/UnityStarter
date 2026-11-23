@@ -31,23 +31,12 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
         private SerializedProperty _wallJumpForceX;
         private SerializedProperty _wallJumpForceY;
         private SerializedProperty _facingRight;
-        private SerializedProperty _animationSystem;
-        private SerializedProperty _animancerParameterMode;
-        private SerializedProperty _movementSpeedParameter;
-        private SerializedProperty _isGroundedParameter;
-        private SerializedProperty _jumpTrigger;
-        private SerializedProperty _verticalSpeedParameter;
-        private SerializedProperty _rollTrigger;
-        private SerializedProperty _inputXParameter;
-        private SerializedProperty _inputYParameter;
 
-        // Moving Platform
         private SerializedProperty _enableMovingPlatform;
         private SerializedProperty _inheritPlatformRotation;
         private SerializedProperty _inheritPlatformMomentum;
         private SerializedProperty _platformLayer;
 
-        // Climbing
         private SerializedProperty _enableLadderClimbing;
         private SerializedProperty _ladderClimbSpeed;
         private SerializedProperty _ladderLayer;
@@ -61,11 +50,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
         private SerializedProperty _wallJumpCooldown;
         private SerializedProperty _differentWallAngle;
 
-        // Animation Parameters (Climbing)
-        private SerializedProperty _climbingParameter;
-        private SerializedProperty _wallSlidingParameter;
-
-        // Foldout states
         private bool _showMovementTypeHelp = false;
         private bool _showAirMovementHelp = false;
         private bool _showPhysicsHelp = false;
@@ -75,16 +59,120 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
         private bool _showOtherHelp = false;
         private bool _showFacingHelp = false;
 
-        private bool _showAnimationSystemHelp = false;
         private bool _showClimbingHelp = false;
 
-        // Gap Bridging
         private SerializedProperty _enableGapBridging;
         private SerializedProperty _minSpeedForGapBridge;
         private SerializedProperty _maxGapDistance;
 
+        private string _validationReport;
+
+        private readonly MovementConfigPresetLibrary _presetLibrary = new MovementConfigPresetLibrary();
+        private string[] _presetNames = new string[0];
+        private int[] _presetIndices = new int[0];
+        private int _presetSelection;
+
+        private void RefreshExternalPresets()
+        {
+            _presetLibrary.ClearExternalPresets();
+            string[] guids = AssetDatabase.FindAssets("t:MovementConfigPresetAsset");
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                var asset = AssetDatabase.LoadAssetAtPath<MovementConfigPresetAsset>(path);
+                if (asset == null) continue;
+                _presetLibrary.Register(asset.ToPreset());
+            }
+        }
+
+        private void BuildPresetNames(bool is3D)
+        {
+            RefreshExternalPresets();
+            int count = _presetLibrary.CountFor(is3D);
+            _presetNames = new string[count];
+            _presetIndices = new int[count];
+            int k = 0;
+            for (int i = 0; i < _presetLibrary.Count; i++)
+            {
+                MovementConfigPreset preset = _presetLibrary.Get(i);
+                if (preset == null || preset.Is3D != is3D) continue;
+                _presetNames[k] = preset.Name;
+                _presetIndices[k] = i;
+                k++;
+            }
+            if (_presetSelection >= count) _presetSelection = 0;
+        }
+
+        private void ApplySelectedPreset()
+        {
+            if (_presetIndices.Length == 0) return;
+            int libraryIndex = _presetIndices[_presetSelection];
+            MovementConfigPreset preset = _presetLibrary.Get(libraryIndex);
+            if (preset == null) return;
+            var rules = new MovementConfigRules();
+            var issues = new MovementConfigIssue[MovementConfigRules.FieldCount + 4];
+            int invalid = _presetLibrary.ValidatePreset(rules, libraryIndex, issues);
+            if (invalid != 0)
+            {
+                _validationReport = "Preset contains out-of-range values; apply aborted.";
+                return;
+            }
+            Undo.RecordObject(target, "Apply Movement Preset");
+            serializedObject.Update();
+            for (int i = 0; i < preset.Count; i++)
+            {
+                string name = _presetLibrary.GetSerializedFieldName(preset.Entries[i].Field);
+                if (name == null) continue;
+                SerializedProperty prop = serializedObject.FindProperty(name);
+                if (prop == null) continue;
+                if (prop.propertyType == SerializedPropertyType.Float)
+                    prop.floatValue = preset.Entries[i].Value;
+                else if (prop.propertyType == SerializedPropertyType.Integer)
+                    prop.intValue = (int)preset.Entries[i].Value;
+            }
+            for (int i = 0; i < preset.RawCount; i++)
+            {
+                MovementConfigRawOverride raw = preset.RawOverrides[i];
+                SerializedProperty prop = serializedObject.FindProperty(raw.SerializedField);
+                if (prop == null) continue;
+                if (prop.propertyType == SerializedPropertyType.Float)
+                    prop.floatValue = raw.Value;
+                else if (prop.propertyType == SerializedPropertyType.Integer)
+                    prop.intValue = (int)raw.Value;
+                else if (prop.propertyType == SerializedPropertyType.Boolean)
+                    prop.boolValue = raw.Value != 0f;
+            }
+            serializedObject.ApplyModifiedProperties();
+            EditorUtility.SetDirty(target);
+        }
+
+        private void RestoreDefaults(bool is3D)
+        {
+            var rules = new MovementConfigRules();
+            float[] defaults = new float[MovementConfigRules.FieldCount];
+            rules.WriteDefaults(defaults);
+            Undo.RecordObject(target, "Restore Movement Defaults");
+            serializedObject.Update();
+            for (int i = 0; i < MovementConfigRules.FieldCount; i++)
+            {
+                if (is3D && i > 31) continue;
+                if (!is3D && i >= 6 && i <= 31) continue;
+                string name = _presetLibrary.GetSerializedFieldName((MovementConfigField)(byte)i);
+                if (name == null) continue;
+                SerializedProperty prop = serializedObject.FindProperty(name);
+                if (prop == null) continue;
+                if (prop.propertyType == SerializedPropertyType.Float)
+                    prop.floatValue = defaults[i];
+                else if (prop.propertyType == SerializedPropertyType.Integer)
+                    prop.intValue = (int)defaults[i];
+            }
+            serializedObject.ApplyModifiedProperties();
+            EditorUtility.SetDirty(target);
+        }
+
         private void OnEnable()
         {
+            BuildPresetNames(false);
             _movementType = serializedObject.FindProperty("movementType");
             _walkSpeed = serializedObject.FindProperty("walkSpeed");
             _runSpeed = serializedObject.FindProperty("runSpeed");
@@ -106,15 +194,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             _wallJumpForceX = serializedObject.FindProperty("wallJumpForceX");
             _wallJumpForceY = serializedObject.FindProperty("wallJumpForceY");
             _facingRight = serializedObject.FindProperty("facingRight");
-            _animationSystem = serializedObject.FindProperty("animationSystem");
-            _animancerParameterMode = serializedObject.FindProperty("animancerParameterMode");
-            _movementSpeedParameter = serializedObject.FindProperty("movementSpeedParameter");
-            _isGroundedParameter = serializedObject.FindProperty("isGroundedParameter");
-            _jumpTrigger = serializedObject.FindProperty("jumpTrigger");
-            _verticalSpeedParameter = serializedObject.FindProperty("verticalSpeedParameter");
-            _rollTrigger = serializedObject.FindProperty("rollTrigger");
-            _inputXParameter = serializedObject.FindProperty("inputXParameter");
-            _inputYParameter = serializedObject.FindProperty("inputYParameter");
             _enableMovingPlatform = serializedObject.FindProperty("enableMovingPlatform");
             _inheritPlatformRotation = serializedObject.FindProperty("inheritPlatformRotation");
             _inheritPlatformMomentum = serializedObject.FindProperty("inheritPlatformMomentum");
@@ -125,7 +204,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             _minSpeedForGapBridge = serializedObject.FindProperty("minSpeedForGapBridge");
             _maxGapDistance = serializedObject.FindProperty("maxGapDistance");
 
-            // Climbing
             _enableLadderClimbing = serializedObject.FindProperty("enableLadderClimbing");
             _ladderClimbSpeed = serializedObject.FindProperty("ladderClimbSpeed");
             _ladderLayer = serializedObject.FindProperty("ladderLayer");
@@ -139,18 +217,51 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             _wallJumpCooldown = serializedObject.FindProperty("wallJumpCooldown");
             _differentWallAngle = serializedObject.FindProperty("differentWallAngle");
 
-            _climbingParameter = serializedObject.FindProperty("climbingParameter");
-            _wallSlidingParameter = serializedObject.FindProperty("wallSlidingParameter");
         }
 
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Units: speeds m/s, distances m, times s, angles deg, gravity m/s^2.",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.LabelField("2D gravity is a positive downward magnitude. OnValidate clamps out-of-range values.",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.EndVertical();
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Preset", GUILayout.Width(46f));
+            _presetSelection = EditorGUILayout.Popup(_presetSelection, _presetNames);
+            if (GUILayout.Button("Apply", GUILayout.Width(56f))) ApplySelectedPreset();
+            if (GUILayout.Button("Restore Defaults", GUILayout.Width(120f))) RestoreDefaults(false);
+            EditorGUILayout.EndHorizontal();
+
+            MovementConfigPreset selected = _presetLibrary.Get(
+                _presetIndices.Length > 0 ? _presetIndices[_presetSelection] : -1);
+            if (selected != null)
+            {
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                EditorGUILayout.LabelField(selected.Description, EditorStyles.wordWrappedMiniLabel);
+                EditorGUILayout.EndVertical();
+            }
+
+            EditorGUILayout.Space(3);
+            if (GUILayout.Button("Validate Configuration"))
+            {
+                var config = target as MovementConfigBase;
+                _validationReport = config != null
+                    ? config.ValidateConfiguration()
+                    : "No configuration selected.";
+            }
+            if (!string.IsNullOrEmpty(_validationReport))
+            {
+                EditorGUILayout.HelpBox(_validationReport,
+                    _validationReport.StartsWith("OK", System.StringComparison.Ordinal)
+                        ? MessageType.Info : MessageType.Warning);
+            }
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("2D Movement Configuration", EditorStyles.boldLabel);
 
-            // Movement Type
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.PropertyField(_movementType, new GUIContent(
                 "Movement Type",
@@ -187,12 +298,10 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             }
             EditorGUILayout.EndVertical();
 
-            // Get current movement type
             MovementType2D currentType = (MovementType2D)_movementType.enumValueIndex;
 
             EditorGUILayout.Space(10);
 
-            // Ground Movement
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("Ground Movement", EditorStyles.miniLabel);
             EditorGUILayout.PropertyField(_walkSpeed);
@@ -203,7 +312,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
             EditorGUILayout.Space(5);
 
-            // Jump - Only for Platformer and BeltScroll
             if (currentType != MovementType2D.TopDown)
             {
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -214,7 +322,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
                 EditorGUILayout.Space(5);
 
-                // Air Movement - Only for Platformer and BeltScroll
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 EditorGUILayout.LabelField("Air Movement (Platformer/BeltScroll)", EditorStyles.miniLabel);
                 EditorGUILayout.PropertyField(_airControlMultiplier, new GUIContent(
@@ -254,7 +361,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
                 EditorGUILayout.Space(5);
 
-                // Physics - Only for Platformer and BeltScroll
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 EditorGUILayout.LabelField("Physics (Platformer/BeltScroll)", EditorStyles.miniLabel);
                 EditorGUILayout.PropertyField(_gravity, new GUIContent(
@@ -300,7 +406,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
                 EditorGUILayout.Space(5);
 
-                // Ground Detection - Only for Platformer and BeltScroll
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 EditorGUILayout.LabelField("Ground Detection (Platformer/BeltScroll)", EditorStyles.miniLabel);
                 EditorGUILayout.PropertyField(_groundCheckSize, new GUIContent(
@@ -339,15 +444,12 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
                 EditorGUILayout.Space(5);
 
-                // Other Settings - Only for Platformer and BeltScroll
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUILayout.LabelField("Other Settings (Platformer/BeltScroll)", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField("Movement Options (Platformer/BeltScroll)", EditorStyles.miniLabel);
                 EditorGUILayout.PropertyField(_lockZAxis);
                 EditorGUILayout.PropertyField(_slideSpeed, new GUIContent(
                     "Slide Speed",
                     "Speed when sliding down slopes or ground."));
-                // _wallJumpForceX/Y moved to Climbing section
-
 
                 EditorGUILayout.Space(3);
                 EditorGUI.indentLevel++;
@@ -357,7 +459,7 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                 {
                     EditorGUI.indentLevel++;
                     EditorGUILayout.HelpBox(
-                        "Other Settings:\n" +
+                        "Movement Options:\n" +
                         "• Lock Z Axis: Prevents character from moving on Z axis\n" +
                         "  - Essential for 2D games to keep character on correct layer\n" +
                         "  - Should typically be enabled\n" +
@@ -373,9 +475,8 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
                 EditorGUILayout.Space(5);
 
-                // Facing Direction - For Platformer and BeltScroll
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUILayout.LabelField("Facing Direction (Platformer/BeltScroll)", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField("Facing (Platformer/BeltScroll)", EditorStyles.miniLabel);
                 EditorGUILayout.PropertyField(_facingRight);
 
                 EditorGUILayout.Space(3);
@@ -402,7 +503,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
                 EditorGUILayout.Space(5);
 
-                // Moving Platform - For Platformer and BeltScroll
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 EditorGUILayout.LabelField("Moving Platform (Platformer/BeltScroll)", EditorStyles.miniLabel);
                 EditorGUILayout.PropertyField(_enableMovingPlatform, new GUIContent(
@@ -453,9 +553,8 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                 EditorGUILayout.EndVertical();
                 EditorGUILayout.Space(5);
 
-                // Gap Bridging (Mario Style) - For Platformer only
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUILayout.LabelField("Gap Bridging (Mario Style)", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField("Gap Bridging (Platformer/BeltScroll)", EditorStyles.miniLabel);
                 EditorGUILayout.PropertyField(_enableGapBridging, new GUIContent(
                     "Enable Gap Bridging",
                     "Maintain grounded state across small gaps when running fast.\n" +
@@ -481,7 +580,7 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                 {
                     EditorGUI.indentLevel++;
                     EditorGUILayout.HelpBox(
-                        "Gap Bridging (Mario Style):\n" +
+                        "Gap Bridging (Platformer/BeltScroll):\n" +
                         "• When running fast, character stays grounded over small gaps\n" +
                         "• Checks for ground ahead when current ground is missing\n" +
                         "• Creates fluid running experience like classic Mario games\n" +
@@ -492,12 +591,9 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
                 EditorGUILayout.EndVertical();
                 EditorGUILayout.Space(5);
 
-                // Climbing Settings - For Platformer only? Or BeltScroll too? Typically Platformer.
-                // Let's enable for both Platformer and BeltScroll for consistency, though BeltScroll wall climbing is rare.
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUILayout.LabelField("Climbing Settings", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField("Climbing (Platformer/BeltScroll)", EditorStyles.miniLabel);
                 
-                // Ladder
                 EditorGUILayout.PropertyField(_enableLadderClimbing);
                 if (_enableLadderClimbing.boolValue)
                 {
@@ -509,7 +605,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
                 EditorGUILayout.Space(2);
 
-                // Wall
                 EditorGUILayout.PropertyField(_enableWallClimbing);
                 if (_enableWallClimbing.boolValue)
                 {
@@ -562,7 +657,6 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
             }
             else
             {
-                // TopDown mode - show different settings
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 EditorGUILayout.LabelField("TopDown Settings", EditorStyles.miniLabel);
                 EditorGUILayout.PropertyField(_lockZAxis, new GUIContent(
@@ -581,170 +675,14 @@ namespace CycloneGames.RPGFoundation.Movement.Editor
 
             EditorGUILayout.Space(10);
 
-            // Animation System Configuration
+            EditorGUILayout.Space(10);
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Animation System", EditorStyles.miniLabel);
-            EditorGUILayout.PropertyField(_animationSystem, new GUIContent(
-                "Animation System",
-                "Choose the animation system to use:\n" +
-                "• Unity Animator: Standard Unity Animator Controller\n" +
-                "• Animancer: Animancer animation system"));
-
-            // Show Animancer parameter mode option only when Animancer is selected
-            AnimationSystemType currentSystem = (AnimationSystemType)_animationSystem.enumValueIndex;
-            if (currentSystem == AnimationSystemType.Animancer)
-            {
-                EditorGUILayout.Space(3);
-                EditorGUILayout.PropertyField(_animancerParameterMode, new GUIContent(
-                    "Animancer Parameter Mode",
-                    "How to handle animation parameters when using Animancer:\n" +
-                    "• Animator Hash: Use Animator hash values (for HybridAnimancerComponent with Animator Controller)\n" +
-                    "• String Parameter: Use direct string parameters (for AnimancerComponent Parameters mode)"));
-
-                EditorGUILayout.Space(3);
-                EditorGUI.indentLevel++;
-                _showAnimationSystemHelp = EditorGUILayout.Foldout(_showAnimationSystemHelp, "Help & Details", EditorStyles.foldout);
-                EditorGUI.indentLevel--;
-                if (_showAnimationSystemHelp)
-                {
-                    EditorGUI.indentLevel++;
-                    EditorGUILayout.HelpBox(
-                        "Animancer Parameter Mode Guide:\n\n" +
-                        "【Animator Hash Mode】\n" +
-                        "• Use with: HybridAnimancerComponent + Animator Controller\n" +
-                        "• Setup: Animator Controller must have parameters defined\n" +
-                        "• Root Motion: ✓ Supported (via HybridAnimancerComponent's Animator)\n" +
-                        "• If Animator has no Controller assigned: Parameters are safely ignored\n\n" +
-                        "【String Parameter Mode】\n" +
-                        "• Use with: HybridAnimancerComponent OR AnimancerComponent\n" +
-                        "• Setup: Parameters are created automatically in Animancer when first used\n" +
-                        "• With HybridAnimancerComponent: Root Motion ✓ Supported\n" +
-                        "• With AnimancerComponent: Root Motion ✗ NOT Supported\n\n" +
-                        "【Using Custom Animation Controller?】\n" +
-                        "If you handle animations separately (e.g., via Animancer API directly,\n" +
-                        "like RPGPlayerCharacterAnimationController using OnJumpStart event):\n" +
-                        "→ Leave ALL parameter fields empty below to disable built-in control\n\n" +
-                        "【Quick Reference】\n" +
-                        "• Need Root Motion? → Use HybridAnimancerComponent\n" +
-                        "• Simple setup? → Animator Hash + Animator Controller with parameters\n" +
-                        "• Custom control? → Clear all parameters, use events (OnJumpStart, OnLanded)",
-                        MessageType.Info);
-                    EditorGUI.indentLevel--;
-                }
-            }
-
-            EditorGUILayout.EndVertical();
-
-            EditorGUILayout.Space(5);
-
-            // Animation Parameters
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Animation Parameters", EditorStyles.miniLabel);
-
-            // Check if all parameters are empty
-            bool allEmpty = string.IsNullOrEmpty(_movementSpeedParameter.stringValue) &&
-                           (_isGroundedParameter.serializedObject == null || string.IsNullOrEmpty(_isGroundedParameter.stringValue)) && // Handle potential null if not found
-                           (_jumpTrigger.serializedObject == null || string.IsNullOrEmpty(_jumpTrigger.stringValue)) &&
-                           (_verticalSpeedParameter.serializedObject == null || string.IsNullOrEmpty(_verticalSpeedParameter.stringValue));
-
-            if (currentType != MovementType2D.TopDown)
-            {
-                // Add climbing params to empty check
-                 allEmpty = allEmpty &&
-                            string.IsNullOrEmpty(_climbingParameter.stringValue) &&
-                            string.IsNullOrEmpty(_wallSlidingParameter.stringValue);
-            }
-
-            if (allEmpty)
-            {
-                EditorGUILayout.HelpBox(
-                    "Custom Animation Logic Detected:\n" +
-                    "All parameters are empty. The movement component will NOT set any animation values.\n" +
-                    "Use movement events (OnJump, OnLanded, etc.) to drive your custom animation logic.",
-                    MessageType.Info);
-            }
-
-            // Show help text based on selected system
-            if (currentSystem == AnimationSystemType.Animancer)
-            {
-                AnimancerParameterMode paramMode = (AnimancerParameterMode)_animancerParameterMode.enumValueIndex;
-                if (paramMode == AnimancerParameterMode.AnimatorHash)
-                {
-                    if (allEmpty)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "✓ Direct API Mode: All parameters empty.\n" +
-                            "MovementComponent will NOT control animations.\n" +
-                            "Use this when you have a custom animation controller that handles animations via events (OnJumpStart, OnLanded).",
-                            MessageType.Info);
-                    }
-                    else
-                    {
-                        EditorGUILayout.HelpBox(
-                            "Parameter-Based Mode: These parameters will be set on your Animator Controller.\n\n" +
-                            "Requirements:\n" +
-                            "• Animator component must have a Controller assigned\n" +
-                            "• Controller must have parameters with matching names\n" +
-                            "• Parameter types: Speed=Float, IsGrounded=Bool, Jump/Roll=Trigger\n\n" +
-                            "⚠ If no Animator Controller: Parameters will be sent to Animancer's\n" +
-                            "   Parameters system as Bool values (Triggers won't auto-reset!).",
-                            MessageType.Warning);
-                    }
-                }
-                else
-                {
-                    if (!allEmpty)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "String Parameter Mode: Parameters auto-created in Animancer.\n\n" +
-                            "⚠ Triggers (Jump, Roll) will be created as Bool and won't auto-reset!\n" +
-                            "   You may need to manually reset them, or use Direct API Mode instead\n" +
-                            "   (clear all parameters and handle animations via OnJumpStart event).",
-                            MessageType.Warning);
-                    }
-                    else
-                    {
-                        EditorGUILayout.HelpBox(
-                            "✓ Direct API Mode: Parameters will be auto-created when used.\n" +
-                            "Leave empty to handle animations via custom controller.",
-                            MessageType.Info);
-                    }
-                }
-                EditorGUILayout.Space(3);
-            }
-
-            EditorGUILayout.PropertyField(_movementSpeedParameter);
-
-            // Show different parameters based on movement type
-            if (currentType != MovementType2D.TopDown)
-            {
-                EditorGUILayout.PropertyField(_isGroundedParameter);
-                EditorGUILayout.PropertyField(_jumpTrigger);
-                EditorGUILayout.PropertyField(_verticalSpeedParameter, new GUIContent(
-                    "Vertical Speed Parameter",
-                    "Parameter name for vertical speed (Float).\n" +
-                    "Used for jump/fall animations (Platformer/BeltScroll)."));
-                EditorGUILayout.PropertyField(_climbingParameter);
-                EditorGUILayout.PropertyField(_wallSlidingParameter);
-            }
-            else
-            {
-                EditorGUILayout.HelpBox(
-                    "TopDown mode uses InputX/InputY parameters for 4-direction facing.",
-                    MessageType.Info);
-            }
-
-            EditorGUILayout.PropertyField(_inputXParameter, new GUIContent(
-                "Input X Parameter",
-                "Parameter name for input X axis (Float).\n" +
-                "Platformer/BeltScroll: Horizontal movement\n" +
-                "TopDown: Used for 4-direction facing (Left/Right)"));
-            EditorGUILayout.PropertyField(_inputYParameter, new GUIContent(
-                "Input Y Parameter",
-                "Parameter name for input Y axis (Float).\n" +
-                "Platformer/BeltScroll: Vertical movement (if applicable)\n" +
-                "TopDown: Used for 4-direction facing (Up/Down)"));
-            EditorGUILayout.PropertyField(_rollTrigger);
+            EditorGUILayout.LabelField("Animation", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField("This asset configures simulation only.",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.LabelField(
+                "Animation backends own their parameter names and are bound with BindAnimation.",
+                EditorStyles.wordWrappedMiniLabel);
             EditorGUILayout.EndVertical();
 
             serializedObject.ApplyModifiedProperties();

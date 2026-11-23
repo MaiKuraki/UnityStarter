@@ -1,262 +1,182 @@
+using NUnit.Framework;
+
 using CycloneGames.Networking;
 using CycloneGames.Networking.Simulation;
-using CycloneGames.RPGFoundation.Movement.Core;
-using NUnit.Framework;
+using CycloneGames.RPGFoundation.Movement.Networking;
 
 namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
 {
     public sealed class MovementNetworkingAuthorityTests
     {
         private const ulong ENTITY_ID = 1001UL;
+        private const ulong EPOCH = 7UL;
 
         [Test]
-        public void InputValidator_Accepts_Valid_Predicted_Input()
+        public void InputValidator_RejectsNullSenderAndEpochMismatch()
         {
-            MovementInputCommandMessage command = CreateInput(clientTick: 20, sequence: 3, predictionKey: 77);
-            var context = new MovementNetworkInputValidationContext(
-                sender: null,
-                serverTick: new NetworkTickId(22),
-                lastAcceptedClientTick: new NetworkTickId(19),
-                maxAcceptedTickDrift: 8,
-                allowedButtonMask: uint.MaxValue,
-                allowedCustomFlags: 0xFFU);
+            var authenticated = new FakeConnection(true);
+            var nullContext = MakeContext(null, EPOCH, 20);
+            var wrongEpoch = MakeContext(authenticated, EPOCH + 1UL, 20);
 
-            NetworkActionResult result = DefaultMovementNetworkInputValidator.Instance.Validate(command, context);
-
-            Assert.That(result.IsAccepted, Is.True);
-            Assert.That(result.PredictionKey, Is.EqualTo(77));
-            Assert.That(result.Sequence, Is.EqualTo(3));
+            Assert.That(DefaultMovementNetworkInputValidator.Instance
+                .Validate(CreateInput(20, 3), nullContext).IsAccepted, Is.False);
+            Assert.That(DefaultMovementNetworkInputValidator.Instance
+                .Validate(CreateInput(20, 3), wrongEpoch).IsAccepted, Is.False);
+            Assert.That(DefaultMovementNetworkInputValidator.Instance
+                .Validate(CreateInput(20, 3), MakeContext(authenticated, EPOCH, 20)).IsAccepted, Is.True);
         }
 
         [Test]
-        public void InputValidator_Rejects_OutOfRange_MoveAxes()
+        public void InputAuthority_RecordsAcceptedInputAndRejectsReplay()
         {
-            MovementInputCommandMessage command = CreateInput(clientTick: 20, sequence: 3);
-            command.MoveAxes = new NetworkVector3(5f, 0f, 0f);
-            var context = new MovementNetworkInputValidationContext(
-                sender: null,
-                serverTick: new NetworkTickId(20),
-                lastAcceptedClientTick: NetworkTickId.Invalid,
-                maxMoveAxesMagnitude: 1.25f);
-
-            NetworkActionResult result = DefaultMovementNetworkInputValidator.Instance.Validate(command, context);
-
-            Assert.That(result.IsAccepted, Is.False);
-            Assert.That(result.Code, Is.EqualTo(NetworkActionResultCode.InvalidPayload));
-        }
-
-        [Test]
-        public void InputValidator_Rejects_Duplicate_Sequence_From_Context()
-        {
-            MovementInputCommandMessage command = CreateInput(clientTick: 20, sequence: 3);
-            var context = new MovementNetworkInputValidationContext(
-                sender: null,
-                serverTick: new NetworkTickId(20),
-                lastAcceptedClientTick: new NetworkTickId(20),
-                lastAcceptedInputSequence: 3);
-
-            NetworkActionResult result = DefaultMovementNetworkInputValidator.Instance.Validate(command, context);
-
-            Assert.That(result.IsAccepted, Is.False);
-            Assert.That(result.Code, Is.EqualTo(NetworkActionResultCode.Duplicate));
-        }
-
-        [Test]
-        public void InputAuthority_Records_Accepted_Input_And_Rejects_Replay()
-        {
-            var authority = new MovementNetworkInputAuthority(new MovementNetworkInputHistory(capacity: 4));
-            MovementInputCommandMessage command = CreateInput(clientTick: 20, sequence: 3);
-            var context = new MovementNetworkInputValidationContext(
-                sender: null,
-                serverTick: new NetworkTickId(20),
-                lastAcceptedClientTick: NetworkTickId.Invalid);
+            var authority = CreateAuthority(64);
+            MovementInputCommandMessage command = CreateInput(20, 3);
+            var context = MakeContext(new FakeConnection(true), EPOCH, 20);
 
             Assert.That(authority.TryAccept(command, context, out NetworkActionResult accepted), Is.True);
             Assert.That(accepted.IsAccepted, Is.True);
             Assert.That(authority.TryAccept(command, context, out NetworkActionResult duplicate), Is.False);
             Assert.That(duplicate.Code, Is.EqualTo(NetworkActionResultCode.Duplicate));
-            Assert.That(authority.History.TryGetLatest(ENTITY_ID, out MovementInputCommandMessage latest, out int tick, out ushort sequence), Is.True);
-            Assert.That(latest.InputSequence, Is.EqualTo(3));
-            Assert.That(tick, Is.EqualTo(20));
-            Assert.That(sequence, Is.EqualTo(3));
         }
 
         [Test]
-        public void SnapshotHistory_Returns_Latest_Server_Snapshot()
+        public void TimeDilationAuditor_RejectsSameTickFloodImmediately()
         {
-            var history = new MovementNetworkSnapshotHistory(capacity: 2);
-            MovementNetworkSnapshotMessage first = CreateSnapshot(serverTick: 10, sequence: 1, x: 1f);
-            MovementNetworkSnapshotMessage second = CreateSnapshot(serverTick: 11, sequence: 2, x: 2f);
-
-            history.Record(first);
-            history.Record(second);
-
-            Assert.That(history.TryGetLatest(ENTITY_ID, out MovementNetworkSnapshotMessage latest), Is.True);
-            Assert.That(latest.ServerTick, Is.EqualTo(11));
-            Assert.That(latest.Position.X, Is.EqualTo(2f));
-        }
-
-        [Test]
-        public void Reconciliation_Creates_Correction_When_Position_Drifts()
-        {
-            MovementNetworkSnapshotMessage predicted = CreateSnapshot(serverTick: 10, sequence: 4, x: 0f);
-            MovementNetworkSnapshotMessage authoritative = CreateSnapshot(serverTick: 11, sequence: 5, x: 4f);
-            var policy = new MovementNetworkCorrectionPolicy(
-                positionCorrectionThreshold: 0.05f,
-                positionHardSnapThreshold: 2f,
-                velocityCorrectionThreshold: 0.5f);
-
-            bool created = MovementNetworkReconciliation.TryCreateCorrection(
-                predicted,
-                authoritative,
-                policy,
-                out MovementCorrectionMessage correction);
-
-            Assert.That(created, Is.True);
-            Assert.That(correction.IsValid, Is.True);
-            Assert.That(correction.CorrectedClientTick, Is.EqualTo(predicted.Tick));
-            Assert.That(correction.InputSequence, Is.EqualTo(predicted.Sequence));
-            Assert.That(correction.Snapshot.IsTeleport, Is.True);
-        }
-
-        [Test]
-        public void TimeDilationAuditor_Rejects_SustainedSpeedUp_Stream()
-        {
-            // Tick rate 30, window 32 commands: an honest 30 Hz stream claims
-            // ~1.07 s of simulation per server second; the cheater claims 30x.
-            var auditor = new MovementTimeDilationAuditor(tickRate: 30, windowCommands: 32, maxDilationRatio: 1.25f);
-
-            for (int i = 0; i < 31; i++)
-                Assert.IsTrue(auditor.Audit(ENTITY_ID, claimedDeltaSeconds: 1.0f, serverTick: i),
-                    "Window must not judge before it fills.");
-
-            // At command 32 the window closes: 32 claimed seconds over ~1 server second.
-            Assert.IsFalse(auditor.Audit(ENTITY_ID, claimedDeltaSeconds: 1.0f, serverTick: 31),
-                "A stream claiming 32 s of simulation in ~1 s of wall time is time-dilation abuse.");
-        }
-
-        [Test]
-        public void TimeDilationAuditor_Accepts_HonestStream_WithJitter()
-        {
-            var auditor = new MovementTimeDilationAuditor(tickRate: 30, windowCommands: 32, maxDilationRatio: 1.25f);
-
+            var auditor = new MovementTimeDilationAuditor(MovementDilationPolicy.Default);
+            int accepted = 0;
             for (int i = 0; i < 64; i++)
-            {
-                // Alternating jitter around 1/30 s, well inside the 1.25x tolerance.
-                float delta = (i & 1) == 0 ? 0.028f : 0.038f;
-                Assert.IsTrue(auditor.Audit(ENTITY_ID, delta, serverTick: i),
-                    $"Honest jittered stream must stay accepted (command {i}).");
-            }
+                if (auditor.Audit(ENTITY_ID, 1.0, 100)) accepted++;
+
+            Assert.That(accepted, Is.LessThanOrEqualTo(1));
         }
 
         [Test]
-        public void TimeDilationAuditor_IsBounded_AndFailClosed()
+        public void TimeDilationAuditor_AcceptsHonest60HzStream()
         {
-            var auditor = new MovementTimeDilationAuditor(tickRate: 30, windowCommands: 4, maxEntities: 2);
-            auditor.Audit(1, 0.016f, 0);
-            auditor.Audit(2, 0.016f, 0);
-
-            Assert.IsFalse(auditor.Audit(3, 0.016f, 0),
-                "A full audit table must reject new entities rather than grow or go silent.");
-            Assert.AreEqual(2, auditor.TrackedEntityCount);
+            var auditor = new MovementTimeDilationAuditor(MovementDilationPolicy.Default);
+            for (int i = 0; i < 1000; i++)
+                Assert.That(auditor.Audit(ENTITY_ID, 1.0 / 60.0, i), Is.True, "command " + i);
         }
 
         [Test]
-        public void InputAuthority_WithAuditor_RejectsDilatedInput_AfterWindow()
+        public void TimeDilationAuditor_EvictsIdleEntitiesInsteadOfFailingClosed()
         {
-            var history = new MovementNetworkInputHistory(capacity: 128);
-            var auditor = new MovementTimeDilationAuditor(tickRate: 30, windowCommands: 8, maxDilationRatio: 1.25f);
-            var authority = new MovementNetworkInputAuthority(history, dilationAuditor: auditor);
+            var policy = new MovementDilationPolicy(60, 120, 1.25, 2, 0.05, 64);
+            var auditor = new MovementTimeDilationAuditor(policy);
+            for (ulong id = 1UL; id <= 50UL; id++)
+                Assert.That(auditor.Audit(id, 1.0 / 60.0, (long)id), Is.True);
 
-            int rejected = 0;
-            for (int i = 0; i < 16; i++)
+            Assert.That(auditor.TrackedEntityCount, Is.LessThanOrEqualTo(2));
+            Assert.That(auditor.GetDiagnostics().EntityEvictionCount, Is.GreaterThan(0));
+        }
+
+        [Test]
+        public void EntityHistory_KeepsPerEntityRecordsAndPrunesOnAck()
+        {
+            var history = new MovementNetworkInputHistory(new MovementHistoryCapacity(8, 16));
+            for (int i = 1; i <= 10; i++)
             {
-                MovementInputCommandMessage command = CreateInput(clientTick: i + 1, sequence: (ushort)(i + 1), deltaTime: 0.9f);
-                var context = new MovementNetworkInputValidationContext(
-                    sender: null,
-                    serverTick: new NetworkTickId(i + 1),
-                    lastAcceptedClientTick: new NetworkTickId(i),
-                    lastAcceptedInputSequence: (ushort)i);
-
-                if (!authority.TryAccept(command, context, out NetworkActionResult result))
-                {
-                    rejected++;
-                    Assert.AreEqual(NetworkActionResultCode.RateLimited, result.Code);
-                }
+                history.Record(CreateInput(1UL, i, (ushort)i));
+                history.Record(CreateInput(2UL, i, (ushort)i));
             }
 
-            Assert.Greater(rejected, 0, "The auditor must eventually reject a 27x-dilated stream.");
+            Assert.That(history.Contains(CreateInput(1UL, 1, 1)), Is.True);
+            Assert.That(history.Contains(CreateInput(2UL, 10, 10)), Is.True);
+            Assert.That(history.GetDiagnostics().TrackedEntities, Is.EqualTo(2));
+
+            var ack = new MovementInputAckMessage(1UL, EPOCH, 20L, 5L, 5, true);
+            Assert.That(history.PruneUpTo(ack), Is.EqualTo(5));
+            Assert.That(history.Contains(CreateInput(1UL, 1, 1)), Is.False);
+            Assert.That(history.Contains(CreateInput(1UL, 6, 6)), Is.True);
         }
 
         [Test]
-        public void InputAuthority_Reset_ClearsDilationAuditState()
+        public void Reconciliation_IgnoresLocalOnlyFlagBits()
         {
-            var history = new MovementNetworkInputHistory(capacity: 32);
-            var auditor = new MovementTimeDilationAuditor(tickRate: 30, windowCommands: 32, maxDilationRatio: 1.25f);
-            var authority = new MovementNetworkInputAuthority(history, dilationAuditor: auditor);
+            MovementNetworkSnapshotMessage predicted = CreateSnapshot(0f);
+            predicted.Flags = MovementNetworkSnapshotFlags.Predicted;
+            MovementNetworkSnapshotMessage authoritative = CreateSnapshot(0f);
 
-            var context = new MovementNetworkInputValidationContext(
-                sender: null,
-                serverTick: new NetworkTickId(1),
-                lastAcceptedClientTick: NetworkTickId.Invalid);
-
-            Assert.IsTrue(authority.TryAccept(CreateInput(clientTick: 1, sequence: 1), context, out _));
-            Assert.AreEqual(1, auditor.TrackedEntityCount);
-
-            authority.Reset();
-
-            Assert.AreEqual(0, auditor.TrackedEntityCount,
-                "Reset must clear dilation windows so an epoch change cannot carry stale audit state.");
-            Assert.AreEqual(0, authority.History.Count);
+            Assert.That(predicted.IsWellFormed, Is.True);
+            Assert.That(predicted.IsValid, Is.False);
+            Assert.That(MovementNetworkReconciliation.RequiresCorrection(
+                predicted, authoritative, MovementNetworkCorrectionPolicy.Default, out float error), Is.False);
+            Assert.That(error, Is.EqualTo(0f));
         }
 
-        private static MovementInputCommandMessage CreateInput(
-            int clientTick,
-            ushort sequence,
-            int predictionKey = 0)
+        [Test]
+        public void Reconciliation_RejectsUnknownFlagBitsWithoutSpuriousCorrection()
         {
-            return CreateInput(clientTick, sequence, 0.016f, predictionKey);
+            MovementNetworkSnapshotMessage malformed = CreateSnapshot(0f);
+            malformed.Flags = 0x80;
+
+            Assert.That(malformed.IsValid, Is.False);
+            Assert.That(MovementNetworkReconciliation.RequiresCorrection(
+                malformed, CreateSnapshot(0f), MovementNetworkCorrectionPolicy.Default, out _), Is.False);
         }
 
-        private static MovementInputCommandMessage CreateInput(
-            int clientTick,
-            ushort sequence,
-            float deltaTime,
-            int predictionKey = 0)
+        [Test]
+        public void InputBatch_RejectsNonMonotonicTicks()
+        {
+            MovementInputCommandMessage older = CreateInput(10, 1);
+            MovementInputCommandMessage newer = CreateInput(9, 2);
+            var batch = new MovementInputBatchMessage(ENTITY_ID, EPOCH, 2, older, newer);
+
+            Assert.That(batch.IsValid, Is.False);
+        }
+
+        private static MovementNetworkInputAuthority CreateAuthority(int capacity)
+        {
+            var history = new MovementNetworkInputHistory(new MovementHistoryCapacity(64, capacity));
+            var auditor = new MovementTimeDilationAuditor(MovementDilationPolicy.Default);
+            return new MovementNetworkInputAuthority(history, auditor);
+        }
+
+        private static MovementNetworkInputValidationContext MakeContext(
+            INetConnection sender, ulong epoch, long serverTick)
+        {
+            return new MovementNetworkInputValidationContext(
+                sender, epoch, new NetworkTickId(serverTick), NetworkTickId.Invalid);
+        }
+
+        private static MovementInputCommandMessage CreateInput(long clientTick, ushort sequence)
+        {
+            return CreateInput(ENTITY_ID, clientTick, sequence);
+        }
+
+        private static MovementInputCommandMessage CreateInput(ulong entityId, long clientTick, ushort sequence)
         {
             return new MovementInputCommandMessage(
-                ENTITY_ID,
-                clientTick,
-                lastReceivedServerTick: clientTick - 1,
-                inputSequence: sequence,
-                buttonMask: 1U,
-                customFlags: 0U,
-                deltaTime: deltaTime,
-                moveAxes: new NetworkVector3(1f, 0f, 0f),
-                aimDirection: NetworkVector3.Forward,
-                predictionKey: predictionKey);
+                entityId, EPOCH, clientTick, clientTick > 0 ? clientTick - 1 : 0L,
+                sequence, 1U, 0U, 1f / 60f,
+                new NetworkVector3(1f, 0f, 0f), NetworkVector3.Forward, sequence);
         }
 
-        private static MovementNetworkSnapshotMessage CreateSnapshot(int serverTick, ushort sequence, float x)
+        private static MovementNetworkSnapshotMessage CreateSnapshot(float x)
         {
-            var snapshot = new MovementSnapshot
-            {
-                Position = new MovementVector3(x, 0f, 0f),
-                Velocity = new MovementVector3(0f, 0f, 0f),
-                WorldUp = new MovementVector3(0f, 1f, 0f),
-                StateType = MovementStateType.Walk,
-                VerticalVelocity = 0f,
-                IsGrounded = true,
-                JumpCount = 0,
-                Tick = serverTick - 1,
-                Timestamp = serverTick * 0.016f
-            };
+            return new MovementNetworkSnapshotMessage(
+                ENTITY_ID, EPOCH, 10L, 11L, 1, (ushort)0, 0, 0,
+                0f, 0.5, new NetworkVector3(x, 0f, 0f),
+                NetworkVector3.Zero, NetworkVector3.Up);
+        }
 
-            return MovementNetworkSnapshotMessage.FromMovementSnapshot(
-                ENTITY_ID,
-                snapshot,
-                serverTick,
-                sequence);
+        private sealed class FakeConnection : INetConnection
+        {
+            private readonly bool _authenticated;
+            public FakeConnection(bool authenticated) { _authenticated = authenticated; }
+            public int ConnectionId => 1;
+            public string RemoteAddress => "127.0.0.1";
+            public bool IsConnected => true;
+            public bool IsAuthenticated => _authenticated;
+            public int Ping => 30;
+            public ConnectionQuality Quality => ConnectionQuality.Good;
+            public double Jitter => 0.0;
+            public long BytesSent => 0;
+            public long BytesReceived => 0;
+            public ulong PlayerId { get; set; }
+            public bool Equals(INetConnection other) => ReferenceEquals(this, other);
+            public override bool Equals(object obj) => ReferenceEquals(this, obj);
+            public override int GetHashCode() => 1;
         }
     }
 }

@@ -3,8 +3,7 @@
     "rootNamespace": "CycloneGames.RPGFoundation.Movement.Networking",
     "references": [
         "CycloneGames.RPGFoundation.Movement.Core",
-        "CycloneGames.Networking.Core",
-        "Unity.Mathematics"
+        "CycloneGames.Networking.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

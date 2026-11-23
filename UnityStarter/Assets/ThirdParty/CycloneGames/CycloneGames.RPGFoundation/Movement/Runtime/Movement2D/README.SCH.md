@@ -1,316 +1,154 @@
-# RPG 2D 移动模块
+# 2D 移动参考
 
-[English](README.md) | 简体中文
+[English](README.md) | 简体中文 | [包总览](../../README.SCH.md)
 
-一个基于状态的 Unity 2D 角色移动组件。支持 Platformer、BeltScroll 和 TopDown 移动模式，提供 ScriptableObject 配置、运行时属性修改、snapshot 和可选的 GameplayAbilities integration assembly。
+`MovementComponent2D` 用显式状态机驱动 2D 角色，依赖 `Rigidbody2D`，速度与上下文使用 `Unity.Mathematics.float2`，配置来自 `MovementConfig2D` 资产。
 
-## 目录
+## 组件设置
 
-- [概述](#概述)
-- [架构](#架构)
-- [快速上手](#快速上手)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [进阶主题](#进阶主题)
-- [常见场景](#常见场景)
-- [性能与内存](#性能与内存)
-- [故障排查](#故障排查)
+| 项 | 值 |
+| --- | --- |
+| 必需组件 | `Rigidbody2D` |
+| 插值 | `RigidbodyInterpolation2D.Interpolate` |
+| 碰撞检测 | `CollisionDetectionMode2D.Continuous` |
+| 着地检测 | `Physics2D.OverlapBox` |
+| 线程 | Unity 主线程 |
 
-## 概述
+用 `Create > CycloneGames > RPG Foundation > Movement > Movement Config 2D` 创建配置，赋值给组件后设置 `movementType`。
 
-`MovementComponent2D` 为 2D 角色提供显式状态机驱动的移动。移动计算使用 `Unity.Mathematics`。组件、Physics2D、动画和事件均运行在 Unity 主线程。
+## 配置
 
-### 主要特性
+`MovementConfig2D` 有 37 个序列化字段。下表列出常改项，默认值取自资产源码。
 
-- **三种移动模式** — Platformer、BeltScroll（DNF 风格）和 TopDown
-- **状态机** — 显式状态（Idle、Walk、Run、Sprint、Jump、Fall、Climb、WallSlide）
-- **2D 手感特性** — 土狼时间、跳跃缓冲、空中控制、小间隙跨越
-- **ScriptableObject 配置** — 通过 `MovementConfig2D` 共享移动参数
-- **Rigidbody2D 物理** — 重力、通过 `Physics2D.OverlapBox` 进行地面检测
-- **属性修改** — 运行时覆盖所有移动属性
-- **时间缩放** — 全局与组件局部控制
-- **攀爬系统** — 梯子和贴墙攀爬，支持蹬墙跳
+| 字段 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `movementType` | `Platformer` | `Platformer`、`BeltScroll`、`TopDown` |
+| `gravity` | `25f` | 正值，表示向下量级 |
+| `maxFallSpeed` | `20f` | 下落终速 |
+| `groundCheckDistance` | `0.1f` | 着地探测距离 |
+| `groundCheckSize` | `(0.8, 0.1)` | 重叠盒尺寸 |
+| `groundCheckOffset` | `(0, -0.5)` | 重叠盒偏移 |
+| `coyoteTime` | `0.1f` | 延迟跳跃窗口 |
+| `jumpBufferTime` | `0.1f` | 提前跳跃窗口 |
+| `airControlMultiplier` | `0.5f` | 空中控制系数 |
+| `slideSpeed` | `7f` | 贴墙下滑速度 |
+| `rollDistance` / `rollDuration` | `5f` / `0.5f` | 翻滚参数 |
+| `lockZAxis` | `true` | 保持在 2D 平面 |
+| `facingRight` | `true` | 初始朝向 |
+| `groundLayer` | `1` | 地面层掩码 |
 
-## 架构
+`MovementConfigRules` 用有限边界校验每个数值字段。Inspector 的 `Validate Configuration` 返回只读问题报告。内置预设为 `Platformer` 与 `TopDown`；外部项目可添加 `MovementConfigPresetAsset`。
 
-```mermaid
-flowchart LR
-    Input["输入 (方向、跳跃、冲刺、翻滚、攀爬)"] --> MCP["MovementComponent2D"]
-    MCP --> Config["MovementConfig2D (ScriptableObject)"]
-    MCP --> RB["Rigidbody2D"]
-    MCP --> Auth["IMovementAuthority<br/>(可选: 属性覆盖、状态控制)"]
-    Auth --> GAS["GASMovementAuthority2D<br/>(可选 GameplayAbilities 集成)"]
-    MCP --> Snap["MovementSnapshot<br/>(网络交接数据)"]
+重力符号与 3D 组件相反。3D 使用负值，直接填进 2D 资产会让角色反向运动。
+
+## 状态机
+
+状态由 `MovementStateType` 选择：`Idle`、`Walk`、`Run`、`Sprint`、`Crouch`、`Jump`、`Fall`、`Roll`、`Climb`、`Swim`、`Fly`。2D 实现提供以下具体状态：
+
+```text
+IdleState2D, WalkState2D, RunState2D, SprintState2D, CrouchState2D,
+JumpState2D, FallState2D, RollState2D, LadderClimbState2D, WallClimbState2D
 ```
 
-### MovementConfig2D 参数
+`RequestStateChange(MovementStateType, object)` 请求切换，`OnStateChanged` 报告实际发生的切换。攀爬使用 `ClimbingMode.None`、`Ladder` 或 `Wall`。
 
-| 分类     | 参数           | 描述         | 默认值  |
-| -------- | -------------- | ------------ | ------- |
-| **地面** | walkSpeed      | 行走速度     | 3.0     |
-| **地面** | runSpeed       | 跑步速度     | 5.0     |
-| **地面** | sprintSpeed    | 冲刺速度     | 8.0     |
-| **空中** | jumpForce      | 跳跃力度     | 12.0    |
-| **空中** | maxJumpCount   | 多段跳次数   | 1       |
-| **空中** | maxFallSpeed   | 最大下落速度 | 20.0    |
-| **物理** | gravity        | 重力         | 25.0    |
-| **物理** | groundLayer    | 地面检测层   | Default |
-| **手感** | coyoteTime     | 延迟跳跃窗口 | 0.1s    |
-| **手感** | jumpBufferTime | 提前跳跃窗口 | 0.1s    |
-
-## 快速上手
-
-### 步骤 1：创建配置
-
-`Create > CycloneGames > RPG Foundation > Movement Config 2D`
-
-### 步骤 2：添加组件
-
-在 2D 角色 GameObject 上添加 `MovementComponent2D`。分配 `MovementConfig2D` 和 `Rigidbody2D`（缺失时会自动添加）。
-
-### 步骤 3：基础输入
-
-**Platformer 模式：**
+## 输入与查询
 
 ```csharp
 using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
+using UnityEngine;
 
-public class Player2DController : MonoBehaviour
+public sealed class PlatformerInput : MonoBehaviour
 {
     private MovementComponent2D _movement;
 
-    void Awake() => _movement = GetComponent<MovementComponent2D>();
+    private void Awake() => _movement = GetComponent<MovementComponent2D>();
 
-    void Update()
+    private void Update()
     {
-        float horizontal = Input.GetAxis("Horizontal");
-        _movement.SetInputDirection(new Vector2(horizontal, 0));
+        _movement.SetInputDirection(new Vector2(Input.GetAxisRaw("Horizontal"), 0f));
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
         _movement.SetSprintHeld(Input.GetButton("Sprint"));
+        _movement.SetCrouchHeld(Input.GetButton("Crouch"));
+        _movement.SetRollPressed(Input.GetButtonDown("Roll"));
     }
 }
 ```
 
-**BeltScroll 模式（DNF 风格）：**
+| 成员 | 用途 |
+| --- | --- |
+| `SetInputDirection(Vector2)` | 水平或平面移动意图 |
+| `SetJumpPressed`、`SetSprintHeld`、`SetCrouchHeld`、`SetRollPressed` | 按键意图 |
+| `RequestClimb(ClimbingMode, int, object)`、`StopClimb()` | 梯子与墙面攀爬 |
+| `SetLookDirection(Vector2)`、`ClearLookDirection()`、`SetRotation(...)` | 朝向，与移动分离 |
+| `IsGrounded`、`CurrentSpeed`、`Velocity`、`LookDirection`、`IsMoving` | 状态查询 |
+| `LaunchCharacter`、`AddForce`、`AddExplosionForce` | 外部冲量 |
+| `PauseGroundConstraint(float)` | 临时释放地面约束 |
+| `Config` | 配置资产的只读视图 |
 
-```csharp
-void Update()
-{
-    // X = 水平移动, Y = 纵深移动
-    float horizontal = Input.GetAxis("Horizontal");
-    float vertical = Input.GetAxis("Vertical");
-    _movement.SetInputDirection(new Vector2(horizontal, vertical));
-    _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
-    _movement.SetSprintHeld(Input.GetButton("Sprint"));
-}
-```
-
-## 核心概念
-
-### MovementType2D
-
-| 类型           | 描述            | 物理           |
-| -------------- | --------------- | -------------- |
-| **Platformer** | 标准横板卷轴    | Y=重力/跳跃    |
-| **BeltScroll** | DNF 风格带纵深  | 跳跃由物理控制 |
-| **TopDown**    | 经典 RPG 俯视角 | 无重力         |
-
-### BeltScroll 模式
-
-BeltScroll（DNF 风格）使用伪 3D：X 为水平移动，Y 模拟纵深（上=远，下=近），跳跃通过 Rigidbody2D 物理临时增加 Y 偏移。使用 SpriteRenderer 的 `Sorting Layer` 或 `Order in Layer` 基于 Y 坐标实现正确的深度渲染。
-
-### 土狼时间与跳跃缓冲
-
-```csharp
-config.coyoteTime = 0.1f;     // 离开平台后 100ms 宽限期
-config.jumpBufferTime = 0.1f; // 100ms 缓冲窗口 — 提前按下跃键会在落地时执行
-```
-
-### 空中控制
-
-```csharp
-config.airControlMultiplier = 0.5f; // 空中 50% 水平控制力
-```
-
-### 小间隙跨越
-
-速度超过 `minSpeedForGapBridge` 时，组件会在因小间隙离开接地状态前检查前方地面：
-
-| 参数                   | 说明                     | 默认值 |
-| ---------------------- | ------------------------ | ------ |
-| `enableGapBridging`    | 启用/禁用功能            | true   |
-| `minSpeedForGapBridge` | 触发所需的最低速度 (m/s) | 4.0    |
-| `maxGapDistance`       | 可跨越的最大沟槽宽度 (m) | 1.0    |
-
-慢走时不会触发沟槽跨越，角色会正常掉入沟槽。
-
-## 使用指南
-
-### 动画 BlendTree
-
-使用 `Velocity.magnitude` 获得平滑的 BlendTree 插值：
-
-```csharp
-void Update()
-{
-    var movement = GetComponent<MovementComponent2D>();
-    animator.SetFloat("Speed", movement.Velocity.magnitude);
-}
-```
-
-### 慢动作
-
-```csharp
-// 全局慢动作
-Time.timeScale = 0.2f;
-
-// 角色独立时间缩放
-movementComponent.LocalTimeScale = 1.5f;
-movementComponent.IgnoreTimeScale = true;
-```
-
-### 组件 API
-
-```csharp
-// 属性
-MovementStateType CurrentState { get; }
-bool IsGrounded { get; }
-float CurrentSpeed { get; }
-Vector2 Velocity { get; }
-bool IsMoving { get; }
-IMovementAuthority MovementAuthority { get; set; }
-
-// 方法
-void SetInputDirection(Vector2 direction);
-void SetJumpPressed(bool pressed);
-void SetSprintHeld(bool held);
-void SetCrouchHeld(bool held);
-void SetRollPressed(bool pressed);
-bool RequestClimb(ClimbingMode climbingMode, int wallSide = 0, object context = null);
-bool StopClimb();
-bool RequestStateChange(MovementStateType type);
-MovementSnapshot GetSnapshot();
-void ApplySnapshot(in MovementSnapshot snapshot);
-void ResetFromSnapshot(in MovementSnapshot snapshot);
-
-// 事件
-event Action<MovementStateType, MovementStateType> OnStateChanged;
-event Action OnJumpStart;
-event Action OnLanded;
-```
-
-## 进阶主题
-
-### 属性修改（无需 GAS）
+## 快照与校正
 
 ```csharp
 using CycloneGames.RPGFoundation.Movement.Core;
-using CycloneGames.RPGFoundation.Movement.Runtime;
-using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
 
-var movement = GetComponent<MovementComponent2D>();
-var authority = gameObject.AddComponent<MovementAttributeAuthority>();
-movement.MovementAuthority = authority;
+MovementSnapshot delta = _movement.GetSnapshot();
+MovementFullState full = _movement.CaptureFullState();
 
-authority.SetBaseValueOverride(MovementAttribute.RunSpeed, 7f);
-authority.SetMultiplier(MovementAttribute.JumpForce, 1.2f);
+_movement.BeginReplay();
+_movement.ApplyFullState(in full);
+_movement.EndReplay();
+
+// 其他入口：
+// _movement.ApplySnapshot(in delta);
+// _movement.ResetFromFullState(in full);
 ```
 
-### GameplayAbilities 集成
+`CaptureFullState` 把 coyote time、pending depth 与 wall side 写入 4 个 float 和 2 个 int 扩展槽。这些槽属于模拟状态，不存表现数据。
 
-GAS integration 仅在启用 `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` 时编译。当移动动作（跳跃、翻滚、贴墙攀爬）由 ability 拥有时，使用 `MovementStateRequestContext.FromAbility(this)` 请求状态 — 这样权限检查仍会生效，且不会递归激活同一 ability。
+## 动画绑定
 
 ```csharp
-#if CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES
-using CycloneGames.RPGFoundation.Movement.Core;
-using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
-using CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities;
-
-var movement = GetComponent<MovementComponent2D>();
-var gasAuthority = gameObject.AddComponent<GASMovementAttributeAuthority>();
-movement.MovementAuthority = gasAuthority;
-
-gasAuthority.AddAttributeMapping(
-    MovementAttribute.RunSpeed,
-    "Attribute.Secondary.Speed",
-    baseValue: 100f
-);
-#endif
+_movement.BindAnimation(locomotionSink, actionSink);
+_movement.BindRootMotion(rootMotionSource);
+_movement.SetUseRootMotion(true);
 ```
 
-**支持的属性：** WalkSpeed、RunSpeed、SprintSpeed、CrouchSpeed、JumpForce、Gravity、AirControlMultiplier。
-
-### 攀爬与蹬墙跳
-
-| 模式     | 进入条件         | 移动方式  | 场景        |
-| -------- | ---------------- | --------- | ----------- |
-| **梯子** | 触发区域 + 按上  | 上/下/左/右 | 标准梯子   |
-| **贴墙** | 空中 + 墙 + 输入 | 上/下     | 贴墙滑落   |
-
-设置：在 config 中启用 `enableLadderClimbing` 或 `enableWallClimbing`，指定 `Ladder Layer` 和 `Wall Layer`，为梯子区域创建 Trigger Collider2D。
-
-蹬墙跳配置：
-
-```csharp
-config.wallJumpForceX = 8f;
-config.wallJumpForceY = 10f;
-config.wallSlideSpeed = 2f;
-```
-
-### GAS 移动权限
-
-```csharp
-public class GASMovementAuthority2D : MonoBehaviour, IMovementAuthority
-{
-    public bool CanEnterState(MovementStateType stateType, object context)
-    {
-        if (stateType == MovementStateType.Sprint) return HasStamina();
-        return true;
-    }
-    public void OnStateEntered(MovementStateType stateType) { }
-    public void OnStateExited(MovementStateType stateType) { }
-    public MovementAttributeModifier GetAttributeModifier(MovementAttribute attribute)
-        => new MovementAttributeModifier(null, 1f);
-    public float? GetBaseValue(MovementAttribute attribute) => null;
-    public float GetMultiplier(MovementAttribute attribute) => 1f;
-    public float GetFinalValue(MovementAttribute attribute, float configValue) => configValue;
-}
-```
+`SetUseRootMotion(false)` 会清空待处理的 root motion。每个物理步发布一份 `MovementAnimationState` 与零到多个动作；重放窗口内不发布、不派发。
 
 ## 常见场景
 
-### 自动转向
+| 场景 | 设置 |
+| --- | --- |
+| 平台跳跃 | `movementType = Platformer`，`gravity = 25f`，两个跳跃窗口约 `0.1f` |
+| 俯视角 | `movementType = TopDown`，关闭跳跃，`SetInputDirection` 传双轴 |
+| 横版纵深 | `movementType = BeltScroll`，按轨道深度调整 `groundCheckOffset` |
+| 蹬墙跳 | 启用墙面攀爬状态，设置 `slideSpeed`，调用 `RequestClimb(ClimbingMode.Wall, side)` |
 
-角色自动翻转朝向移动方向：
+## 扩展点
+
 ```csharp
-_movement.SetInputDirection(new Vector2(1, 0));  // 朝右
-_movement.SetInputDirection(new Vector2(-1, 0)); // 朝左
+var arbiter = new MovementLayerArbiter();
+arbiter.TryAdd(new AimLayer());          // IMovementStateLayer
+_movement.BindMovementLayers(arbiter);
+_movement.BindSemantics(new MovementExtensionRegistry());
+_movement.BindPresentationBudget(budget);
+_movement.BindDeterministicStep(driver);
 ```
 
-### 攀爬梯子
-
-1. 在 config 中启用 `enableLadderClimbing`。
-2. 在梯子上创建 Trigger Collider2D，设置 layer 为 `Ladder Layer`。
-3. 玩家走进触发区域并按上 — `MovementComponent2D` 进入 Climb 状态。
-
-### 多段跳
-
-在 config 中设置 `maxJumpCount = 2` 即可实现二段跳。
-
-## 性能与内存
-
-- 移动计算使用 `Unity.Mathematics` 实现 SIMD 友好的向量运算。
-- `Rigidbody2D` 和 `Physics2D.OverlapBox` 的分配取决于 Unity Physics backend。
-- Snapshot 为 `readonly struct` — 通过 `in` 传递时不产生堆分配。
-- `MovementComponent2D` 是 Unity 组件，仅从主线程调用。多线程模拟应放入纯数据系统。
-- 使用 `MovementAttributeAuthority` 而非逐帧重复计算属性。
+层若持有自己的计时器，应同时实现 `IMovementLayerReplay`，让 `BeginReplay` / `EndReplay` 保存并恢复。
 
 ## 故障排查
 
-| 现象               | 原因                                       | 解决方法                                     |
-| ------------------ | ------------------------------------------ | -------------------------------------------- |
-| 角色不移动         | 缺少 `Rigidbody2D` 或 `MovementConfig2D`  | 通过 Inspector 添加对应组件                  |
-| 未检测到地面       | `groundLayer` 未设置或 `groundCheck` Transform 位置错误 | 将 `groundCheck` 放在角色脚部，设置正确的 layer |
-| 跳跃未触发         | `coyoteTime` / `jumpBufferTime` 可能过短   | 增加到 0.1–0.2s                              |
-| 沟槽跨越不起作用   | 速度低于 `minSpeedForGapBridge`            | 提高速度或减少沟槽距离                       |
-| 3D 物理错误        | 混用了 2D 和 3D 组件                       | 仅使用 `Rigidbody2D` 和 `Collider2D`；3D 游戏使用 `MovementComponent` |
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 角色向上运动 | 从 3D 复制了负值重力 | 2D 使用正值 |
+| 着地检测失效 | `groundCheckSize` 或 `groundCheckOffset` 与碰撞体不匹配 | 调整重叠盒 |
+| 跳跃手感迟钝 | coyote 或 buffer 窗口为 0 | 两者设为约 `0.1f` |
+| 穿透薄碰撞体 | 碰撞检测模式被改动 | 保持 `CollisionDetectionMode2D.Continuous` |
+| 校正时重播翻滚 | 缺少重放窗口 | 用 `BeginReplay` / `EndReplay` 包住 `ApplyFullState` |
+
+## 延伸阅读
+
+- [包总览](../../README.SCH.md)
+- [3D 移动参考](../Movement3D/README.SCH.md)
+- [Movement.Networking](../../../../CycloneGames.RPGFoundation.Movement.Networking/README.SCH.md)

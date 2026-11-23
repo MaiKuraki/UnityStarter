@@ -1,9 +1,7 @@
 {
     "name": "CycloneGames.RPGFoundation.Movement.Core",
     "rootNamespace": "CycloneGames.RPGFoundation.Movement.Core",
-    "references": [
-        "Unity.Mathematics"
-    ],
+    "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

@@ -26,19 +26,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             context.CurrentSpeed = math.abs(horizontalVelocity);
             context.CurrentVelocity = currentVelocity;
 
-            // BeltScroll: accumulate Y input as pending depth while airborne
             if (context.Config.MovementType == MovementType2D.BeltScroll)
             {
                 float depthSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
                 context.PendingDepth += context.InputDirection.y * depthSpeed * context.DeltaTime;
-            }
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int speedHash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                int verticalHash = AnimationParameterCache.GetHash(context.Config.VerticalSpeedParameter);
-                context.AnimationController.SetFloat(speedHash, context.CurrentSpeed);
-                context.AnimationController.SetFloat(verticalHash, currentVelocity.y);
             }
         }
 
@@ -49,25 +40,23 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
                 if (math.lengthsq(context.InputDirection) > 0.0001f)
                 {
                     if (context.SprintHeld)
-                        return StatePool<MovementStateBase2D>.GetState<SprintState2D>();
+                        return context.StatePool.Get<SprintState2D>();
                     else
-                        return StatePool<MovementStateBase2D>.GetState<RunState2D>();
+                        return context.StatePool.Get<RunState2D>();
                 }
                 else
                 {
-                    return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                    return context.StatePool.Get<IdleState2D>();
                 }
             }
 
-            // Multi-jump: Check JumpCount < maxJumpCount before transitioning (JumpCount increments in JumpState2D.OnEnter)
-            // Consume JumpPressed immediately to prevent it from persisting if jump cannot be performed
             if (context.JumpPressed)
             {
                 context.JumpPressed = false;
                 int resolvedMaxJump = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
                 if (context.Config != null && context.JumpCount < resolvedMaxJump)
                 {
-                    return StatePool<MovementStateBase2D>.GetState<JumpState2D>();
+                    return context.StatePool.Get<JumpState2D>();
                 }
             }
 

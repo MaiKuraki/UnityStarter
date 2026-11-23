@@ -1,10 +1,6 @@
 using CycloneGames.RPGFoundation.Movement.Core;
 namespace CycloneGames.RPGFoundation.Movement.Runtime
 {
-    /// <summary>
-    /// Read-only interface for accessing 3D movement configuration values.
-    /// Extends base config with 3D-specific properties.
-    /// </summary>
     public interface IMovementConfig3DReadOnly : IMovementConfigReadOnly
     {
         float rollDistance { get; }
@@ -20,6 +16,5 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         float stepHeight { get; }
         float minAirborneTimeForFall { get; }
         float rotationSpeed { get; }
-        string rollTrigger { get; }
     }
 }

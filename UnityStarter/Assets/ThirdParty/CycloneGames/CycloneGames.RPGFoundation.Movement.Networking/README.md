@@ -1,283 +1,249 @@
-# CycloneGames.RPGFoundation.Movement.Networking
+# Movement.Networking
 
-English | [Simplified Chinese](./README.SCH.md)
+[English | 简体中文](README.SCH.md)
 
-`CycloneGames.RPGFoundation.Movement.Networking` connects RPGFoundation Movement to `CycloneGames.Networking`. It defines transport-neutral movement input, authoritative snapshot, correction, teleport, full-state request, authority transfer, and manifest handshake DTOs.
+Wire contracts for authoritative movement. The package defines DTOs, a
+fingerprinted message manifest, epoch-bound input admission, per-entity
+histories, reconciliation and the authority bridge. Transport, serialization,
+prediction loops and presentation smoothing belong to the product.
 
-The base Movement module remains usable without `CycloneGames.Networking`. This bridge is only required when movement state crosses a Cyclone network boundary.
+## Contents
 
-## Quick Start
+1. [Install](#install)
+2. [Protocol identity](#protocol-identity)
+3. [Messages](#messages)
+4. [Handshake](#handshake)
+5. [Input admission](#input-admission)
+6. [Histories and reconciliation](#histories-and-reconciliation)
+7. [Composition](#composition)
+8. [Wire layout rules](#wire-layout-rules)
+9. [Custom validators](#custom-validators)
+10. [Runtime constraints](#runtime-constraints)
+11. [Troubleshooting](#troubleshooting)
+12. [See also](#see-also)
 
-1. Register `MovementNetworkProtocol` in the network message catalog during bootstrap.
-2. Convert local input into `MovementInputCommandMessage` values with stable ticks, sequence values, button masks, and prediction keys.
-3. Validate incoming input on the authoritative side with `MovementNetworkInputAuthority` and a project-specific `MovementNetworkInputValidationContext`.
-4. Capture authoritative movement state through `MovementNetworkAuthorityBridge`.
-5. Store recent inputs and snapshots in the fixed-capacity history buffers used by prediction, rewind, correction, and late-join recovery.
-6. Use `MovementNetworkReconciliation` to produce correction messages when predicted and authoritative snapshots diverge beyond project policy.
-7. Run the Movement.Networking, Movement, and Networking EditMode tests after changing DTOs, validators, history behavior, or protocol metadata.
+## Install
 
-## Package Layout
+UPM identity: `com.cyclone-games.rpg-foundation-movement-networking`.
 
-```text
-CycloneGames.RPGFoundation.Movement.Networking/
-  Core/
-    CycloneGames.RPGFoundation.Movement.Networking.Core.asmdef
-    DefaultMovementNetworkInputValidator.cs
-    IMovementNetworkInputValidator.cs
-    MovementAuthorityTransferMessage.cs
-    MovementCorrectionMessage.cs
-    MovementFullStateRequestMessage.cs
-    MovementInputCommandMessage.cs
-    MovementNetworkActionExtensions.cs
-    MovementNetworkActionIds.cs
-    MovementManifestHandshakeMessage.cs
-    MovementNetworkAuthorityBridge.cs
-    MovementNetworkCorrectionPolicy.cs
-    MovementNetworkInputAuthority.cs
-    MovementNetworkInputHistory.cs
-    MovementNetworkInputValidationContext.cs
-    MovementNetworkProtocol.cs
-    MovementNetworkReconciliation.cs
-    MovementNetworkSnapshotHistory.cs
-    MovementNetworkSnapshotFlags.cs
-    MovementNetworkSnapshotMessage.cs
-    MovementNetworkVectorExtensions.cs
-    MovementTeleportMessage.cs
-  Tests/Editor/
-    CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor.asmdef
-    MovementNetworkingIntegrationTests.cs
-```
-
-## Assembly Boundary
-
-| Assembly | Role | Unity dependency |
-| --- | --- | --- |
-| `CycloneGames.RPGFoundation.Movement.Networking.Core` | Movement DTOs, snapshot conversion, authority bridge, message range, and protocol manifest registration. | No UnityEngine; references `Unity.Mathematics` through Movement core. |
-| `CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor` | EditMode coverage for protocol and bridge behavior. | No UnityEngine |
-
-The core assembly references `CycloneGames.RPGFoundation.Movement.Core`, `CycloneGames.Networking.Core`, and `Unity.Mathematics`. It does not reference backend SDK types, PlayerSettings scripting define symbols, or a DI container.
-
-The Core and EditMode test assemblies use `autoReferenced: false`. Consumer asmdefs must reference Core explicitly. No PlayerSettings scripting define is required.
-
-## Core Concepts
-
-| Type | Purpose |
+| Dependency | Purpose |
 | --- | --- |
-| `MovementInputCommandMessage` | Carries input intent, tick data, sequence, button mask, custom flags, move axes, and aim direction. |
-| `MovementNetworkSnapshotMessage` | Carries authoritative movement state converted from `MovementSnapshot`. |
-| `MovementCorrectionMessage` | Carries correction data for client reconciliation. |
-| `MovementTeleportMessage` | Carries authoritative teleport or hard reset data. |
-| `MovementAuthorityTransferMessage` | Carries movement authority transfer data. |
-| `MovementNetworkAuthorityBridge` | Captures, applies, resets, and validates movement snapshots through Movement core interfaces. |
-| `MovementNetworkActionExtensions` | Maps movement input DTOs to generic `NetworkActionCommand` values. |
-| `DefaultMovementNetworkInputValidator` | Validates input shape, tick/sequence window, prediction key, button/custom flag masks, move axes, and aim direction. |
-| `MovementNetworkInputAuthority` | Combines input validation with fixed-capacity history so accepted inputs can reject replayed duplicates. |
-| `MovementNetworkInputHistory` | Fixed-capacity per-entity input history for replay, duplicate detection, and reconciliation. |
-| `MovementNetworkSnapshotHistory` | Fixed-capacity per-entity authoritative snapshot history for correction, full-state recovery, and late joins. |
-| `MovementNetworkReconciliation` | Creates correction messages when predicted and authoritative snapshots diverge. |
-| `MovementNetworkProtocol` | Owns the Movement message range and protocol manifest. |
+| `com.cyclone-games.rpg-foundation` | Movement Core contracts |
+| `com.cyclone-games.networking` | `INetConnection`, protocol manifest, handshake negotiation |
 
-## Movement Sync Flow
+The assembly is `CycloneGames.RPGFoundation.Movement.Networking.Core` with
+`noEngineReferences: true`. Add `com.unity.mathematics` only if your own code
+needs it; this package does not.
+
+## Protocol identity
+
+`MovementNetworkProtocol` is a sealed class constructed by the composition
+root. Each instance owns a `NetworkModuleProtocol` with the module range
+`16000-16008`. Contract identities are checked-in printable-ASCII strings such
+as `CycloneGames.Movement.InputCommand`; they are not CLR type names and are
+not derived at runtime.
+
+| Property | Meaning |
+| --- | --- |
+| `ProtocolFingerprint` | Fingerprint of the owned `NetworkModuleProtocol` |
+| `WireLayoutDigest` | Digest of the ordered DTO field layout |
+| `WireCodecDigest` | Digest of the serializer, compression and quantization policy |
+| `Manifest` | Nine message descriptors with channel and payload limits |
+| `MessageRange` | `16000-16008` |
+
+`CreateProtocolManifest()` is a pure factory. `GetContractId(index)` returns
+the checked-in identity for one of the nine messages.
+
+## Messages
+
+| Message | ID | Channel | Payload cap |
+| --- | ---: | --- | ---: |
+| `MovementManifestHandshakeMessage` | 16000 | Reliable | 128 |
+| `MovementInputCommandMessage` | 16001 | Unreliable | 128 |
+| `MovementNetworkSnapshotMessage` | 16002 | UnreliableSequenced | 256 |
+| `MovementCorrectionMessage` | 16003 | Reliable | 1024 |
+| `MovementFullStateRequestMessage` | 16004 | Reliable | 128 |
+| `MovementAuthorityTransferMessage` | 16005 | Reliable | 128 |
+| `MovementTeleportMessage` | 16006 | Reliable | 256 |
+| `MovementInputBatchMessage` | 16007 | Unreliable | 1024 |
+| `MovementInputAckMessage` | 16008 | Unreliable | 128 |
+
+`MovementInputBatchMessage` carries up to four oldest-first commands, so the
+next datagram recovers a lost one. `MovementInputAckMessage` drives
+`ApplyAck`, which prunes prediction history by the server timeline.
+
+`MovementNetworkSnapshotMessage` is a compact high-frequency delta.
+`MovementCorrectionMessage` carries a complete `MovementFullState` and is the
+only type accepted for correction, spawn, late join and replay.
+
+## Handshake
 
 ```mermaid
-graph TD
-    Input["MovementInputCommandMessage"]
-    Provider["IMovementSnapshotProvider"]
-    Validator["IMovementValidator"]
-    Bridge["MovementNetworkAuthorityBridge"]
-    Snapshot["MovementNetworkSnapshotMessage"]
-    Correction["MovementCorrectionMessage"]
-    Teleport["MovementTeleportMessage"]
-    Endpoint["INetworkMessageEndpoint"]
-
-    Input --> Endpoint
-    Provider --> Bridge
-    Validator --> Bridge
-    Bridge --> Snapshot
-    Snapshot --> Endpoint
-    Correction --> Endpoint
-    Teleport --> Endpoint
+sequenceDiagram
+    participant P as Product
+    participant A as MovementNetworkProtocol
+    participant H as MovementManifestHandshakeMessage
+    participant N as NetworkProtocolHandshake
+    P->>A: new MovementNetworkProtocol(codecPolicy)
+    P->>H: CreateHandshake(domainStateHash)
+    H->>N: IsCompatibleWith(protocol, domainStateHash, requireDomainStateMatch)
+    N-->>H: match or DomainStateMismatch
 ```
 
-## Protocol
+Three independent facts are checked: `WireLayoutDigest`, `WireCodecDigest` and
+the optional product `DomainStateHash`. `DomainStateHash` keeps the meaning
+defined by `CycloneGames.Networking` and is never loaded with layout data.
+Tampering with any one of them rejects the session.
 
-`MovementNetworkProtocol` owns message IDs `16000-16999` inside the shared `NetworkMessageRanges.Module` range (`1000-29999`). `CreateProtocolManifest` builds the complete manifest, and `RegisterMessageCatalog` / `TryRegisterMessageCatalog` submit it through `TryRegisterProtocolManifest`. Registration either commits the range and every descriptor together or rejects the manifest without a partial catalog update.
+`Negotiate(...)` forwards to `NetworkProtocolHandshake.Negotiate`, including
+`requireDomainStateMatch`.
 
-Every descriptor declares an explicit printable-ASCII `ContractId` such as `MovementNetworkSnapshotMessage`. Its nonzero `SchemaHash` is the FNV-1a 64-bit hash of that exact identifier; manifest validation rejects a mismatch. The protocol fingerprint includes the range and each descriptor's message ID, contract identity, schema hash, channel, and payload limit. CLR type names and reflection are not protocol identity. The fingerprint pins contract identity only: this package ships no wire codec, so the binary payload layout is owned by the integrator's chosen serializer and is NOT verified by the fingerprint. Peers agree on the layout by sharing serializer configuration, and any layout change must ship under a new contract identity. A payload layout, codec, or semantic compatibility change must receive a new contract identity and exchange a new protocol fingerprint across all communicating peers. Incompatible peers must be rejected before gameplay traffic. Project-specific messages belong in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange; this module exposes no dynamic descriptor-registration facade.
+## Input admission
 
-| Message | ID | Channel | Payload |
-| --- | ---: | --- | --- |
-| `MSG_MANIFEST_HANDSHAKE` | `16000` | Reliable | `MovementManifestHandshakeMessage` |
-| `MSG_INPUT_COMMAND` | `16001` | UnreliableSequenced | `MovementInputCommandMessage` |
-| `MSG_AUTHORITATIVE_SNAPSHOT` | `16002` | UnreliableSequenced | `MovementNetworkSnapshotMessage` |
-| `MSG_CORRECTION` | `16003` | Reliable | `MovementCorrectionMessage` |
-| `MSG_FULL_STATE_REQUEST` | `16004` | Reliable | `MovementFullStateRequestMessage` |
-| `MSG_AUTHORITY_TRANSFER` | `16005` | Reliable | `MovementAuthorityTransferMessage` |
-| `MSG_TELEPORT` | `16006` | Reliable | `MovementTeleportMessage` |
+`MovementNetworkInputAuthority.TryAccept` applies, in order:
 
-Register the protocol in a composition root:
+1. `IMovementNetworkInputValidator` from the product, when one is supplied.
+2. Sender authentication and epoch equality.
+3. Tick and sequence ordering through `MovementNetworkInputValidationContext`.
+4. `MovementTimeDilationAuditor`, which derives a per-command budget from
+   server ticks.
+5. Recording into `MovementNetworkInputHistory`.
+
+A first-seen entity binds its dilation window start to its first tick, so a
+late join cannot gain extra commands. Every DTO carries an `Epoch`; authority
+migration changes the epoch and calls `Reset()`.
+
+Use `GetEffectiveMaxPayloadSize(messageId, endpoint)` to compose descriptor,
+channel, adapter and backend budgets before sending.
+
+## Histories and reconciliation
+
+`MovementEntityHistory<TSnapshot>` stores per-entity contiguous slots behind an
+open-addressed index. Lookup, insert and ack-driven prune are O(1). Capacity is
+fixed at construction through `MovementHistoryCapacity`.
+
+`MovementNetworkReconciliation` compares a correction against locally predicted
+snapshots and produces the state to apply. `MovementRemoteSampleAdapter`
+converts a snapshot message into a `MovementRemoteSample` for the presentation
+jitter buffer.
+
+`GetTeardownSet()` returns two `INetworkSessionTeardownTarget` instances.
+`TeardownSession()` clears the history and the dilation windows on disconnect.
+
+## Composition
+
+The steps build on each other.
+
+### Step 1: create the protocol
 
 ```csharp
-using CycloneGames.Networking;
 using CycloneGames.RPGFoundation.Movement.Networking;
 
-public static class MovementNetworkInstaller
-{
-    public static void Configure(INetworkMessageCatalog catalog)
-    {
-        MovementNetworkProtocol.RegisterMessageCatalog(catalog);
-    }
-}
+var protocol = new MovementNetworkProtocol(MovementWireCodecPolicy.Unspecified);
+MovementManifestHandshakeMessage handshake = protocol.CreateHandshake(0UL);
 ```
 
-## Snapshot Workflow
-
-`MovementNetworkAuthorityBridge` works with `IMovementSnapshotProvider` and optional `IMovementValidator`:
+### Step 2: build the authority
 
 ```csharp
-using CycloneGames.RPGFoundation.Movement.Core;
-using CycloneGames.RPGFoundation.Movement.Networking;
-
-public sealed class MovementSnapshotEndpoint
-{
-    private readonly MovementNetworkAuthorityBridge _bridge;
-
-    public MovementSnapshotEndpoint(IMovementSnapshotProvider provider, IMovementValidator validator)
-    {
-        _bridge = new MovementNetworkAuthorityBridge(provider, validator);
-    }
-
-    public MovementNetworkSnapshotMessage Capture(ulong entityId, int serverTick, ushort sequence)
-    {
-        return _bridge.CaptureSnapshot(entityId, serverTick, sequence);
-    }
-
-    public bool Apply(MovementNetworkSnapshotMessage snapshot)
-    {
-        return _bridge.ApplySnapshot(snapshot);
-    }
-}
-```
-
-`ValidateTransition` compares two network snapshots through the optional `IMovementValidator`.
-
-## Input Command Workflow
-
-`MovementInputCommandMessage` keeps input extensible with `ButtonMask` and `CustomFlags`. A project assembly defines the bit meanings and converts local input into the DTO:
-
-```csharp
-using CycloneGames.Networking;
-using CycloneGames.RPGFoundation.Movement.Networking;
-
-public static class MovementInputFactory
-{
-    public const uint JumpButton = 1u << 0;
-
-    public static MovementInputCommandMessage CreateJump(
-        ulong entityId,
-        int clientTick,
-        int lastServerTick,
-        ushort sequence,
-        float deltaTime)
-    {
-        return new MovementInputCommandMessage(
-            entityId,
-            clientTick,
-            lastServerTick,
-            sequence,
-            JumpButton,
-            0u,
-            deltaTime,
-            new NetworkVector3(0f, 0f, 1f),
-            new NetworkVector3(0f, 0f, 1f),
-            predictionKey: sequence);
-    }
-}
-```
-
-## Authority Validation Workflow
-
-Server-authoritative, owner-authoritative, and client-predicted movement can use the same validation entry point. The validator delegates generic timeline checks to `CycloneGames.Networking.Simulation` action contracts, then applies movement-specific checks for button masks, custom flags, move axes, and aim direction.
-
-```csharp
-using CycloneGames.Networking;
 using CycloneGames.Networking.Simulation;
-using CycloneGames.RPGFoundation.Movement.Networking;
 
-public sealed class ServerMovementInputEndpoint
-{
-    private readonly MovementNetworkInputAuthority _authority =
-        new MovementNetworkInputAuthority(new MovementNetworkInputHistory(capacity: 128));
-
-    public bool TryAcceptInput(
-        INetConnection sender,
-        MovementInputCommandMessage command,
-        NetworkTickId serverTick,
-        NetworkTickId lastAcceptedClientTick,
-        ushort lastAcceptedSequence)
-    {
-        var context = new MovementNetworkInputValidationContext(
-            sender,
-            serverTick,
-            lastAcceptedClientTick,
-            lastAcceptedSequence,
-            maxAcceptedTickDrift: 8,
-            allowedButtonMask: 0xFFFFu,
-            allowedCustomFlags: 0x00FFu,
-            maxMoveAxesMagnitude: 1.25f,
-            requireNormalizedAimDirection: true);
-
-        return _authority.TryAccept(command, context, out NetworkActionResult result)
-               && result.IsAccepted;
-    }
-}
+var history = new MovementNetworkInputHistory(
+    new MovementHistoryCapacity(entityCount: 128, perEntityCount: 128));
+var auditor = new MovementTimeDilationAuditor(MovementDilationPolicy.Default);
+var authority = new MovementNetworkInputAuthority(history, auditor);
 ```
 
-`MovementNetworkInputAuthority` is the input acceptance boundary. It validates and records accepted commands; the project-owned server simulation applies accepted commands to movement state.
-
-## Reconciliation Workflow
-
-Clients can compare a predicted snapshot against an authoritative snapshot and request correction when the drift exceeds project policy:
+### Step 3: accept a command
 
 ```csharp
-MovementNetworkCorrectionPolicy policy = MovementNetworkCorrectionPolicy.Default;
-if (MovementNetworkReconciliation.TryCreateCorrection(
-        predictedSnapshot,
-        authoritativeSnapshot,
-        policy,
-        out MovementCorrectionMessage correction))
-{
-    // Send correction through the project transport.
-}
+using CycloneGames.Networking;
+
+var context = new MovementNetworkInputValidationContext(
+    sender: connection,
+    epoch: epoch,
+    serverTick: new NetworkTickId(serverTick),
+    lastAcceptedClientTick: new NetworkTickId(lastTick));
+
+bool accepted = authority.TryAccept(in command, in context,
+                                    out NetworkActionResult result);
 ```
 
-Large position errors are marked as teleport-style hard resets through `MovementNetworkSnapshotFlags.Teleport`; smaller errors remain regular corrections so presentation code can smooth them.
+`MovementNetworkInputValidationContext` also carries the allowed button mask,
+custom-flag policy, aim-direction bounds and maximum tick drift.
 
-## Extension Points
+### Step 4: apply an ack and produce a correction
 
-- Define project-specific movement verbs in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange.
-- Keep backend connection, ownership, and host/session logic in the network adapter.
-- Use `CustomFlags` and project-owned button masks for input concepts not represented by the generic DTO fields.
-- Supply a project-specific `IMovementNetworkInputValidator` when ability tags, stamina, vehicle ownership, mounted states, anti-cheat rules, or platform-specific authority rules must be checked before input is accepted.
-- Pair `MovementNetworkInputHistory` and `MovementNetworkSnapshotHistory` with the generic rollback or prediction systems in `CycloneGames.Networking` for games that need deterministic re-simulation.
+```csharp
+int pruned = authority.ApplyAck(in ack);
 
-## Persistence
-
-This package does not write files, assets, preferences, caches, or runtime save data. It only defines protocol metadata, value-type DTOs, history buffers, and bridge helpers. History buffers are runtime-memory objects; the creating system owns their lifetime, cleanup, and reuse.
-
-## Validation
-
-Run these checks after changing the package:
-
-```text
-Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Movement.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
+MovementFullState full = movementComponent.CaptureFullState();
+// Fill MovementCorrectionMessage with 'full' before sending on a reliable channel.
 ```
 
-For CLI validation, first let Unity refresh the generated project files, then compile:
+### Step 5: tear down the session
 
-```text
-dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Networking.Core.csproj --nologo
-dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor.csproj --nologo
+```csharp
+MovementSessionTeardownSet targets = authority.GetTeardownSet();
+targets.TeardownSession();
+authority.Reset();
 ```
+
+### Step 6: feed remote presentation
+
+```csharp
+if (MovementRemoteSampleAdapter.TryConvert(in snapshot, out MovementRemoteSample sample))
+    session.TryAccept(in sample);
+```
+
+## Wire layout rules
+
+- `MovementWireLayout.Digest` covers the ordered field list of every DTO. A
+  field change requires a descriptor update.
+- `MovementWireCodecPolicy.ComputeDigest()` pins serializer type, options,
+  compression and quantization. Peers with different policies fail the
+  handshake.
+- Four float and two integer extension slots in `MovementFullState` carry
+  deterministic simulation scalars. Do not put animation or presentation data
+  in them.
+- Snapshot flags separate wire bits from local-only bits. Reserved values let
+  the receiver reject a malformed payload.
+- `NetworkTick` (`long`) and `NetworkTimeSeconds` (`double`) come from the
+  adapter. The wire format does not use `Time.frameCount` or float wall clocks.
+
+## Custom validators
+
+Implement `IMovementNetworkInputValidator` and pass it to
+`MovementNetworkInputAuthority`. The default validator accepts the built-in
+rules; a product validator can add distance, ability or rate checks without
+changing the wire format.
+
+`MovementNetworkInputValidationContext` exposes `ToActionValidationContext()`
+for code that already uses the shared action validator from
+`CycloneGames.Networking`.
+
+## Runtime constraints
+
+| Constraint | Value |
+| --- | --- |
+| Engine references | none; `noEngineReferences: true` |
+| LINQ, reflection, static mutable containers | none |
+| `public const` | 36 wire constants in three contract files |
+| Contract identity | checked-in strings, no CLR type names |
+| Mutable state | owned by the composition root, cleared by `GetTeardownSet()` |
+| Threading | call from the network or main thread chosen by the product; no locks inside the package |
+
+## Troubleshooting
+
+| Symptom | Cause | Action |
+| --- | --- | --- |
+| Handshake returns `DomainStateMismatch` | Product hash differs between peers | Pass the same `domainStateHash` on both sides |
+| Handshake rejects a peer after a serializer change | `WireCodecDigest` differs | Deploy the same `MovementWireCodecPolicy` |
+| Commands always rejected | Epoch mismatch or unauthenticated sender | Check `Epoch` on every DTO and `INetConnection.IsAuthenticated` |
+| Prediction history grows | Acks are not applied | Call `ApplyAck` for every `MovementInputAckMessage` |
+| Late join gains extra commands | Dilation window bound to tick zero | Let the auditor bind the first seen tick |
+| State not cleared on disconnect | Teardown set not used | Call `GetTeardownSet().TeardownSession()` |
+
+## See also
+
+- [Movement main documentation](../CycloneGames.RPGFoundation/Movement/README.md)

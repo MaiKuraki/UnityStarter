@@ -11,7 +11,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
         {
             displacement = float3.zero;
 
-            // Reset speed and velocity when idle
             context.CurrentSpeed = 0f;
             context.CurrentVelocity = float3.zero;
 
@@ -20,28 +19,21 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
                 displacement = context.WorldUp * context.VerticalVelocity * context.DeltaTime;
             }
 
-            // Update animation parameter
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                context.AnimationController.SetFloat(hash, 0f);
-            }
         }
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
         {
-            // Fall when not grounded OR on non-walkable slope
             if (!context.IsGrounded || context.IsOnNonWalkableSlope)
             {
-                return StatePool<MovementStateBase>.GetState<FallState>();
+                return context.StatePool.Get<FallState>();
             }
 
             if (math.lengthsq(context.InputDirection) > 0.0001f)
             {
                 if (context.SprintHeld)
-                    return StatePool<MovementStateBase>.GetState<SprintState>();
+                    return context.StatePool.Get<SprintState>();
 
-                return StatePool<MovementStateBase>.GetState<RunState>();
+                return context.StatePool.Get<RunState>();
             }
 
             return null;

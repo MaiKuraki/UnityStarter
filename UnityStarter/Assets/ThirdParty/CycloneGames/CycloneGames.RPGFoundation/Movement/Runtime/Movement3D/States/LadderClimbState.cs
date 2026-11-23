@@ -11,15 +11,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
         {
             context.VerticalVelocity = 0f;
             context.JumpCount = 0;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
-                if (hash != 0)
-                {
-                    context.AnimationController.SetBool(hash, true);
-                }
-            }
         }
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
@@ -36,15 +27,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
 
             context.CurrentSpeed = math.length(new float2(horizontalInput, verticalInput)) * climbSpeed;
             context.CurrentVelocity = displacement / math.max(context.DeltaTime, 0.0001f);
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int speedHash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                if (speedHash != 0)
-                {
-                    context.AnimationController.SetFloat(speedHash, context.CurrentSpeed);
-                }
-            }
         }
 
         public override void OnExit(ref MovementContext context)
@@ -53,26 +35,16 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
             {
                 context.ClimbingMode = ClimbingMode.None;
             }
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
-                if (hash != 0)
-                {
-                    context.AnimationController.SetBool(hash, false);
-                }
-            }
         }
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
         {
             if (context.JumpPressed)
             {
-                return StatePool<MovementStateBase>.GetState<JumpState>();
+                return context.StatePool.Get<JumpState>();
             }
 
             return null;
         }
     }
 }
-

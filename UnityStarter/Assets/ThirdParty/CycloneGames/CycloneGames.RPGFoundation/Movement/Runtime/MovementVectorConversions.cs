@@ -4,10 +4,6 @@ using UnityEngine;
 
 namespace CycloneGames.RPGFoundation.Movement.Runtime
 {
-    /// <summary>
-    /// Bridges the engine-independent movement contracts with Unity vectors. Conversions live in the
-    /// runtime layer so <see cref="MovementVector3"/> consumers stay free of Unity types.
-    /// </summary>
     public static class MovementVectorConversions
     {
         public static MovementVector3 ToMovementVector3(this Vector3 value)

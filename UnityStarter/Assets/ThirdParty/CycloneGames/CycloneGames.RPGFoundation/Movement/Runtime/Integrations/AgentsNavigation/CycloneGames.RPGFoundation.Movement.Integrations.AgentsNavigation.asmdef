@@ -1,26 +1,31 @@
 {
-    "name": "CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation",
-    "rootNamespace": "CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation",
-    "references": [
-        "CycloneGames.RPGFoundation.Movement.Core",
-        "CycloneGames.RPGFoundation.Movement.Runtime",
-        "CycloneGames.Logging.Core"
-    ],
-    "includePlatforms": [],
-    "excludePlatforms": [],
-    "allowUnsafeCode": false,
-    "overrideReferences": false,
-    "precompiledReferences": [],
-    "autoReferenced": true,
-    "defineConstraints": [
-        "CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION"
-    ],
-    "versionDefines": [
-        {
-            "name": "com.projectdawn.navigation",
-            "expression": "",
-            "define": "CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION"
-        }
-    ],
-    "noEngineReferences": false
+  "name": "CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation",
+  "rootNamespace": "CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation",
+  "references": [
+    "CycloneGames.RPGFoundation.Movement.Core",
+    "CycloneGames.RPGFoundation.Movement.Runtime",
+    "CycloneGames.Logging.Core"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [
+    "CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.projectdawn.navigation",
+      "expression": "",
+      "define": "CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION"
+    },
+    {
+      "name": "com.projectdawn.navigation.crowds",
+      "expression": "",
+      "define": "CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION_CROWDS"
+    }
+  ],
+  "noEngineReferences": false
 }

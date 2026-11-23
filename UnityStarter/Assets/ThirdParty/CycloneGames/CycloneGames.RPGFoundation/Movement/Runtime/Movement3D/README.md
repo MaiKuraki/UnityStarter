@@ -1,272 +1,182 @@
-# RPG Movement Component
+# 3D movement reference
 
-[English | 简体中文](README.SCH.md)
+[English | 简体中文](README.SCH.md) | [Package overview](../../README.md)
 
-A state-based 3D character movement component for Unity with explicit input, rotation, movement-state, snapshot, and optional GameplayAbilities integration boundaries.
+`MovementComponent` drives a 3D character through an explicit state machine.
+It uses `Rigidbody` and `CapsuleCollider`; `CharacterController` is not used.
+Movement and rotation are separate APIs. Configuration comes from a
+`MovementConfig` asset.
 
-## Table of Contents
+## Component setup
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
-- [Common Scenarios](#common-scenarios)
-- [Performance and Memory](#performance-and-memory)
-- [Troubleshooting](#troubleshooting)
+| Item | Value |
+| --- | --- |
+| Required components | `Rigidbody`, `CapsuleCollider` |
+| Physics | Kinematic `Rigidbody`, manual gravity, explicit position writes |
+| Ground probe | `groundedCheckDistance`, `groundLayer`, `slopeLimit` |
+| Thread | Unity main thread |
 
-## Overview
+Create the config with
+`Create > CycloneGames > RPG Foundation > Movement > Movement Config` and assign
+it to the component. The Inspector reports settings that differ from the
+recommended physics setup.
 
-`MovementComponent` provides explicit state-machine-driven 3D movement. Movement and rotation are decoupled — the component handles velocity, gravity, ground detection, jumping, and state transitions, while rotation is controlled separately via `SetLookDirection` and `SetRotation`. The optional GAS integration assembly compiles only when `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` is enabled.
+## Configuration
 
-This package does not directly depend on `CycloneGames.GameplayFramework`. Movement and spawn ownership remain separate.
+`MovementConfig` has 40 serialized fields. Common values:
 
-### Key Features
+| Field | Default | Meaning |
+| --- | ---: | --- |
+| `gravity` | `-20f` | Negative Y acceleration |
+| `groundedCheckDistance` | `0.025f` | Ground probe distance |
+| `slopeLimit` | `45f` | Maximum walkable slope, degrees |
+| `stepHeight` | `0.3f` | Maximum step climb |
+| `minAirborneTimeForFall` | `0.1f` | Delay before entering Fall |
+| `airControlMultiplier` | `0.5f` | Air steering scale |
+| `rotationSpeed` | `10f` | Turn rate for `SetLookDirection` |
+| `rollDistance` / `rollDuration` | `5f` / `0.5f` | Roll profile |
+| `swimSpeed` / `flySpeed` | `3f` / `6f` | Swim and fly speeds |
+| `groundLayer` | `1` | Ground layer mask |
+| `enableMovingPlatform` | `true` | Platform inheritance |
+| `enableGapBridging` | `true` | Small-gap bridging |
 
-- **State machine** — Explicit states (Idle, Walk, Run, Sprint, Jump, Fall, Crouch, Roll, Climb, WallSlide)
-- **Decoupled rotation** — Movement does not auto-rotate; rotation controlled via `SetLookDirection` / `SetRotation`
-- **CharacterController physics** — Manual gravity, `CharacterController.Move` integration
-- **Snapshot support** — `MovementSnapshot` for network handoff
-- **Attribute modification** — Runtime overrides with optional GAS mapping
-- **Time scaling** — Global and component-local controls
-- **Climbing system** — Ladder and wall climbing
+`MovementConfigRules` validates all 54 numeric fields across both configs and
+replaces non-finite values with defaults. Built-in presets are `Standard`,
+`Swift` and `Bulky`. External projects can add `MovementConfigPresetAsset`
+instances without editing this package.
 
-## Architecture
+Gravity is negative in 3D and positive in 2D. A value copied between the two
+configs reverses the fall direction.
 
-```mermaid
-flowchart LR
-    Input["Input (direction, jump, sprint, crouch, roll, climb)"] --> MC["MovementComponent"]
-    MC --> Config["MovementConfig (ScriptableObject)"]
-    MC --> CC["CharacterController"]
-    MC --> Auth["IMovementAuthority<br/>(optional: attribute overrides, state gating)"]
-    Auth --> GAS["GASMovementAuthority<br/>(optional GameplayAbilities integration)"]
-    MC --> Snap["MovementSnapshot<br/>(network handoff)"]
+## State machine
+
+`MovementStateType` contains `Idle`, `Walk`, `Run`, `Sprint`, `Crouch`, `Jump`,
+`Fall`, `Roll`, `Climb`, `Swim`, `Fly`. The 3D implementation supplies:
+
+```text
+IdleState, WalkState, RunState, SprintState, CrouchState, JumpState,
+FallState, RollState, SwimState, FlyState, LadderClimbState, WallClimbState
 ```
 
-`MovementComponent` is a Unity component and must be called from the main thread. Use `MovementSnapshot` as network handoff data; threaded simulation belongs in pure data systems or deterministic integration assemblies.
+`RequestStateChange(MovementStateType, object)` asks for a transition;
+`OnStateChanged` reports the one that happened. `OnLanded` and `OnJumpStart`
+report the matching edge events.
 
-## Quick Start
-
-### Core Runtime API
-
-```csharp
-movement.SetInputDirection(localMoveDirection);
-movement.SetJumpPressed(jumpPressed);
-movement.SetSprintHeld(sprintHeld);
-movement.SetCrouchHeld(crouchHeld);
-movement.SetRollPressed(rollPressed);
-movement.RequestClimb(ClimbingMode.Ladder);
-movement.RequestClimb(ClimbingMode.Wall, wallNormal);
-movement.StopClimb();
-
-MovementSnapshot snapshot = movement.GetSnapshot();
-movement.ApplySnapshot(snapshot);
-movement.ResetFromSnapshot(snapshot);
-```
-
-### Rotation API
-
-```csharp
-movement.SetLookDirection(targetDirection);           // Smooth rotation toward direction
-movement.SetRotation(targetRotation, immediate: true); // Instant rotation
-movement.SetRotation(targetDirection, immediate: true); // Instant from direction
-movement.ClearLookDirection();                         // Stop automatic rotation
-```
-
-### Basic Player Controller
+## Input, rotation and queries
 
 ```csharp
 using CycloneGames.RPGFoundation.Movement.Runtime;
+using UnityEngine;
 
-public class PlayerController : MonoBehaviour
+public sealed class ThirdPersonInput : MonoBehaviour
 {
+    [SerializeField] private Transform _camera;
     private MovementComponent _movement;
 
-    void Awake() => _movement = GetComponent<MovementComponent>();
+    private void Awake() => _movement = GetComponent<MovementComponent>();
 
-    void Update()
+    private void Update()
     {
-        Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
-        _movement.SetInputDirection(new Vector3(moveInput.x, 0, moveInput.y));
+        Vector3 forward = _camera.forward;
+        forward.y = 0f;
+        Vector3 right = _camera.right;
+        right.y = 0f;
+
+        Vector3 stick = forward * Input.GetAxisRaw("Vertical")
+                      + right * Input.GetAxisRaw("Horizontal");
+        _movement.SetInputDirection(stick);
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
         _movement.SetSprintHeld(Input.GetButton("Sprint"));
+        _movement.SetCrouchHeld(Input.GetButton("Crouch"));
+        _movement.SetRollPressed(Input.GetButtonDown("Roll"));
     }
 }
 ```
 
-## Core Concepts
+| Member | Purpose |
+| --- | --- |
+| `SetInputDirection(Vector3)` | Local-space movement intent |
+| `SetJumpPressed`, `SetSprintHeld`, `SetCrouchHeld`, `SetRollPressed` | Button intent |
+| `RequestClimb(ClimbingMode, Vector3, object)`, `StopClimb()` | Ladder or wall climbing |
+| `SetLookDirection(Vector3)`, `ClearLookDirection()`, `SetRotation(...)` | Rotation, separate from movement |
+| `IsGrounded`, `CurrentSpeed`, `Velocity`, `IsMoving` | State queries |
+| `LaunchCharacter`, `AddForce`, `AddExplosionForce` | External impulses |
+| `PauseGroundConstraint(float)` | Release the ground constraint briefly |
+| `IgnoreCollision`, `TryIgnoreCollision` | Ignored-collider cache |
+| `GetMemorySnapshot()` | Cache counts and rejection counters |
+| `Config` | Read-only view of the assigned asset |
 
-### Movement and Rotation Are Decoupled
+`SetRotation(Quaternion, bool)` and `SetRotation(Vector3, bool)` accept an
+`immediate` flag. Movement does not rotate the character on its own.
 
-`MovementComponent` handles velocity, gravity, ground detection, jumping, and state transitions. It does not automatically rotate the character toward movement direction. Rotation must be controlled explicitly.
-
-### Rotation Techniques
-
-| Technique | API | Use Case |
-| --- | --- | --- |
-| Mouse look (Euler) | `SetLookDirection(dir)` | First/third person with mouse sensitivity and vertical clamp |
-| Camera-based direction | `SetLookDirection(cameraForward)` | Third-person with camera follow |
-| Screen-to-world raycast | `SetLookDirection(hitPoint - position)` | Click-to-look |
-| Gamepad right stick | `SetLookDirection(cameraDir)` | Console/cross-platform |
-| Camera-relative movement | `SetInputDirection(local) + SetLookDirection(worldMove)` | Third-person action games |
-
-### Camera-Relative Movement
-
-For third-person games where input is relative to camera direction:
+## Snapshot and correction
 
 ```csharp
-void Update()
-{
-    Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
+using CycloneGames.RPGFoundation.Movement.Core;
 
-    // Camera-relative world direction
-    Vector3 camForward = _camera.transform.forward;
-    Vector3 camRight = _camera.transform.right;
-    camForward.y = 0f; camRight.y = 0f;
-    camForward.Normalize(); camRight.Normalize();
-    Vector3 worldMove = (camForward * moveInput.y + camRight * moveInput.x).normalized;
+MovementSnapshot delta = _movement.GetSnapshot();
+MovementFullState full = _movement.CaptureFullState();
 
-    // Convert to local space for MovementComponent, and set look direction
-    _movement.SetInputDirection(transform.InverseTransformDirection(worldMove));
-    if (moveInput.magnitude > 0.1f)
-        _movement.SetLookDirection(worldMove);
-}
+_movement.BeginReplay();
+_movement.ApplyFullState(in full);
+_movement.EndReplay();
+
+// Other entry points:
+// _movement.ApplySnapshot(in delta);
+// _movement.ResetFromFullState(in full);
 ```
 
-### GAS Movement Authority
+The four float and two integer extension slots in `MovementFullState` carry
+deterministic simulation scalars. Presentation data does not belong there.
 
-When jump, roll, or climb are implemented as abilities, the ability requests the movement state with `MovementStateRequestContext.FromAbility(this)`. The GAS authority decides whether to activate an ability, enter the state directly, or block the transition.
-
-## Usage Guide
-
-### Mouse Look with Euler Angles
+## Animation and root motion
 
 ```csharp
-private float _verticalRotation = 0f;
-private float _horizontalRotation = 0f;
-
-void Update()
-{
-    Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
-    _movement.SetInputDirection(new Vector3(moveInput.x, 0, moveInput.y));
-
-    Vector2 lookInput = new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
-    _horizontalRotation += lookInput.x * 2f;
-    _verticalRotation = Mathf.Clamp(_verticalRotation - lookInput.y * 2f, -80f, 80f);
-
-    float hRad = _horizontalRotation * Mathf.Deg2Rad;
-    float vRad = _verticalRotation * Mathf.Deg2Rad;
-    Vector3 direction = new Vector3(
-        Mathf.Sin(hRad) * Mathf.Cos(vRad),
-        Mathf.Sin(vRad),
-        Mathf.Cos(hRad) * Mathf.Cos(vRad)
-    );
-    _movement.SetLookDirection(direction.normalized);
-}
+_movement.BindAnimation(locomotionSink, actionSink);
+_movement.BindRootMotion(rootMotionSource);
+_movement.SetUseRootMotion(true);
 ```
 
-### Gamepad Right Stick Rotation
+`AnimatorRootMotionSource` captures `OnAnimatorMove` on the Animator's
+GameObject. The component converts the accumulated delta into velocity, so root
+motion cannot bypass collision or reconciliation. Only one capture is allowed
+per GameObject; `MovementRootMotionCaptureGuard` disables the second.
+
+One Animator is driven by one backend. `UnityAnimatorMovementPresenter` writes
+changed Animator parameters on the render frame; `PlayableMovementPresenter`
+evaluates a manual graph. Both are guarded by
+`MovementAnimationBackendGuard`.
+
+## Extension points
 
 ```csharp
-Vector2 lookInput = new Vector2(Input.GetAxis("RightStickX"), Input.GetAxis("RightStickY"));
-if (lookInput.magnitude < 0.1f) return;
-
-Vector3 camRight = _camera.transform.right;
-Vector3 camForward = _camera.transform.forward;
-camRight.y = 0f; camForward.y = 0f;
-camRight.Normalize(); camForward.Normalize();
-
-Vector3 direction = (camForward * lookInput.y + camRight * lookInput.x).normalized;
-_movement.SetLookDirection(direction);
+var arbiter = new MovementLayerArbiter();
+arbiter.TryAdd(new AimLayer());
+_movement.BindMovementLayers(arbiter);
+_movement.BindSemantics(new MovementExtensionRegistry());
+_movement.SetSemanticStateId(MovementSemanticId.FromName("Game.Stagger").Value);
+_movement.BindPresentationBudget(budget);
+_movement.BindDeterministicStep(driver);
 ```
 
-### Click-to-Look
-
-```csharp
-if (Input.GetMouseButton(0))
-{
-    Ray ray = _camera.ScreenPointToRay(Input.mousePosition);
-    if (Physics.Raycast(ray, out RaycastHit hit))
-    {
-        Vector3 direction = (hit.point - transform.position);
-        direction.y = 0f;
-        _movement.SetLookDirection(direction.normalized);
-    }
-}
-```
-
-### Animation
-
-```csharp
-void Update()
-{
-    var movement = GetComponent<MovementComponent>();
-    animator.SetFloat("Speed", movement.CurrentSpeed);
-    animator.SetBool("IsGrounded", movement.IsGrounded);
-    animator.SetBool("IsCrouching", movement.CurrentState == MovementStateType.Crouch);
-}
-```
-
-## Advanced Topics
-
-### GameplayAbilities Integration
-
-The integration assembly compiles only when `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` is enabled and both `CycloneGames.GameplayAbilities.Runtime` and `CycloneGames.GameplayTags.Core` are available. When movement verbs are owned by abilities, use `MovementStateRequestContext.FromAbility(this)` to request states.
-
-### Attribute Modification
-
-```csharp
-var movement = GetComponent<MovementComponent>();
-var authority = gameObject.AddComponent<MovementAttributeAuthority>();
-movement.MovementAuthority = authority;
-
-authority.SetBaseValueOverride(MovementAttribute.RunSpeed, 7f);
-authority.SetMultiplier(MovementAttribute.JumpForce, 1.2f);
-```
-
-### Time Scaling
-
-```csharp
-Time.timeScale = 0.2f;
-movementComponent.LocalTimeScale = 1.5f;
-movementComponent.IgnoreTimeScale = true;
-```
-
-## Common Scenarios
-
-### Separate Movement and Rotation
-
-Movement input controls velocity; camera or mouse controls rotation independently. Use `SetInputDirection` for movement and `SetLookDirection` for rotation.
-
-### Auto-face Movement Direction
-
-```csharp
-Vector3 worldMove = GetCameraRelativeMovementDirection(moveInput);
-if (moveInput.magnitude > 0.1f)
-{
-    _movement.SetInputDirection(transform.InverseTransformDirection(worldMove));
-    _movement.SetLookDirection(worldMove);
-}
-```
-
-### Multi-jump
-
-Configure `maxJumpCount` in the movement config. Each press consumes one jump count; ground contact resets it.
-
-## Performance and Memory
-
-- Uses `CharacterController.Move` for displacement — allocations depend on Unity's physics backend.
-- Snapshots are `readonly struct` with no heap allocation when passed by `in`.
-- `MovementComponent` is main-thread only. Threaded simulation belongs in pure data systems.
-- Use `MovementAttributeAuthority` instead of per-frame attribute computation.
+Layers that keep timers implement `IMovementLayerReplay` so replay windows save
+and restore them. `BuildAnimationFrame` and `PublishAnimationFrame` are
+`protected virtual`.
 
 ## Troubleshooting
 
-| Symptom | Cause | Resolution |
+| Symptom | Cause | Action |
 | --- | --- | --- |
-| Character falls through ground | `CharacterController` not attached or `groundCheck` misplaced | Add `CharacterController`, place ground check at feet |
-| Rotation not applied | Missing `SetLookDirection` or `SetRotation` call | Movement does not auto-rotate — call rotation API explicitly |
-| Jump not triggering | `CanEnterState` blocked by `IMovementAuthority` | Check authority implementation |
-| Climbing not working | Missing `enableClimbing` in config or wrong layer | Verify config and layer masks |
-| Performance issues | Heavy per-frame attribute recalculation | Use `MovementAttributeAuthority` for cached overrides |
+| Character rises instead of falling | Positive gravity copied from 2D | Use a negative 3D gravity |
+| Sliding on gentle slopes | `slopeLimit` too low or `groundLayer` wrong | Raise the limit and check the mask |
+| Cannot climb a step | `stepHeight` below the step | Raise `stepHeight` |
+| Character never rotates | No rotation API called | Call `SetLookDirection` or `SetRotation` |
+| Two backends fight over the Animator | Both presenters attached | Keep one; the guard disables the other |
+| Root motion applied twice | Two `OnAnimatorMove` handlers | Keep one capture and implement `IMovementRootMotionCapture` |
+| Ignored-collider request rejected | Cache at capacity | Use `TryIgnoreCollision` and route the rejection to product policy |
+
+## See also
+
+- [Package overview](../../README.md)
+- [2D movement reference](../Movement2D/README.md)
+- [Movement.Networking](../../../../CycloneGames.RPGFoundation.Movement.Networking/README.md)

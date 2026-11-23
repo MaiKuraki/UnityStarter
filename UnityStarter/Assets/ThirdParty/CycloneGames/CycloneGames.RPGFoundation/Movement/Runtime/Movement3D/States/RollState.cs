@@ -16,7 +16,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
             float3 worldInput = context.GetWorldInputDirection();
             if (math.lengthsq(worldInput) < 0.0001f)
             {
-                // No input direction - roll forward relative to transform
                 worldInput = context.Transform.forward;
             }
 
@@ -24,14 +23,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
             context.CurrentVelocity = context.RollDirection;
             context.CurrentSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
 
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.RollTrigger);
-                if (hash != 0)
-                {
-                    context.AnimationController.SetTrigger(hash);
-                }
-            }
+            context.StepEvents |= MovementStepEvent.RollStarted;
         }
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
@@ -49,12 +41,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
 
             context.CurrentSpeed = rollSpeed;
             context.CurrentVelocity = direction * rollSpeed + context.WorldUp * context.VerticalVelocity;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                context.AnimationController.SetFloat(hash, rollSpeed);
-            }
         }
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
@@ -63,17 +49,17 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
             {
                 if (!context.IsGrounded)
                 {
-                    return StatePool<MovementStateBase>.GetState<FallState>();
+                    return context.StatePool.Get<FallState>();
                 }
 
                 if (math.lengthsq(context.InputDirection) > 0.0001f)
                 {
                     if (context.SprintHeld)
-                        return StatePool<MovementStateBase>.GetState<SprintState>();
-                    return StatePool<MovementStateBase>.GetState<RunState>();
+                        return context.StatePool.Get<SprintState>();
+                    return context.StatePool.Get<RunState>();
                 }
 
-                return StatePool<MovementStateBase>.GetState<IdleState>();
+                return context.StatePool.Get<IdleState>();
             }
 
             return null;

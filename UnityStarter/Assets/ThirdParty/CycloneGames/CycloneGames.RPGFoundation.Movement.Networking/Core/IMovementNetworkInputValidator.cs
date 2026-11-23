@@ -1,3 +1,4 @@
+using System;
 using CycloneGames.Networking.Simulation;
 
 namespace CycloneGames.RPGFoundation.Movement.Networking

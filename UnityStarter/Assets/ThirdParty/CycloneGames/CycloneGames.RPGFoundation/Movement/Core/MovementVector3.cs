@@ -4,11 +4,6 @@ using System.Runtime.CompilerServices;
 
 namespace CycloneGames.RPGFoundation.Movement.Core
 {
-    /// <summary>
-    /// Engine-independent 3D vector for movement contracts that must stay free of Unity types.
-    /// Stored as three consecutive floats so snapshot payloads keep the same size as the previous
-    /// three-float representation. Conversions to engine vectors belong to the adapter layer.
-    /// </summary>
     public struct MovementVector3 : IEquatable<MovementVector3>
     {
         public static readonly MovementVector3 Zero = default;
@@ -31,6 +26,24 @@ namespace CycloneGames.RPGFoundation.Movement.Core
             get { return X * X + Y * Y + Z * Z; }
         }
 
+        public float Length
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get { return MathF.Sqrt(SqrMagnitude); }
+        }
+
+        public MovementVector3 Normalized
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get
+            {
+                float sqr = SqrMagnitude;
+                if (sqr < 1E-10f) return Zero;
+                float inv = 1f / MathF.Sqrt(sqr);
+                return new MovementVector3(X * inv, Y * inv, Z * inv);
+            }
+        }
+
         public bool IsFinite
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -40,6 +53,35 @@ namespace CycloneGames.RPGFoundation.Movement.Core
                        && !float.IsNaN(Y) && !float.IsInfinity(Y)
                        && !float.IsNaN(Z) && !float.IsInfinity(Z);
             }
+        }
+
+        public bool IsUnit(float tolerance)
+        {
+            if (!IsFinite) return false;
+            float delta = SqrMagnitude - 1f;
+            float limit = tolerance < 0f ? 0f : tolerance;
+            return delta >= -limit && delta <= limit;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float Dot(MovementVector3 a, MovementVector3 b)
+        {
+            return a.X * b.X + a.Y * b.Y + a.Z * b.Z;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float SqrDistance(MovementVector3 a, MovementVector3 b)
+        {
+            float dx = a.X - b.X;
+            float dy = a.Y - b.Y;
+            float dz = a.Z - b.Z;
+            return dx * dx + dy * dy + dz * dz;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static MovementVector3 ProjectOn(MovementVector3 value, MovementVector3 unitNormal)
+        {
+            return unitNormal * Dot(value, unitNormal);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

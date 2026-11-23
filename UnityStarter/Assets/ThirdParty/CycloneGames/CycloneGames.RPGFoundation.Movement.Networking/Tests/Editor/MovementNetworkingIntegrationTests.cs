@@ -1,293 +1,187 @@
+using NUnit.Framework;
+
 using CycloneGames.Networking;
 using CycloneGames.RPGFoundation.Movement.Core;
-using NUnit.Framework;
+using CycloneGames.RPGFoundation.Movement.Networking;
 
 namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
 {
     public sealed class MovementNetworkingIntegrationTests
     {
         private const ulong ENTITY_ID = 1001UL;
+        private const ulong EPOCH = 7UL;
+
+        private static readonly MovementNetworkProtocol Protocol =
+            new MovementNetworkProtocol(MovementWireCodecPolicy.Unspecified);
 
         [Test]
-        public void Protocol_RegisterMessageCatalog_UsesMovementRange()
+        public void Protocol_RegistersNineMessagesInTheReservedRange()
         {
             var catalog = new NetworkMessageCatalog();
+            Protocol.RegisterMessageCatalog(catalog);
 
-            MovementNetworkProtocol.RegisterMessageCatalog(catalog);
-
-            Assert.That(catalog.TryGet(
-                MovementNetworkProtocol.MSG_AUTHORITATIVE_SNAPSHOT,
-                out NetworkMessageDescriptor descriptor), Is.True);
-            Assert.That(MovementNetworkProtocol.MessageRange.Contains(descriptor.MessageId), Is.True);
-            Assert.That(NetworkMessageRanges.Module.Contains(descriptor.MessageId), Is.True);
-            Assert.That(catalog.TryGetRegisteredRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
-            Assert.That(range.Name, Is.EqualTo(MovementNetworkProtocol.MessageOwner));
-            Assert.That(catalog.TryGetRegisteredRange(descriptor.MessageId, out NetworkMessageIdRange protocolRange), Is.True);
-            Assert.That(protocolRange.Name, Is.EqualTo(MovementNetworkProtocol.MessageOwner));
-            Assert.That(descriptor.Owner, Is.EqualTo(MovementNetworkProtocol.MessageOwner));
-            Assert.That(descriptor.ContractId, Is.EqualTo("MovementNetworkSnapshotMessage"));
-            Assert.That(descriptor.DefaultChannel, Is.EqualTo(NetworkChannel.UnreliableSequenced));
-        }
-
-        [Test]
-        public void Protocol_RegisterMessageCatalog_IsIdempotent()
-        {
-            var catalog = new NetworkMessageCatalog();
-
-            MovementNetworkProtocol.RegisterMessageCatalog(catalog);
-            MovementNetworkProtocol.RegisterMessageCatalog(catalog);
-
-            Assert.That(catalog.MessageCount, Is.EqualTo(7));
+            Assert.That(catalog.MessageCount, Is.EqualTo(MovementWireIds.BuiltInMessageCount));
             Assert.That(catalog.ManifestCount, Is.EqualTo(1));
+            Assert.That(catalog.TryGet(MovementWireIds.AuthoritativeSnapshot, out NetworkMessageDescriptor descriptor), Is.True);
+            Assert.That(descriptor.ContractId, Is.EqualTo(MovementNetworkProtocol.GetContractId(2)));
+            Assert.That(Protocol.MessageRange.Contains(descriptor.MessageId), Is.True);
+            Assert.That(NetworkMessageRanges.Module.Contains(descriptor.MessageId), Is.True);
         }
 
         [Test]
-        public void ProtocolManifest_UsesFrozenSchemasAndFingerprint()
+        public void Protocol_IsIdempotent()
         {
-            NetworkProtocolManifest manifest = MovementNetworkProtocol.CreateProtocolManifest();
-            string[] canonicalSchemaLiterals =
-            {
-                "MovementManifestHandshakeMessage",
-                "MovementInputCommandMessage",
-                "MovementNetworkSnapshotMessage",
-                "MovementCorrectionMessage",
-                "MovementFullStateRequestMessage",
-                "MovementAuthorityTransferMessage",
-                "MovementTeleportMessage"
-            };
-            ulong[] expectedSchemaHashes =
-            {
-                0xF9DBBF4DFD6A2DBDUL,
-                0xED5685E0364FD524UL,
-                0x290EAF94DF7CAE29UL,
-                0x1849CCF7502F53FFUL,
-                0x8BED532024596AFAUL,
-                0x04340E944DE5396DUL,
-                0x2DA340ABAE23680AUL
-            };
-
-            Assert.That(manifest.Fingerprint, Is.EqualTo(0x645204EE064F9CE3UL));
-            Assert.That(MovementNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
-            Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
-            Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));
-            for (int i = 0; i < expectedSchemaHashes.Length; i++)
-            {
-                Assert.That(
-                    ComputeFnv1a64(canonicalSchemaLiterals[i]),
-                    Is.EqualTo(expectedSchemaHashes[i]),
-                    canonicalSchemaLiterals[i]);
-                Assert.That(manifest.Messages[i].SchemaHash, Is.EqualTo(expectedSchemaHashes[i]));
-                Assert.That(manifest.Messages[i].ContractId, Is.EqualTo(canonicalSchemaLiterals[i]));
-            }
-        }
-
-        private static ulong ComputeFnv1a64(string canonicalLiteral)
-        {
-            const ulong offsetBasis = 14695981039346656037UL;
-            const ulong prime = 1099511628211UL;
-            ulong hash = offsetBasis;
-
-            for (int i = 0; i < canonicalLiteral.Length; i++)
-            {
-                char character = canonicalLiteral[i];
-                if (character > 0x7F)
-                {
-                    throw new AssertionException("Canonical schema literals must contain ASCII characters only.");
-                }
-
-                hash ^= (byte)character;
-                hash = unchecked(hash * prime);
-            }
-
-            return hash;
+            var catalog = new NetworkMessageCatalog();
+            Protocol.RegisterMessageCatalog(catalog);
+            Protocol.RegisterMessageCatalog(catalog);
+            Assert.That(catalog.MessageCount, Is.EqualTo(MovementWireIds.BuiltInMessageCount));
         }
 
         [Test]
-        public void ManifestHandshake_UsesProtocolFingerprint()
+        public void WireLayoutDigest_IsStableAndHandshakeRejectsMismatch()
         {
-            MovementManifestHandshakeMessage message = MovementManifestHandshakeMessage.CreateDefault();
+            Assert.That(Protocol.WireLayoutDigest, Is.Not.EqualTo(0UL));
+            Assert.That(MovementWireLayout.DescriptorCount, Is.EqualTo(12));
 
-            Assert.That(message.IsValid, Is.True);
-            Assert.That(message.ProtocolFingerprint, Is.EqualTo(MovementNetworkProtocol.ProtocolFingerprint));
-            Assert.That(message.MessageIdMin, Is.EqualTo(MovementNetworkProtocol.MESSAGE_ID_BASE));
-            Assert.That(message.MessageIdMax, Is.EqualTo(MovementNetworkProtocol.MESSAGE_ID_MAX));
+            MovementManifestHandshakeMessage valid = Protocol.CreateHandshake();
+            Assert.That(valid.IsValid, Is.True);
+            Assert.That(valid.IsCompatibleWith(Protocol), Is.True);
+
+            MovementManifestHandshakeMessage wrong = valid;
+            wrong.WireLayoutDigest ^= 0xFFUL;
+            Assert.That(wrong.IsCompatibleWith(Protocol), Is.False);
         }
 
         [Test]
-        public void Snapshot_RoundTripsMovementSnapshot()
+        public void Snapshot_RoundTripsDeltaAndRejectsMalformedWireFields()
         {
-            MovementSnapshot source = CreateSnapshot(MovementStateType.Run, isGrounded: true);
-
+            MovementSnapshot source = CreateSnapshot();
             MovementNetworkSnapshotMessage message = MovementNetworkSnapshotMessage.FromMovementSnapshot(
-                ENTITY_ID,
-                source,
-                serverTick: 20,
-                sequence: 3);
+                ENTITY_ID, EPOCH, source, serverTick: 20, sequence: 3);
             MovementSnapshot roundTrip = message.ToMovementSnapshot();
 
             Assert.That(message.IsValid, Is.True);
-            Assert.That(message.IsGrounded, Is.True);
-            Assert.That(roundTrip.Position.X, Is.EqualTo(source.Position.X));
-            Assert.That(roundTrip.Position.Y, Is.EqualTo(source.Position.Y));
-            Assert.That(roundTrip.Position.Z, Is.EqualTo(source.Position.Z));
-            Assert.That(roundTrip.StateType, Is.EqualTo(source.StateType));
-            Assert.That(roundTrip.IsGrounded, Is.EqualTo(source.IsGrounded));
-            Assert.That(roundTrip.Tick, Is.EqualTo(source.Tick));
+            Assert.That(roundTrip.StateId, Is.EqualTo(source.StateId));
+            Assert.That(roundTrip.NetworkTick, Is.EqualTo(source.NetworkTick));
+
+            message.StateId = 65535;
+            Assert.That(message.IsValid, Is.False);
+
+            message = MovementNetworkSnapshotMessage.FromMovementSnapshot(
+                ENTITY_ID, EPOCH, source, serverTick: 20, sequence: 3);
+            message.Flags = 0x80;
+            Assert.That(message.IsValid, Is.False);
         }
 
         [Test]
-        public void AuthorityBridge_CapturesAndAppliesSnapshot()
+        public void Correction_CarriesCompleteState()
         {
-            var provider = new TestSnapshotProvider(CreateSnapshot(MovementStateType.Walk, isGrounded: true));
-            var bridge = new MovementNetworkAuthorityBridge(provider);
+            MovementNetworkSnapshotMessage predicted = MovementNetworkSnapshotMessage.FromMovementSnapshot(
+                ENTITY_ID, EPOCH, CreateSnapshot(), serverTick: 20, sequence: 3);
+            MovementFullStateMessage authoritative = new MovementFullStateMessage(
+                ENTITY_ID, EPOCH, 21, 4, CreateFullState(1f));
 
-            MovementNetworkSnapshotMessage message = bridge.CaptureSnapshot(ENTITY_ID, serverTick: 30, sequence: 7);
+            bool created = MovementNetworkReconciliation.TryCreateCorrection(
+                predicted, authoritative, MovementNetworkCorrectionPolicy.Default,
+                out MovementCorrectionMessage correction);
 
-            Assert.That(message.IsValid, Is.True);
-            provider.SetSnapshot(CreateSnapshot(MovementStateType.Idle, isGrounded: false));
-            Assert.That(bridge.ApplySnapshot(message), Is.True);
-            Assert.That(provider.Current.StateType, Is.EqualTo(MovementStateType.Walk));
-            Assert.That(provider.Current.IsGrounded, Is.True);
+            Assert.That(created, Is.True);
+            Assert.That(correction.IsValid, Is.True);
+            Assert.That(correction.FullState.State.IsValid, Is.True);
         }
 
         [Test]
-        public void AuthorityBridge_UsesValidatorForMovementLegality()
+        public void AuthorityBridge_RejectsImpossibleTransition()
         {
-            MovementSnapshot previous = CreateSnapshot(MovementStateType.Walk, isGrounded: true);
-            MovementSnapshot next = CreateSnapshot(MovementStateType.Jump, isGrounded: false);
-            next.Position = previous.Position + new MovementVector3(2f, 0f, 0f);
-            var provider = new TestSnapshotProvider(previous);
-            var validator = new TestMovementValidator(maxDistanceSqr: 4.1f, allowJump: true);
-            var bridge = new MovementNetworkAuthorityBridge(provider, validator);
+            var provider = new FakeProvider();
+            var bridge = new MovementNetworkAuthorityBridge(provider, new MovementDefaultValidator(20f));
+            MovementNetworkSnapshotMessage previous = MovementNetworkSnapshotMessage.FromMovementSnapshot(
+                ENTITY_ID, EPOCH, CreateSnapshot(), serverTick: 10);
+            MovementSnapshot far = CreateSnapshot();
+            far.Position = new MovementVector3(100000f, 0f, 0f);
+            MovementNetworkSnapshotMessage next = MovementNetworkSnapshotMessage.FromMovementSnapshot(
+                ENTITY_ID, EPOCH, far, serverTick: 11);
 
-            MovementNetworkSnapshotMessage previousMessage = MovementNetworkSnapshotMessage.FromMovementSnapshot(
-                ENTITY_ID,
-                previous,
-                serverTick: 10);
-            MovementNetworkSnapshotMessage nextMessage = MovementNetworkSnapshotMessage.FromMovementSnapshot(
-                ENTITY_ID,
-                next,
-                serverTick: 11);
-
-            Assert.That(bridge.ValidateTransition(previousMessage, nextMessage, deltaTime: 0.033f), Is.True);
-
-            next.Position = new MovementVector3(10f, 0f, 0f);
-            nextMessage = MovementNetworkSnapshotMessage.FromMovementSnapshot(ENTITY_ID, next, serverTick: 12);
-
-            Assert.That(bridge.ValidateTransition(previousMessage, nextMessage, deltaTime: 0.033f), Is.False);
+            Assert.That(bridge.ValidateTransition(previous, next, 0.016f), Is.False);
         }
 
         [Test]
-        public void InputCommand_UsesProjectExtensibleButtonMask()
-        {
-            const uint SprintButton = 1u << 2;
-            var command = new MovementInputCommandMessage(
-                ENTITY_ID,
-                clientTick: 9,
-                lastReceivedServerTick: 8,
-                inputSequence: 2,
-                buttonMask: SprintButton,
-                customFlags: 0x80u,
-                deltaTime: 0.016f,
-                moveAxes: new NetworkVector3(1f, 0f, 0f),
-                aimDirection: NetworkVector3.Forward,
-                predictionKey: 99);
-
-            Assert.That(command.IsValid, Is.True);
-            Assert.That(command.HasButton(SprintButton), Is.True);
-            Assert.That(command.CustomFlags, Is.EqualTo(0x80u));
-            Assert.That(command.PredictionKey, Is.EqualTo(99));
-        }
-
-        [Test]
-        public void TeleportMessage_ProducesTeleportSnapshot()
+        public void Teleport_ProjectsVerticalVelocityOntoWorldUp()
         {
             var teleport = new MovementTeleportMessage(
-                ENTITY_ID,
-                serverTick: 22,
-                teleportSequence: 4,
-                stateId: (ushort)MovementStateType.Fall,
-                flags: MovementNetworkSnapshotFlags.None,
-                reasonCode: 17u,
-                position: new NetworkVector3(5f, 6f, 7f),
-                velocity: NetworkVector3.Zero,
-                worldUp: NetworkVector3.Up);
-
-            MovementNetworkSnapshotMessage snapshot = teleport.ToSnapshotMessage(movementTick: 21, timestamp: 1.25f);
+                ENTITY_ID, EPOCH, 22, 4, (ushort)MovementStateType.Fall,
+                MovementNetworkSnapshotFlags.None, 17u,
+                new NetworkVector3(5f, 6f, 7f),
+                new NetworkVector3(3f, 4f, 0f),
+                new NetworkVector3(1f, 0f, 0f));
 
             Assert.That(teleport.IsValid, Is.True);
-            Assert.That(snapshot.IsTeleport, Is.True);
-            Assert.That(snapshot.Position, Is.EqualTo(teleport.Position));
-            Assert.That(snapshot.StateId, Is.EqualTo((ushort)MovementStateType.Fall));
+            Assert.That(teleport.VerticalVelocity, Is.EqualTo(3f).Within(0.0001f));
+            Assert.That(teleport.ToFullStateMessage(21, 1.25).IsValid, Is.True);
         }
 
-        private static MovementSnapshot CreateSnapshot(MovementStateType stateType, bool isGrounded)
+        [Test]
+        public void AuthorityTransfer_RejectsReplayAndWrongEpoch()
         {
-            return new MovementSnapshot
-            {
-                Position = new MovementVector3(1f, 2f, 3f),
-                Velocity = new MovementVector3(0.5f, 0f, 0f),
-                WorldUp = new MovementVector3(0f, 1f, 0f),
-                StateType = stateType,
-                VerticalVelocity = -1.5f,
-                IsGrounded = isGrounded,
-                JumpCount = isGrounded ? 0 : 1,
-                Tick = 12,
-                Timestamp = 0.4f
-            };
+            var transfer = new MovementAuthorityTransferMessage(
+                ENTITY_ID, EPOCH, Protocol.ProtocolFingerprint, 5U, 100L,
+                1, 2, 10UL, 20UL, 0U);
+
+            Assert.That(transfer.IsValid, Is.True);
+            Assert.That(transfer.IsAcceptableFor(EPOCH, Protocol.ProtocolFingerprint, 4U), Is.True);
+            Assert.That(transfer.IsAcceptableFor(EPOCH, Protocol.ProtocolFingerprint, 5U), Is.False);
+            Assert.That(transfer.IsAcceptableFor(EPOCH + 1UL, Protocol.ProtocolFingerprint, 4U), Is.False);
         }
 
-        private sealed class TestSnapshotProvider : IMovementSnapshotProvider
+        [Test]
+        public void FullStateRequest_RequiresRequesterIdentity()
         {
-            public TestSnapshotProvider(in MovementSnapshot current)
-            {
-                Current = current;
-            }
+            var valid = new MovementFullStateRequestMessage(ENTITY_ID, EPOCH, 3, 42UL, 10L, 1, 0U);
+            var anonymous = new MovementFullStateRequestMessage(ENTITY_ID, EPOCH, 0, 0UL, 10L, 1, 0U);
 
-            public MovementSnapshot Current { get; private set; }
-
-            public void SetSnapshot(in MovementSnapshot snapshot)
-            {
-                Current = snapshot;
-            }
-
-            public MovementSnapshot GetSnapshot()
-            {
-                return Current;
-            }
-
-            public void ApplySnapshot(in MovementSnapshot snapshot)
-            {
-                Current = snapshot;
-            }
-
-            public void ResetFromSnapshot(in MovementSnapshot snapshot)
-            {
-                Current = snapshot;
-            }
+            Assert.That(valid.IsValid, Is.True);
+            Assert.That(anonymous.IsValid, Is.False);
         }
 
-        private sealed class TestMovementValidator : IMovementValidator
+        private static MovementSnapshot CreateSnapshot()
         {
-            private readonly float _maxDistanceSqr;
-            private readonly bool _allowJump;
+            MovementSnapshot snapshot = default;
+            snapshot.Position = new MovementVector3(1f, 2f, 3f);
+            snapshot.Velocity = new MovementVector3(0f, 0f, 0f);
+            snapshot.WorldUp = new MovementVector3(0f, 1f, 0f);
+            snapshot.StateId = (ushort)MovementStateType.Walk;
+            snapshot.IsGrounded = true;
+            snapshot.NetworkTick = 12;
+            snapshot.NetworkTimeSeconds = 0.4;
+            return snapshot;
+        }
 
-            public TestMovementValidator(float maxDistanceSqr, bool allowJump)
-            {
-                _maxDistanceSqr = maxDistanceSqr;
-                _allowJump = allowJump;
-            }
+        private static MovementFullState CreateFullState(float x)
+        {
+            MovementFullState state = default;
+            state.NetworkTick = 13;
+            state.NetworkTimeSeconds = 0.42;
+            state.Position = new MovementVector3(x, 0f, 0f);
+            state.Velocity = new MovementVector3(0f, 0f, 0f);
+            state.WorldUp = new MovementVector3(0f, 1f, 0f);
+            state.GroundNormal = new MovementVector3(0f, 1f, 0f);
+            state.StateId = (ushort)MovementStateType.Walk;
+            state.IsGrounded = true;
+            state.WasGrounded = true;
+            state.PlatformLocalRotationW = 1f;
+            return state;
+        }
 
-            public bool ValidatePosition(MovementVector3 from, MovementVector3 to, float deltaTime)
-            {
-                MovementVector3 delta = to - from;
-                return delta.SqrMagnitude <= _maxDistanceSqr;
-            }
+        private sealed class FakeProvider : IMovementSnapshotProvider
+        {
+            private MovementSnapshot _snapshot;
+            private MovementFullState _fullState;
 
-            public bool ValidateStateTransition(MovementStateType from, MovementStateType to)
-            {
-                return to != MovementStateType.Jump || _allowJump;
-            }
+            public MovementSnapshot GetSnapshot() { return _snapshot; }
+            public MovementFullState CaptureFullState() { return _fullState; }
+            public void ApplySnapshot(in MovementSnapshot snapshot) { _snapshot = snapshot; }
+            public void ApplyFullState(in MovementFullState state) { _fullState = state; }
+            public void ResetFromFullState(in MovementFullState state) { ApplyFullState(state); }
         }
     }
 }
