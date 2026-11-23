@@ -1,8 +1,5 @@
 namespace CycloneGames.RPGFoundation.Movement.Core
 {
-    /// <summary>
-    /// Identifies movement attributes that can be modified.
-    /// </summary>
     public enum MovementAttribute
     {
         WalkSpeed,
@@ -19,9 +16,6 @@ namespace CycloneGames.RPGFoundation.Movement.Core
         FlySpeed
     }
 
-    /// <summary>
-    /// Modifier data for a movement attribute.
-    /// </summary>
     public struct MovementAttributeModifier
     {
         public float? BaseValueOverride;

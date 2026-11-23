@@ -1,28 +1,27 @@
+using CycloneGames.RPGFoundation.Movement.Core;
+
 namespace CycloneGames.RPGFoundation.Movement.Networking
 {
-    public struct MovementCorrectionMessage
+    public struct MovementFullStateMessage
     {
         public ulong EntityId;
-        public int CorrectedClientTick;
-        public int ServerTick;
-        public ushort InputSequence;
-        public float PositionErrorSqr;
-        public MovementNetworkSnapshotMessage Snapshot;
+        public ulong Epoch;
+        public long ServerTick;
+        public ushort Sequence;
+        public MovementFullState State;
 
-        public MovementCorrectionMessage(
+        public MovementFullStateMessage(
             ulong entityId,
-            int correctedClientTick,
-            int serverTick,
-            ushort inputSequence,
-            float positionErrorSqr,
-            MovementNetworkSnapshotMessage snapshot)
+            ulong epoch,
+            long serverTick,
+            ushort sequence,
+            in MovementFullState state)
         {
             EntityId = entityId;
-            CorrectedClientTick = correctedClientTick;
+            Epoch = epoch;
             ServerTick = serverTick;
-            InputSequence = inputSequence;
-            PositionErrorSqr = positionErrorSqr;
-            Snapshot = snapshot;
+            Sequence = sequence;
+            State = state;
         }
 
         public bool IsValid
@@ -30,12 +29,61 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             get
             {
                 return EntityId != 0UL
-                       && CorrectedClientTick >= 0
-                       && ServerTick >= 0
-                       && PositionErrorSqr >= 0f
+                       && Epoch != MovementWireIds.InvalidEpoch
+                       && ServerTick >= 0L
+                       && State.IsValid;
+            }
+        }
+
+        public MovementNetworkSnapshotMessage ToDelta(byte flags)
+        {
+            MovementSnapshot delta = State.ToDelta(flags);
+            return MovementNetworkSnapshotMessage.FromMovementSnapshot(
+                EntityId, Epoch, delta, ServerTick, Sequence, flags);
+        }
+    }
+
+    public struct MovementCorrectionMessage
+    {
+        public ulong EntityId;
+        public ulong Epoch;
+        public long CorrectedClientTick;
+        public long ServerTick;
+        public ushort InputSequence;
+        public float PositionErrorSqr;
+        public MovementFullStateMessage FullState;
+
+        public MovementCorrectionMessage(
+            ulong entityId,
+            ulong epoch,
+            long correctedClientTick,
+            long serverTick,
+            ushort inputSequence,
+            float positionErrorSqr,
+            in MovementFullStateMessage fullState)
+        {
+            EntityId = entityId;
+            Epoch = epoch;
+            CorrectedClientTick = correctedClientTick;
+            ServerTick = serverTick;
+            InputSequence = inputSequence;
+            PositionErrorSqr = positionErrorSqr;
+            FullState = fullState;
+        }
+
+        public bool IsValid
+        {
+            get
+            {
+                return EntityId != 0UL
+                       && Epoch != MovementWireIds.InvalidEpoch
+                       && CorrectedClientTick >= 0L
+                       && ServerTick >= 0L
                        && float.IsFinite(PositionErrorSqr)
-                       && Snapshot.IsValid
-                       && Snapshot.EntityId == EntityId;
+                       && PositionErrorSqr >= 0f
+                       && FullState.IsValid
+                       && FullState.EntityId == EntityId
+                       && FullState.Epoch == Epoch;
             }
         }
     }

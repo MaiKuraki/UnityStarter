@@ -22,29 +22,23 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
 
             context.CurrentSpeed = actualSpeed;
             context.CurrentVelocity = movement;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                context.AnimationController.SetFloat(hash, math.length(movement));
-            }
         }
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
         {
             if (!context.IsGrounded)
             {
-                return StatePool<MovementStateBase>.GetState<FallState>();
+                return context.StatePool.Get<FallState>();
             }
 
             if (math.lengthsq(context.InputDirection) < 0.0001f)
             {
-                return StatePool<MovementStateBase>.GetState<IdleState>();
+                return context.StatePool.Get<IdleState>();
             }
 
             if (context.CrouchHeld)
             {
-                return StatePool<MovementStateBase>.GetState<CrouchState>();
+                return context.StatePool.Get<CrouchState>();
             }
 
             return null;

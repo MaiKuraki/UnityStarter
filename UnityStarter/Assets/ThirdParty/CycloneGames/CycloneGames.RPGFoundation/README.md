@@ -118,7 +118,6 @@ All DeterministicMath integration and test asmdefs require UPM-resolved `com.cyc
 | `CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework` | `CycloneGames.GameplayFramework.Runtime` |
 | `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework` | DeterministicMath + GameplayFramework |
 | `CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath` | `CycloneGames.DeterministicMath.Core` |
-| `CycloneGames.RPGFoundation.Movement.Integrations.Animancer` | `Kybernetik.Animancer` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation` | `Unity.AI.Navigation` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AStar` | `AstarPathfindingProject` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation` | ProjectDawn Agents Navigation |
@@ -134,6 +133,8 @@ Optional networking packages:
 | `CycloneGames.RPGFoundation.Movement.Networking` | `CycloneGames.Networking.Core` | Transport-neutral movement input, authoritative snapshot, correction, teleport, full-state request, authority transfer, input validation, history, and reconciliation contracts. |
 | `CycloneGames.RPGFoundation.Projectile.Networking` | `CycloneGames.Networking.Core` | Transport-neutral projectile spawn, snapshot, hit, despawn, prediction, authority, and validation contracts. |
 
+Movement animation backends are not integration assemblies. They implement `IMovementLocomotionSink`, `IMovementActionSink` and `IRootMotionSource` from `Movement.Core` in their own assembly, and are bound with `BindAnimation` / `BindRootMotion`.
+
 ## Defines
 
 These symbols are generated and consumed by integration asmdefs through `versionDefines` and `defineConstraints`. They are integration-local compile switches, not project-wide requirements, and must not be duplicated in PlayerSettings.
@@ -142,7 +143,6 @@ These symbols are generated and consumed by integration asmdefs through `version
 | --- | --- |
 | `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` | Interaction, Movement, Projectile, and Trajectory DeterministicMath integrations. |
 | `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK` | Interaction GameplayFramework integration. |
-| `CYCLONE_RPGFOUNDATION_HAS_ANIMANCER` | Movement Animancer integration. |
 | `CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION` | Movement Unity AI Navigation integration. |
 | `CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING` | Movement A* Pathfinding integration. |
 | `CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION` | Movement Agents Navigation integration. |

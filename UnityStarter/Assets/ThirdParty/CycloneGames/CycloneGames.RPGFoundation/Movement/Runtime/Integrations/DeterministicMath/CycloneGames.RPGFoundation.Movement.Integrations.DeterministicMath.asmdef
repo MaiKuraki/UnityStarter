@@ -3,8 +3,7 @@
     "rootNamespace": "CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath",
     "references": [
         "CycloneGames.RPGFoundation.Movement.Core",
-        "CycloneGames.DeterministicMath.Core",
-        "Unity.Mathematics"
+        "CycloneGames.DeterministicMath.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

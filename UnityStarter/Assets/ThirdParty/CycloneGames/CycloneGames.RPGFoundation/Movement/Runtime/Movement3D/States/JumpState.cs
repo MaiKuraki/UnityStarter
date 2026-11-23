@@ -9,7 +9,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
 
         public override void OnEnter(ref MovementContext context)
         {
-            // Check jump count limit before allowing jump
             int resolvedMaxJumpCount = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
             if (context.Config != null && context.JumpCount >= resolvedMaxJumpCount)
             {
@@ -21,11 +20,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
             context.JumpCount++;
             context.JumpPressed = false;
 
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.JumpTrigger);
-                context.AnimationController.SetTrigger(hash);
-            }
+            context.StepEvents |= MovementStepEvent.JumpImpulse;
         }
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
@@ -49,12 +44,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
 
             context.CurrentSpeed = math.length(movement);
             context.CurrentVelocity = movement;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                context.AnimationController.SetFloat(hash, context.CurrentSpeed);
-            }
         }
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
@@ -65,26 +54,23 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
                 if (math.lengthsq(context.InputDirection) > 0.0001f)
                 {
                     if (context.SprintHeld)
-                        return StatePool<MovementStateBase>.GetState<SprintState>();
+                        return context.StatePool.Get<SprintState>();
                     else
-                        return StatePool<MovementStateBase>.GetState<RunState>();
+                        return context.StatePool.Get<RunState>();
                 }
                 else
                 {
-                    return StatePool<MovementStateBase>.GetState<IdleState>();
+                    return context.StatePool.Get<IdleState>();
                 }
             }
 
             int resolvedMaxJumpCount = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
 
-            // Transition to FallState when reaching apex or descending
-            // This must be checked BEFORE multi-jump to prevent extra jumps at apex
             if (context.VerticalVelocity <= 0)
             {
-                return StatePool<MovementStateBase>.GetState<FallState>();
+                return context.StatePool.Get<FallState>();
             }
 
-            // Multi-jump: Allow additional jumps while rising (VerticalVelocity > 0) if within jump count limit
             if (context.JumpPressed && context.Config != null && context.JumpCount < resolvedMaxJumpCount)
             {
                 float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.JumpForce);
@@ -92,11 +78,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
                 context.JumpCount++;
                 context.JumpPressed = false;
 
-                if (context.AnimationController != null && context.AnimationController.IsValid)
-                {
-                    int hash = AnimationParameterCache.GetHash(context.Config.JumpTrigger);
-                    context.AnimationController.SetTrigger(hash);
-                }
+                context.StepEvents |= MovementStepEvent.AirJumpImpulse;
             }
 
             return null;

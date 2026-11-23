@@ -44,52 +44,69 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
         }
 
         [Test]
-        public void StatePool_ReturnsOneInstancePerConcreteStateType()
+        public void MovementStatePool_IsInstanceOwnedAndDeterministic()
         {
-            TestStateA first = StatePool<TestStateBase>.GetState<TestStateA>();
-            TestStateA second = StatePool<TestStateBase>.GetState<TestStateA>();
-            TestStateB other = StatePool<TestStateBase>.GetState<TestStateB>();
+            var firstPool = new MovementStatePool<TestStateBase>();
+            var secondPool = new MovementStatePool<TestStateBase>();
+
+            TestStateA first = firstPool.Get<TestStateA>();
+            TestStateA second = firstPool.Get<TestStateA>();
+            TestStateB other = firstPool.Get<TestStateB>();
 
             Assert.That(second, Is.SameAs(first));
             Assert.That(other, Is.Not.SameAs(first));
+            Assert.That(firstPool.Count, Is.EqualTo(2));
+            Assert.That(secondPool.Get<TestStateA>(), Is.Not.SameAs(first));
+
+            firstPool.Clear();
+            Assert.That(firstPool.Count, Is.EqualTo(0));
+            Assert.That(firstPool.Get<TestStateA>(), Is.Not.SameAs(first));
         }
 
         [Test]
-        public void MovementSnapshotProvider_AppliesAndResetsNetworkSafeState()
+        public void MovementSnapshotProvider_AppliesAndResetsFullState()
         {
             var provider = new TestSnapshotProvider();
-            var first = new MovementSnapshot
-            {
-                Position = new MovementVector3(1f, 2f, 3f),
-                Velocity = new MovementVector3(4f, 5f, 6f),
-                WorldUp = new MovementVector3(0f, 1f, 0f),
-                StateType = MovementStateType.Jump,
-                VerticalVelocity = 7f,
-                IsGrounded = false,
-                JumpCount = 1,
-                Tick = 100,
-                Timestamp = 1.5f
-            };
-            var second = new MovementSnapshot
-            {
-                Position = new MovementVector3(8f, 9f, 10f),
-                Velocity = new MovementVector3(0f, 0f, 0f),
-                WorldUp = new MovementVector3(0f, 1f, 0f),
-                StateType = MovementStateType.Idle,
-                VerticalVelocity = 0f,
-                IsGrounded = true,
-                JumpCount = 0,
-                Tick = 200,
-                Timestamp = 2.5f
-            };
+            MovementSnapshot first = CreateSnapshot((ushort)MovementStateType.Jump, false, 100L, 1.5);
+            MovementSnapshot second = CreateSnapshot((ushort)MovementStateType.Idle, true, 200L, 2.5);
 
             provider.ApplySnapshot(first);
-
             AssertSnapshot(first, provider.GetSnapshot());
 
-            provider.ResetFromSnapshot(second);
+            MovementFullState full = CreateFullState((ushort)MovementStateType.Idle, true, 200L, 2.5);
+            AssertSnapshot(second, full.ToDelta(0));
+            provider.ResetFromFullState(full);
+            AssertSnapshot(full.ToDelta(0), provider.GetSnapshot());
+            Assert.That(provider.CurrentFullState.RollTimer, Is.EqualTo(1.25f));
+            Assert.That(provider.CurrentFullState.Extension0, Is.EqualTo(2.5f));
+        }
 
-            AssertSnapshot(second, provider.GetSnapshot());
+        [Test]
+        public void MovementFullState_RoundTripsDeltaWithoutLosingExtensibleTimers()
+        {
+            MovementFullState full = CreateFullState((ushort)MovementStateType.Run, false, 300L, 3.5);
+            MovementSnapshot delta = full.ToDelta(0);
+            MovementFullState rebuilt = MovementFullState.FromDelta(delta);
+
+            Assert.That(full.IsValid, Is.True);
+            Assert.That(delta.IsValid, Is.True);
+            Assert.That(rebuilt.NetworkTick, Is.EqualTo(full.NetworkTick));
+            Assert.That(rebuilt.Position.Equals(full.Position), Is.True);
+            Assert.That(rebuilt.StateId, Is.EqualTo(full.StateId));
+        }
+
+        [Test]
+        public void MovementFullState_RejectsNonFiniteAndOutOfRangeFields()
+        {
+            MovementFullState full = CreateFullState((ushort)MovementStateType.Walk, true, 10L, 1.0);
+            Assert.That(full.IsValid, Is.True);
+
+            full.StateId = 65535;
+            Assert.That(full.IsValid, Is.False);
+
+            full = CreateFullState((ushort)MovementStateType.Walk, true, 10L, 1.0);
+            full.RollTimer = float.NaN;
+            Assert.That(full.IsValid, Is.False);
         }
 
         [Test]
@@ -124,6 +141,42 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
             Assert.That(context.Payload, Is.SameAs(this));
         }
 
+        private static MovementSnapshot CreateSnapshot(ushort stateId, bool grounded, long tick, double time)
+        {
+            MovementSnapshot snapshot = default;
+            snapshot.Position = new MovementVector3(1f, 2f, 3f);
+            snapshot.Velocity = new MovementVector3(4f, 5f, 6f);
+            snapshot.WorldUp = new MovementVector3(0f, 1f, 0f);
+            snapshot.StateId = stateId;
+            snapshot.Flags = 0;
+            snapshot.VerticalVelocity = 7f;
+            snapshot.IsGrounded = grounded;
+            snapshot.JumpCount = 1;
+            snapshot.NetworkTick = tick;
+            snapshot.NetworkTimeSeconds = time;
+            return snapshot;
+        }
+
+        private static MovementFullState CreateFullState(ushort stateId, bool grounded, long tick, double time)
+        {
+            MovementFullState state = default;
+            state.NetworkTick = tick;
+            state.NetworkTimeSeconds = time;
+            state.Position = new MovementVector3(1f, 2f, 3f);
+            state.Velocity = new MovementVector3(4f, 5f, 6f);
+            state.WorldUp = new MovementVector3(0f, 1f, 0f);
+            state.GroundNormal = new MovementVector3(0f, 1f, 0f);
+            state.VerticalVelocity = 7f;
+            state.JumpCount = 1;
+            state.StateId = stateId;
+            state.IsGrounded = grounded;
+            state.WasGrounded = grounded;
+            state.RollTimer = 1.25f;
+            state.Extension0 = 2.5f;
+            state.PlatformLocalRotationW = 1f;
+            return state;
+        }
+
         private static float Distance(MovementVector3 left, MovementVector3 right)
         {
             float dx = left.X - right.X;
@@ -137,12 +190,12 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
             Assert.That(Distance(expected.Position, actual.Position), Is.LessThan(0.0001f));
             Assert.That(Distance(expected.Velocity, actual.Velocity), Is.LessThan(0.0001f));
             Assert.That(Distance(expected.WorldUp, actual.WorldUp), Is.LessThan(0.0001f));
-            Assert.That(actual.StateType, Is.EqualTo(expected.StateType));
+            Assert.That(actual.StateId, Is.EqualTo(expected.StateId));
             Assert.That(actual.VerticalVelocity, Is.EqualTo(expected.VerticalVelocity));
             Assert.That(actual.IsGrounded, Is.EqualTo(expected.IsGrounded));
             Assert.That(actual.JumpCount, Is.EqualTo(expected.JumpCount));
-            Assert.That(actual.Tick, Is.EqualTo(expected.Tick));
-            Assert.That(actual.Timestamp, Is.EqualTo(expected.Timestamp));
+            Assert.That(actual.NetworkTick, Is.EqualTo(expected.NetworkTick));
+            Assert.That(actual.NetworkTimeSeconds, Is.EqualTo(expected.NetworkTimeSeconds));
         }
 
         private abstract class TestStateBase
@@ -160,20 +213,38 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
         private sealed class TestSnapshotProvider : IMovementSnapshotProvider
         {
             private MovementSnapshot _snapshot;
+            private MovementFullState _fullState;
+
+            public MovementFullState CurrentFullState
+            {
+                get { return _fullState; }
+            }
 
             public MovementSnapshot GetSnapshot()
             {
                 return _snapshot;
             }
 
+            public MovementFullState CaptureFullState()
+            {
+                return _fullState;
+            }
+
             public void ApplySnapshot(in MovementSnapshot snapshot)
             {
                 _snapshot = snapshot;
+                _fullState = MovementFullState.FromDelta(snapshot);
             }
 
-            public void ResetFromSnapshot(in MovementSnapshot snapshot)
+            public void ApplyFullState(in MovementFullState state)
             {
-                _snapshot = snapshot;
+                _fullState = state;
+                _snapshot = state.ToDelta(0);
+            }
+
+            public void ResetFromFullState(in MovementFullState state)
+            {
+                ApplyFullState(state);
             }
         }
 
@@ -223,4 +294,3 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
         }
     }
 }
-

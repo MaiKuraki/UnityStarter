@@ -1,5 +1,4 @@
 using System;
-
 using CycloneGames.Networking;
 using CycloneGames.Networking.Simulation;
 
@@ -9,45 +8,35 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
     {
         private const float NORMALIZED_AIM_TOLERANCE = 0.20f;
 
-        public static readonly DefaultMovementNetworkInputValidator Instance = new DefaultMovementNetworkInputValidator();
-
-        private DefaultMovementNetworkInputValidator()
-        {
-        }
+        public static readonly DefaultMovementNetworkInputValidator Instance =
+            new DefaultMovementNetworkInputValidator();
 
         public NetworkActionResult Validate(
             in MovementInputCommandMessage command,
             in MovementNetworkInputValidationContext context)
         {
-            if (!command.IsValid)
-            {
+            if (!command.IsValid || command.Epoch != context.Epoch)
                 return Reject(NetworkActionResultCode.InvalidPayload, command, context.ServerTick);
-            }
+
+            if (!context.IsAuthenticated)
+                return Reject(NetworkActionResultCode.Unauthorized, command, context.ServerTick);
 
             if (!context.AllowsButtonMask(command.ButtonMask) || !context.AllowsCustomFlags(command.CustomFlags))
-            {
                 return Reject(NetworkActionResultCode.InvalidPayload, command, context.ServerTick);
-            }
 
             if (command.MoveAxes.SqrMagnitude > context.MaxMoveAxesMagnitudeSqr)
-            {
                 return Reject(NetworkActionResultCode.InvalidPayload, command, context.ServerTick);
-            }
 
             float aimMagnitudeSqr = command.AimDirection.SqrMagnitude;
             if (aimMagnitudeSqr < context.MinAimDirectionMagnitudeSqr
                 || aimMagnitudeSqr > context.MaxAimDirectionMagnitudeSqr)
-            {
                 return Reject(NetworkActionResultCode.InvalidPayload, command, context.ServerTick);
-            }
 
             if (context.RequireNormalizedAimDirection && aimMagnitudeSqr > 0f)
             {
                 float aimMagnitude = MathF.Sqrt(aimMagnitudeSqr);
                 if (MathF.Abs(aimMagnitude - 1f) > NORMALIZED_AIM_TOLERANCE)
-                {
                     return Reject(NetworkActionResultCode.InvalidPayload, command, context.ServerTick);
-                }
             }
 
             NetworkActionCommand actionCommand = command.ToNetworkActionCommand();
@@ -61,10 +50,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             NetworkTickId serverTick)
         {
             return NetworkActionResult.Reject(
-                code,
-                serverTick,
-                command.InputSequence,
-                command.PredictionKey);
+                code, serverTick, command.InputSequence, command.PredictionKey);
         }
     }
 }

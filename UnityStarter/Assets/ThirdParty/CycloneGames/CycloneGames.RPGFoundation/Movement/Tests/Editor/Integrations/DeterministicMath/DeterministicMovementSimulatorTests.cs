@@ -116,7 +116,6 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
         {
             DeterministicMovementConfig config = MakeConfig();
             var state = DeterministicMovementState.Create(FPVector3.Zero, isGrounded: true);
-            // Move direction with magnitude 5 (far above the unit expectation).
             var input = new DeterministicMovementInput(
                 new FPVector3(FPInt64.FromInt(5), FPInt64.Zero, FPInt64.Zero),
                 Dt,
@@ -127,8 +126,6 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
                 state = DeterministicMovementSimulator.Step(state, input, config);
             }
 
-            // Fixed-point sqrt + division when renormalising an over-long vector introduces a few raw units
-            // of rounding, so compare the clamped speed within tolerance rather than by exact RawValue.
             Assert.AreEqual(config.MaxHorizontalSpeed.ToFloat(), state.HorizontalVelocity.X.ToFloat(), 0.01f);
         }
 
@@ -195,8 +192,7 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
 
             for (int i = 0; i < ticks; i++)
             {
-                // Deterministic but varying input pattern to exercise all branches.
-                float moveX = (i % 3) - 1; // -1, 0, 1 cycle
+                float moveX = (i % 3) - 1;
                 bool jump = (i % 50) == 0;
                 var input = DeterministicMovementInput.FromFloats(moveX, 0f, 1f / 60f, jump);
 

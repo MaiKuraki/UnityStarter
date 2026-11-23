@@ -1,8 +1,5 @@
 namespace CycloneGames.RPGFoundation.Movement.Core
 {
-    /// <summary>
-    /// Helper methods for working with movement attributes.
-    /// </summary>
     public static class MovementAttributeHelper
     {
         public static float GetFinalValue(

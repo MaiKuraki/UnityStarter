@@ -1,17 +1,14 @@
 using Unity.Mathematics;
 using UnityEngine;
 using CycloneGames.RPGFoundation.Movement.Core;
+using CycloneGames.RPGFoundation.Movement.Runtime.States;
 
 namespace CycloneGames.RPGFoundation.Movement.Runtime
 {
-    /// <summary>
-    /// Context struct passed between movement states.
-    /// </summary>
     public struct MovementContext
     {
         public Rigidbody Rigidbody;
         public CapsuleCollider CapsuleCollider;
-        public IAnimationController AnimationController;
         public Transform Transform;
         public MovementConfig Config;
 
@@ -47,17 +44,16 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
         public IMovementAuthority MovementAuthority;
 
+        public MovementStatePool<MovementStateBase> StatePool;
+
+        public MovementStepEvent StepEvents;
+
         public ClimbingMode ClimbingMode;
 
-        // Wall climb per-instance state (moved from WallClimbState for flyweight safety)
         public Vector3 WallClimbNormal;
         public float WallClingTimer;
         public bool IsWallSliding;
 
-        /// <summary>
-        /// Converts InputDirection from local space to world space, projecting onto plane perpendicular to WorldUp.
-        /// Returns a normalized direction vector. Use InputMagnitude to get the input strength.
-        /// </summary>
         public float3 GetWorldInputDirection()
         {
             if (Transform == null || math.lengthsq(InputDirection) < 0.0001f)
@@ -71,7 +67,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             if (projectedSqrLen > 0.0001f)
             {
-                // Always return normalized direction - magnitude is handled separately
                 return math.normalize(projected);
             }
             else
@@ -80,9 +75,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             }
         }
 
-        /// <summary>
-        /// Gets the input magnitude, clamped to [0, 1] range.
-        /// </summary>
         public float InputMagnitude => math.clamp(math.length(InputDirection), 0f, 1f);
 
         public float GetAttributeValue(MovementAttribute attribute, float configValue)

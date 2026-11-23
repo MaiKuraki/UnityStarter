@@ -11,12 +11,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
         {
             context.VerticalVelocity = 0f;
             context.JumpCount = 0;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
-                if (hash != 0) context.AnimationController.SetBool(hash, true);
-            }
         }
 
         public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
@@ -37,19 +31,13 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             {
                 context.ClimbingMode = ClimbingMode.None;
             }
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
-                if (hash != 0) context.AnimationController.SetBool(hash, false);
-            }
         }
 
         public override MovementStateBase2D EvaluateTransition(ref MovementContext2D context)
         {
             if (context.JumpPressed)
             {
-                return StatePool<MovementStateBase2D>.GetState<JumpState2D>();
+                return context.StatePool.Get<JumpState2D>();
             }
 
             return null;

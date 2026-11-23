@@ -2,22 +2,6 @@ using CycloneGames.DeterministicMath;
 
 namespace CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath
 {
-    /// <summary>
-    /// Bit-deterministic kinematic movement integrator. Given a state, an input and a config it advances the
-    /// state by one tick using only fixed-point arithmetic, so every platform computes identical results —
-    /// the property lockstep and rollback netcode depend on.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Scope: this core integrates horizontal acceleration toward a target velocity, gravity, jumping and
-    /// vertical motion against a single deterministic flat ground plane at <see cref="DeterministicMovementConfig.GroundHeight"/>.
-    /// It performs no collision queries against arbitrary geometry; deterministic world collision is a
-    /// separate concern and intentionally out of scope here.
-    /// </para>
-    /// <para>
-    /// The method is pure and allocation-free. World up is +Y by convention; the horizontal plane is XZ.
-    /// </para>
-    /// </remarks>
     public static class DeterministicMovementSimulator
     {
         public static DeterministicMovementState Step(
@@ -69,7 +53,6 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath
 
             if (moveDirection.SqrMagnitude.RawValue == 0)
             {
-                // No horizontal intent: bleed off speed on the ground; preserve momentum in the air.
                 if (state.IsGrounded)
                 {
                     return MoveTowards(state.HorizontalVelocity, FPVector3.Zero, config.GroundDeceleration * dt);

@@ -13,15 +13,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
             context.VerticalVelocity = 0f;
             context.WallClingTimer = 0f;
             context.IsWallSliding = false;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
-                if (hash != 0)
-                {
-                    context.AnimationController.SetBool(hash, true);
-                }
-            }
         }
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
@@ -40,12 +31,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
                 float slideSpeed = context.GetAttributeValue(MovementAttribute.ClimbSpeed, context.Config.WallSlideSpeed);
                 displacement = -context.WorldUp * slideSpeed * context.DeltaTime;
                 context.CurrentSpeed = slideSpeed;
-
-                if (context.AnimationController != null && context.AnimationController.IsValid)
-                {
-                    int slideHash = AnimationParameterCache.GetHash(context.Config.WallSlidingParameter);
-                    if (slideHash != 0) context.AnimationController.SetBool(slideHash, true);
-                }
             }
             else
             {
@@ -97,21 +82,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
             context.WallClimbNormal = Vector3.zero;
             context.WallClingTimer = 0f;
             context.IsWallSliding = false;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
-                if (hash != 0)
-                {
-                    context.AnimationController.SetBool(hash, false);
-                }
-
-                int slideHash = AnimationParameterCache.GetHash(context.Config.WallSlidingParameter);
-                if (slideHash != 0)
-                {
-                    context.AnimationController.SetBool(slideHash, false);
-                }
-            }
         }
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
@@ -127,12 +97,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
                 context.LastWallNormal = context.WallClimbNormal;
                 context.LastWallJumpTime = Time.time;
 
-                return StatePool<MovementStateBase>.GetState<JumpState>();
+                return context.StatePool.Get<JumpState>();
             }
 
             if (context.IsGrounded)
             {
-                return StatePool<MovementStateBase>.GetState<IdleState>();
+                return context.StatePool.Get<IdleState>();
             }
 
             return null;

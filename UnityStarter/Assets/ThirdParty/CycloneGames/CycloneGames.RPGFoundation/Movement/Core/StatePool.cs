@@ -1,19 +1,36 @@
+using System;
+using System.Collections.Generic;
+
 namespace CycloneGames.RPGFoundation.Movement.Core
 {
-    /// <summary>
-    /// Generic state pool using flyweight pattern.
-    /// States are stateless singletons shared across all MovementComponent instances.
-    /// </summary>
-    public static class StatePool<TState> where TState : class
+    public sealed class MovementStatePool<TState> where TState : class
     {
-        public static T GetState<T>() where T : TState, new()
+        private readonly Dictionary<Type, TState> _states;
+
+        public MovementStatePool(int initialCapacity = 16)
         {
-            return StateInstanceCache<T>.Instance ??= new T();
+            _states = new Dictionary<Type, TState>(initialCapacity);
         }
 
-        private static class StateInstanceCache<T> where T : TState, new()
+        public T Get<T>() where T : TState, new()
         {
-            public static T Instance;
+            Type key = typeof(T);
+            TState state;
+            if (_states.TryGetValue(key, out state))
+                return (T)state;
+            T created = new T();
+            _states.Add(key, created);
+            return created;
+        }
+
+        public int Count
+        {
+            get { return _states.Count; }
+        }
+
+        public void Clear()
+        {
+            _states.Clear();
         }
     }
 }

@@ -7,7 +7,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
     {
         public static NetworkActionCommand ToNetworkActionCommand(
             this MovementInputCommandMessage command,
-            uint actionId = MovementNetworkActionIds.InputCommand)
+            uint actionId = MovementWireIds.InputCommandAction)
         {
             return new NetworkActionCommand(
                 command.EntityId,
@@ -20,6 +20,24 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
                 command.CustomFlags,
                 primaryVector: command.MoveAxes,
                 secondaryVector: command.AimDirection);
+        }
+
+        public static NetworkActionCommand ToNetworkActionCommand(
+            this MovementInputBatchMessage batch,
+            uint actionId = MovementWireIds.InputBatchAction)
+        {
+            MovementInputCommandMessage newest = batch.Newest;
+            return new NetworkActionCommand(
+                batch.EntityId,
+                actionId,
+                new NetworkTickId(newest.ClientTick),
+                new NetworkTickId(newest.LastReceivedServerTick),
+                newest.InputSequence,
+                newest.PredictionKey,
+                newest.ButtonMask,
+                newest.CustomFlags,
+                primaryVector: newest.MoveAxes,
+                secondaryVector: newest.AimDirection);
         }
     }
 }

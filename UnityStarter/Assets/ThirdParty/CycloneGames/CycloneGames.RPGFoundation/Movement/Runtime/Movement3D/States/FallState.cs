@@ -23,25 +23,19 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
             float gravity = context.GetAttributeValue(MovementAttribute.Gravity, context.Config.Gravity);
             float3 worldUp = context.WorldUp;
 
-            // Handle non-walkable slope sliding
             if (context.IsOnNonWalkableSlope)
             {
                 float3 groundNormal = context.GroundNormal;
 
-                // If moving into the slope, limit contribution
                 if (math.dot(desiredVelocity, groundNormal) < 0f)
                 {
-                    // Allow movement parallel to the slope, but not into it
                     float3 groundNormal2D = math.normalize((float3)Vector3.ProjectOnPlane(groundNormal, worldUp));
                     desiredVelocity = (float3)Vector3.ProjectOnPlane(desiredVelocity, groundNormal2D);
                 }
 
-                // Make velocity calculations planar by projecting up vector onto non-walkable surface
-                // This causes the character to slide down the slope
                 worldUp = math.normalize((float3)Vector3.ProjectOnPlane(worldUp, groundNormal));
             }
 
-            // Separate velocity into vertical and lateral components
             float3 verticalVelocity = worldUp * context.VerticalVelocity;
             context.VerticalVelocity += gravity * context.DeltaTime;
             verticalVelocity = worldUp * context.VerticalVelocity;
@@ -52,12 +46,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
 
             context.CurrentSpeed = math.length(desiredVelocity);
             context.CurrentVelocity = desiredVelocity;
-
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
-                context.AnimationController.SetFloat(hash, context.CurrentSpeed);
-            }
         }
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
@@ -67,25 +55,23 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
                 if (math.lengthsq(context.InputDirection) > 0.0001f)
                 {
                     if (context.SprintHeld)
-                        return StatePool<MovementStateBase>.GetState<SprintState>();
+                        return context.StatePool.Get<SprintState>();
                     else
-                        return StatePool<MovementStateBase>.GetState<RunState>();
+                        return context.StatePool.Get<RunState>();
                 }
                 else
                 {
-                    return StatePool<MovementStateBase>.GetState<IdleState>();
+                    return context.StatePool.Get<IdleState>();
                 }
             }
 
-            // Multi-jump: Check JumpCount < maxJumpCount before transitioning (JumpCount increments in JumpState.OnEnter)
-            // Consume JumpPressed immediately to prevent it from persisting if jump cannot be performed
             if (context.JumpPressed)
             {
                 context.JumpPressed = false;
                 int resolvedMaxJump = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
                 if (context.Config != null && context.JumpCount < resolvedMaxJump)
                 {
-                    return StatePool<MovementStateBase>.GetState<JumpState>();
+                    return context.StatePool.Get<JumpState>();
                 }
             }
 

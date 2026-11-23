@@ -1,16 +1,14 @@
 using Unity.Mathematics;
 using UnityEngine;
 using CycloneGames.RPGFoundation.Movement.Core;
+using CycloneGames.RPGFoundation.Movement.Runtime;
+using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States;
 
 namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 {
-    /// <summary>
-    /// Context struct passed between 2D movement states. 
-    /// </summary>
     public struct MovementContext2D
     {
         public Rigidbody2D Rigidbody;
-        public IAnimationController AnimationController;
         public Transform Transform;
         public MovementConfig2D Config;
 
@@ -36,7 +34,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         public float CurrentSpeed;
         public float VerticalVelocity;
 
-        // Wall Jump state
         public bool IsWallJumping;
         public Vector2 WallJumpDirection;
         public int LastWallSide;
@@ -44,30 +41,25 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
         public IMovementAuthority MovementAuthority;
 
+        public MovementStatePool<MovementStateBase2D> StatePool;
+
+        public MovementStepEvent StepEvents;
+
         public ClimbingMode ClimbingMode;
 
-        // Wall climb per-instance state (moved from WallClimbState2D for flyweight safety)
         public int WallClimbSide;
         public float WallClingTimer;
         public bool IsWallSliding;
 
-        // BeltScroll depth recovery
         public float PendingDepth;
 
-        // Facing direction (separate from movement direction, used by TopDown/BeltScroll)
         public float2 LookDirection;
 
-        /// <summary>
-        /// Gets final value for an attribute after applying modifiers.
-        /// </summary>
         public float GetAttributeValue(MovementAttribute attribute, float configValue)
         {
             return MovementAttributeHelper.GetFinalValue(attribute, configValue, MovementAuthority);
         }
 
-        /// <summary>
-        /// Gets final speed for a movement state. Kept for backward compatibility.
-        /// </summary>
         public float GetFinalSpeed(float baseSpeed, MovementStateType stateType)
         {
             MovementAttribute attr = stateType switch
