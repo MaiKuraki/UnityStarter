@@ -626,7 +626,7 @@ namespace CycloneGames.AnimationRuntime
             }
 
             bool physicsPhase = _commitPhase == AnimationCommitPhase.FixedUpdate;
-            bool physicsUpdate = animator.updateMode == AnimatorUpdateMode.AnimatePhysics;
+            bool physicsUpdate = AnimatorUpdateModeCompat.IsFixed(animator);
             bool modeMismatch = physicsPhase != physicsUpdate;
             bool lodMismatch = physicsPhase && (_updateRateHz > 0f || _pauseWhenInvisible);
             if (!modeMismatch && !lodMismatch)
@@ -641,7 +641,7 @@ namespace CycloneGames.AnimationRuntime
                 + (lodMismatch
                     ? ", and commit-rate LOD / visibility skipping are enabled (invalid in M3; ignored)"
                     : string.Empty)
-                + ". Use AnimatePhysics for FixedUpdate commits and Normal otherwise; every physics step "
+                + ". Use the fixed update mode for FixedUpdate commits and Normal otherwise; every physics step "
                 + "must produce exactly one commit.");
         }
 #endif
@@ -668,6 +668,30 @@ namespace CycloneGames.AnimationRuntime
                 + " commits=" + stats.Commits
                 + " evaluations=" + stats.Evaluations
                 + " writes=" + stats.NativeWrites);
+        }
+    }
+
+    /// <summary>
+    /// Unity 6 renamed <c>AnimatorUpdateMode.AnimatePhysics</c> to <c>Fixed</c>. The enum member is the
+    /// authoritative signal; <c>Animator.animatePhysics</c> is a separate compatibility property.
+    /// </summary>
+    internal static class AnimatorUpdateModeCompat
+    {
+        internal static AnimatorUpdateMode FixedMode
+        {
+            get
+            {
+#if UNITY_6000_0_OR_NEWER
+                return AnimatorUpdateMode.Fixed;
+#else
+                return AnimatorUpdateMode.AnimatePhysics;
+#endif
+            }
+        }
+
+        internal static bool IsFixed(Animator animator)
+        {
+            return animator != null && animator.updateMode == FixedMode;
         }
     }
 }

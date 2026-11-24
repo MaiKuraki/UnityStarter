@@ -259,7 +259,7 @@ namespace CycloneGames.AnimationRuntime.Editor
                 if (phase == AnimationCommitPhase.FixedUpdate)
                 {
                     EditorGUILayout.HelpBox(
-                        "Commits once per physics step. Animator.updateMode must be AnimatePhysics; a mismatch is flagged below.",
+                        "Commits once per physics step. Animator.updateMode must be the fixed update mode; a mismatch is flagged below.",
                         MessageType.Info);
                 }
 
