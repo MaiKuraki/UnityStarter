@@ -68,16 +68,16 @@ namespace CycloneGames.AnimationRuntime.Editor
                 return count;
             }
 
-            bool animatePhysics = animator.updateMode == AnimatorUpdateMode.AnimatePhysics;
-            if (commitPhase == AnimationCommitPhase.FixedUpdate && !animatePhysics)
+            bool fixedUpdateMode = AnimatorUpdateModeCompat.IsFixed(animator);
+            if (commitPhase == AnimationCommitPhase.FixedUpdate && !fixedUpdateMode)
             {
                 Add(findings, ref count, AnimationSetupField.Frame, AnimationSetupSeverity.Warning,
-                    "Commit phase is FixedUpdate but Animator.updateMode is not AnimatePhysics.");
+                    "Commit phase is FixedUpdate but Animator.updateMode is not the fixed update mode.");
             }
-            else if (commitPhase != AnimationCommitPhase.FixedUpdate && animatePhysics)
+            else if (commitPhase != AnimationCommitPhase.FixedUpdate && fixedUpdateMode)
             {
                 Add(findings, ref count, AnimationSetupField.Frame, AnimationSetupSeverity.Warning,
-                    "Animator.updateMode is AnimatePhysics but the commit phase is not FixedUpdate.");
+                    "Animator.updateMode uses the fixed update mode but the commit phase is not FixedUpdate.");
             }
 
             if (commitPhase == AnimationCommitPhase.LateUpdate && hasIKPass)
