@@ -165,7 +165,7 @@ namespace CycloneGames.AnimationRuntime.Tests
             Assert.IsTrue(_graph.SetLayerSource(0, node.Playable));
             node.Dispose();
 
-            _graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0.016f));
+            _graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update));
 
             Assert.IsFalse(_graph.IsLayerExternallySourced(0), "the layer must self-heal when its source dies");
         }

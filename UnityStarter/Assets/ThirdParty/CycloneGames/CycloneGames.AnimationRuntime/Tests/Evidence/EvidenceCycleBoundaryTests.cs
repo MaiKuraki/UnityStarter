@@ -29,7 +29,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick At(double time, long step)
         {
-            return new AnimationTick(time, step, AnimationTimeSource.Update, false, 0.016f);
+            return new AnimationTick(time, step, AnimationTimeSource.Update);
         }
 
         private AnimationClip ClipWith(string name, float length, params float[] times)

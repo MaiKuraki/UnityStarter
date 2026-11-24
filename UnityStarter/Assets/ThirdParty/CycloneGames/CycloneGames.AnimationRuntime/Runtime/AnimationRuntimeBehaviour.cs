@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using CycloneGames.AnimationRuntime.Core;
 using CycloneGames.Logging;
 using UnityEngine;
@@ -8,17 +9,10 @@ namespace CycloneGames.AnimationRuntime
     /// <summary>Unity phase in which the graph is committed. Must match the actor's movement model.</summary>
     public enum AnimationCommitPhase : byte
     {
-        /// <summary>
-        /// Commits in Update. Unity runs this component at order -100 inside the phase, so other Update scripts
-        /// that keep the default order (0) run after it. Use it only when the pose does not need to see this
-        /// frame's gameplay writes, or when the host drives <c>Commit(tick)</c> from a later order.
-        /// </summary>
+        /// <summary>Commits in Update at execution order -100.</summary>
         Update = 0,
 
-        /// <summary>
-        /// Commits in LateUpdate at order -100: after every Update script, before LateUpdate cameras at order 0.
-        /// Changing the attribute moves the pose relative to LateUpdate consumers.
-        /// </summary>
+        /// <summary>Commits in LateUpdate at execution order -100.</summary>
         LateUpdate = 1,
 
         /// <summary>Inside the physics step. Required when a movement component consumes root motion per fixed step.</summary>
@@ -38,32 +32,41 @@ namespace CycloneGames.AnimationRuntime
         Disabled = 2
     }
 
-    /// <summary>
-    /// Scene binding for <see cref="AnimationRuntimeGraph"/>. Coordinates lifecycle, the commit phase and root
-    /// motion ownership only; it produces ticks and contains no animation logic.
-    ///
-    /// In <see cref="AnimationTimePolicy.External"/> the internal tick is diagnostic: clips advance only when the
-    /// host calls <c>BeginPlayback</c>/<c>UpdatePlayback</c>. In <see cref="AnimationTimePolicy.TickDriven"/> the
-    /// component's clock is authoritative and clips advance on their own.
-    /// </summary>
+    /// <summary>Receives Unity's IK pass after the pose has been evaluated. Registered once per binding.</summary>
+    public interface IAnimationIKPass
+    {
+        void OnAnimatorIK(int layerIndex);
+    }
+
+    /// <summary>Phases recorded by the development ordering probe.</summary>
+    [Flags]
+    public enum AnimationRuntimePhase : byte
+    {
+        Update = 1 << 0,
+        LateUpdate = 1 << 1,
+        FixedUpdate = 1 << 2,
+        Commit = 1 << 3,
+        AnimatorMove = 1 << 4,
+        AnimatorIK = 1 << 5
+    }
+
+    /// <summary>Binds <see cref="AnimationRuntimeGraph"/> to a scene Animator and produces commit ticks.</summary>
+    /// <remarks>In External mode the host advances clips through BeginPlayback/UpdatePlayback.</remarks>
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(-100)]
     [AddComponentMenu("CycloneGames/Animation/Animation Runtime")]
     public sealed class AnimationRuntimeBehaviour : MonoBehaviour
     {
-        [Header("Binding")]
         [Tooltip("Animator sampled by the runtime graph. Falls back to a child Animator when empty. Backend root motion requires the Animator on this same GameObject.")]
         [SerializeField] private Animator _animator;
 
         [Tooltip("Layer stack for this character archetype. Empty falls back to one full-body layer with four slots.")]
         [SerializeField] private AnimationLayerProfile _profile;
 
-        [Header("Time")]
         [Tooltip("External: the host supplies absolute clip time through UpdatePlayback. TickDriven: this component advances clips from its own clock.")]
         [SerializeField] private AnimationTimePolicy _timePolicy = AnimationTimePolicy.External;
 
-        [Header("Frame Model")]
-        [Tooltip("Phase in which the graph is committed. FixedUpdate is required when a movement component consumes root motion per physics step.")]
+        [Tooltip("Phase in which the graph is committed. FixedUpdate is required when a movement component consumes root motion per physics step. LateUpdate commits after OnAnimatorIK, so an IK pass sees the previous pose.")]
         [SerializeField] private AnimationCommitPhase _commitPhase = AnimationCommitPhase.LateUpdate;
 
         [Tooltip("Who applies root motion. External keeps an existing movement component in charge.")]
@@ -76,7 +79,6 @@ namespace CycloneGames.AnimationRuntime
         [Min(0f)]
         [SerializeField] private float _rootMotionScale = 1f;
 
-        [Header("Lifecycle")]
         [Tooltip("Initialize on Awake. Disable to call Initialize from a composition root.")]
         [SerializeField] private bool _initializeOnAwake = true;
 
@@ -86,11 +88,25 @@ namespace CycloneGames.AnimationRuntime
         [Tooltip("Dispatch AnimationClip events. Disable when a timeline (Choreography) owns event dispatch.")]
         [SerializeField] private bool _dispatchClipEvents = true;
 
+        [Tooltip("Commit rate in Hz. 0 commits every frame/step. Lower rates skip commits but pass the full accumulated delta to the next one, so fades and tick-driven clocks stay correct.")]
+        [Min(0f)]
+        [SerializeField] private float _updateRateHz = 0f;
+
+        [Tooltip("Skip commits while a Renderer on this GameObject is culled. Graph state is preserved; no playable is destroyed.")]
+        [SerializeField] private bool _pauseWhenInvisible = false;
+
         private AnimationRuntimeGraph _graph;
         private ILogWriter _logWriter;
         private long _stepIndex = -1;
+        private double _lastCommitClock = -1d;
+        private bool _culled;
         private bool _rootMotionActive;
         private bool _disabledByMissingAnimator;
+        private bool _warnedFrameModel;
+        private bool _warnedRootMotionSink;
+        private int _phaseMask;
+        private int _phaseFrame = -1;
+        private IAnimationIKPass _ikPass;
         private IAnimationClipEventSink _clipEventSink;
 
         /// <summary>Raised once per frame when root motion is actually forwarded by this component.</summary>
@@ -114,6 +130,47 @@ namespace CycloneGames.AnimationRuntime
         /// initialized. False means <see cref="RootMotionApplied"/> will never fire.
         /// </summary>
         public bool IsRootMotionActive => _rootMotionActive;
+
+        /// <summary>True when an IK pass is registered. Unity calls OnAnimatorIK before LateUpdate.</summary>
+        public bool HasIKPass => _ikPass != null;
+
+        /// <summary>Registers the receiver for Unity's IK pass. Pass null to detach.</summary>
+        public void SetIKPass(IAnimationIKPass pass)
+        {
+            _ikPass = pass;
+        }
+
+        /// <summary>Bit mask of phases seen in the current rendered frame. Development builds only.</summary>
+        public int PhaseOrderMask => _phaseMask;
+
+        // Conditional removes every call in non-development builds. frameCount changes once per
+        // rendered frame, so a FixedUpdate earlier in the same frame is not cleared by Update.
+        [Conditional("DEBUG")]
+        private void RecordPhase(AnimationRuntimePhase phase)
+        {
+            int frame = Time.frameCount;
+            if (_phaseFrame != frame)
+            {
+                _phaseFrame = frame;
+                _phaseMask = 0;
+            }
+
+            _phaseMask |= (int)phase;
+        }
+
+        /// <summary>Commit cadence in Hz; 0 commits every frame or fixed step.</summary>
+        public float UpdateRateHz
+        {
+            get => _updateRateHz;
+            set => _updateRateHz = AnimationClockMath.IsFinite(value) && value > 0f ? value : 0f;
+        }
+
+        /// <summary>Whether commits are skipped while a Renderer on this GameObject is culled.</summary>
+        public bool PauseWhenInvisible
+        {
+            get => _pauseWhenInvisible;
+            set => _pauseWhenInvisible = value;
+        }
 
         // ------------------------------------------------------------------ lifecycle
 
@@ -177,6 +234,10 @@ namespace CycloneGames.AnimationRuntime
 
             _animator = animator;
 
+#if DEBUG
+            ValidateFrameModel(animator);
+#endif
+
             AnimationLayerDescriptor[] descriptors = _profile != null
                 ? _profile.ToDescriptors()
                 : new[] { AnimationLayerDescriptor.Default };
@@ -205,11 +266,19 @@ namespace CycloneGames.AnimationRuntime
 
         private void OnEnable()
         {
-            // A disabled interval leaves the tick clocks behind; re-anchor so re-enabling never jumps the clip.
-            if (_graph != null && _graph.IsInitialized)
-            {
-                _graph.RebaseTickClocks();
-            }
+            _lastCommitClock = -1d;
+            _culled = false;
+        }
+
+        /// <summary>Pauses commits while a Renderer on this GameObject is culled.</summary>
+        private void OnBecameInvisible()
+        {
+            _culled = true;
+        }
+
+        private void OnBecameVisible()
+        {
+            _culled = false;
         }
 
         private void OnDestroy()
@@ -226,32 +295,55 @@ namespace CycloneGames.AnimationRuntime
 
         private void Update()
         {
+            RecordPhase(AnimationRuntimePhase.Update);
             if (_commitPhase == AnimationCommitPhase.Update)
             {
-                CommitNow();
+                TickFrame(false);
             }
         }
 
         private void LateUpdate()
         {
+            RecordPhase(AnimationRuntimePhase.LateUpdate);
             if (_commitPhase == AnimationCommitPhase.LateUpdate)
             {
-                CommitNow();
+                TickFrame(false);
             }
         }
 
         private void FixedUpdate()
         {
+            RecordPhase(AnimationRuntimePhase.FixedUpdate);
             if (_commitPhase == AnimationCommitPhase.FixedUpdate)
             {
-                CommitNow();
+                TickFrame(true);
             }
         }
 
-        /// <summary>
-        /// Commits with an internally produced tick. Hosts that own an external time authority should call
-        /// <see cref="Commit(in AnimationTick)"/> instead and leave the phase at its default.
-        /// </summary>
+        /// <summary>Commits once per physics step in FixedUpdate mode; rate LOD applies only to frame phases.</summary>
+        private void TickFrame(bool fixedPhase)
+        {
+            if (fixedPhase)
+            {
+                CommitNow();
+                return;
+            }
+
+            if (_pauseWhenInvisible && _culled)
+            {
+                return;
+            }
+
+            double clock = Time.timeAsDouble;
+            if (_updateRateHz > 0f && clock - _lastCommitClock < 1d / _updateRateHz)
+            {
+                return;
+            }
+
+            CommitNow();
+        }
+
+        /// <summary>Commits with an internally produced absolute tick.</summary>
         [ContextMenu("Commit Now")]
         public void CommitNow()
         {
@@ -260,7 +352,9 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
-            // AnimationTick treats a negative step index as invalid, so wrap before the signed limit.
+            RecordPhase(AnimationRuntimePhase.Commit);
+
+            // Negative step indices are invalid; wrap before the signed limit.
             _stepIndex = _stepIndex == long.MaxValue ? 0L : _stepIndex + 1L;
             bool fixedPhase = _commitPhase == AnimationCommitPhase.FixedUpdate;
 
@@ -278,18 +372,13 @@ namespace CycloneGames.AnimationRuntime
                     break;
             }
 
-            // Time.time is constant across the fixed steps of one frame.
-            var tick = new AnimationTick(
-                fixedPhase ? Time.fixedTimeAsDouble : Time.timeAsDouble,
-                _stepIndex,
-                source,
-                false,
-                fixedPhase ? Time.fixedDeltaTime : Time.deltaTime);
+            double clock = fixedPhase ? Time.fixedTimeAsDouble : Time.timeAsDouble;
+            _lastCommitClock = clock;
 
-            _graph.Commit(tick);
+            _graph.Commit(new AnimationTick(clock, _stepIndex, source));
         }
 
-        /// <summary>Commits with an externally produced tick (Choreography step, replay, editor scrub).</summary>
+        /// <summary>Commits with an externally produced tick.</summary>
         public void Commit(in AnimationTick tick)
         {
             if (_graph == null || !_graph.IsInitialized)
@@ -297,7 +386,9 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
+            RecordPhase(AnimationRuntimePhase.Commit);
             _stepIndex = tick.StepIndex;
+            _lastCommitClock = tick.ClipTime;
             _graph.Commit(tick);
         }
 
@@ -454,11 +545,7 @@ namespace CycloneGames.AnimationRuntime
 
         // ------------------------------------------------------------------ root motion
 
-        /// <summary>
-        /// OnAnimatorMove is delivered to the GameObject that owns the Animator. A child-rig setup therefore
-        /// cannot forward root motion from this component, so Backend ownership is rejected instead of silently
-        /// doing nothing.
-        /// </summary>
+        /// <summary>Rebuilds Backend root-motion ownership; requires the Animator on this GameObject.</summary>
         private void RebuildRootMotionState(Animator animator, bool report)
         {
             bool sameObject = animator != null && animator.gameObject == gameObject;
@@ -486,14 +573,39 @@ namespace CycloneGames.AnimationRuntime
             animator.applyRootMotion = true;
         }
 
+        /// <summary>Forwards Unity's IK pass to the registered <see cref="IAnimationIKPass"/>.</summary>
+        private void OnAnimatorIK(int layerIndex)
+        {
+            RecordPhase(AnimationRuntimePhase.AnimatorIK);
+            _ikPass?.OnAnimatorIK(layerIndex);
+        }
+
         private void OnAnimatorMove()
         {
+            RecordPhase(AnimationRuntimePhase.AnimatorMove);
             if (!_rootMotionActive || _animator == null)
             {
                 return;
             }
 
-            Vector3 delta = _animator.deltaPosition * _rootMotionScale;
+#if DEBUG
+            if (RootMotionApplied == null && !_warnedRootMotionSink)
+            {
+                _warnedRootMotionSink = true;
+                AnimationRuntimeLog.Channel.Error(
+                    "[AnimationRuntime] Backend root motion is active but no RootMotionApplied handler is "
+                    + "subscribed. Implementing OnAnimatorMove disables Unity's automatic root motion; the "
+                    + "character will not move until a movement component consumes the forwarded delta.");
+            }
+#endif
+
+            float scale = _rootMotionScale;
+            if (!AnimationClockMath.IsFinite(scale) || scale < 0f)
+            {
+                scale = 0f;
+            }
+
+            Vector3 delta = _animator.deltaPosition * scale;
             Quaternion rotation = _animator.deltaRotation;
 
             if ((_rootMotionAxis & RootMotionAxis.X) == 0) delta.x = 0f;
@@ -503,6 +615,36 @@ namespace CycloneGames.AnimationRuntime
 
             RootMotionApplied?.Invoke(delta, rotation);
         }
+
+#if DEBUG
+        /// <summary>Reports a mismatched commit phase and Animator.updateMode once per binding.</summary>
+        private void ValidateFrameModel(Animator animator)
+        {
+            if (_warnedFrameModel || animator == null)
+            {
+                return;
+            }
+
+            bool physicsPhase = _commitPhase == AnimationCommitPhase.FixedUpdate;
+            bool physicsUpdate = animator.updateMode == AnimatorUpdateMode.AnimatePhysics;
+            bool modeMismatch = physicsPhase != physicsUpdate;
+            bool lodMismatch = physicsPhase && (_updateRateHz > 0f || _pauseWhenInvisible);
+            if (!modeMismatch && !lodMismatch)
+            {
+                return;
+            }
+
+            _warnedFrameModel = true;
+            AnimationRuntimeLog.Channel.Error(
+                "[AnimationRuntime] Frame model mismatch: commit phase is " + _commitPhase
+                + ", Animator.updateMode is " + animator.updateMode
+                + (lodMismatch
+                    ? ", and commit-rate LOD / visibility skipping are enabled (invalid in M3; ignored)"
+                    : string.Empty)
+                + ". Use AnimatePhysics for FixedUpdate commits and Normal otherwise; every physics step "
+                + "must produce exactly one commit.");
+        }
+#endif
 
         // ------------------------------------------------------------------ tooling
 

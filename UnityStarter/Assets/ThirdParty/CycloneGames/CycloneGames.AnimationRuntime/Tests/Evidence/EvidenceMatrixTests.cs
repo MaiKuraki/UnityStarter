@@ -499,7 +499,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
                 // Rewind: the next commit re-anchors at the current pose instead of jumping.
                 double beforeRewind = buffer[0].Time;
-                graph.Commit(new AnimationTick(5d, commits + 1L, AnimationTimeSource.Replay, true, 0.016f));
+                graph.Commit(new AnimationTick(5d, commits + 1L, AnimationTimeSource.Replay, true));
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
                 Assert.AreEqual(beforeRewind, buffer[0].Time, 1e-6,
                     "a backward tick re-anchors without moving the pose");

@@ -64,7 +64,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick At(double time, long step, float delta = 0.016f)
         {
-            return new AnimationTick(time, step, AnimationTimeSource.Update, false, delta);
+            return new AnimationTick(time, step, AnimationTimeSource.Update);
         }
 
         private AnimationRuntimeGraph Graph(Animator animator, Sink sink, int layers = 1)
@@ -120,7 +120,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.Commit(At(0d, 0L));
                 graph.Commit(At(0.2d, 1L));
 
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.1f, 0f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.1f, 0f, 0d)));
                 graph.Commit(At(0.3d, 2L, 0.05f));  // weight 0.5, crosses 0.25
                 graph.Commit(At(0.4d, 3L, 0.05f));  // weight 0, fade complete
                 int afterFade = sink.Total();

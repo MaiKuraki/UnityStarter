@@ -27,7 +27,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick At(double time, long step, float delta)
         {
-            return new AnimationTick(time, step, AnimationTimeSource.Update, false, delta);
+            return new AnimationTick(time, step, AnimationTimeSource.Update);
         }
 
         private AnimationClip ClipWithMarkers(string name, int markerCount)
@@ -72,7 +72,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                         graph.BeginPlayback(new AnimationClipRequest(
                             instance, 0, layer, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Clamp));
                         Assert.IsTrue(graph.FadePlayback(
-                            new AnimationPlaybackKey(instance, 0, layer, 0), new AnimationFade(1f, 0f)));
+                            new AnimationPlaybackKey(instance, 0, layer, 0), new AnimationFade(1f, 0f, 0d)));
                         keys.Add(new AnimationPlaybackKey(instance, 0, layer, 0));
                     }
                 }
@@ -121,9 +121,9 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 for (int i = 0; i < 10000; i++)
                 {
                     Assert.IsTrue(graph.SeekPlayback(key, 0.4d));
-                    Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.01f, 0f)));
+                    Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.01f, 0f, 0d)));
                     graph.Commit(At(step * 0.001d, step++, 0.01f));
-                    Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.01f, 1f)));
+                    Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.01f, 1f, 0d)));
                     graph.Commit(At(step * 0.001d, step++, 0.01f));
                 }
 
@@ -165,7 +165,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                     graph.BeginPlayback(new AnimationClipRequest(
                         1, 0, 0, clip, 0d, 1f, false, 0, 1f, loop));
                     graph.Commit(At(0d, 0L, 0.016f));
-                    graph.FadePlayback(new AnimationPlaybackKey(1, 0, 0, 0), new AnimationFade(duration, target));
+                    graph.FadePlayback(new AnimationPlaybackKey(1, 0, 0, 0), new AnimationFade(duration, target, 0d));
 
                     for (int tick = 0; tick < 10; tick++)
                     {

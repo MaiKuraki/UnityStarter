@@ -42,12 +42,12 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick At(double time, long step)
         {
-            return new AnimationTick(time, step, AnimationTimeSource.Update, false, 0.016f);
+            return new AnimationTick(time, step, AnimationTimeSource.Update);
         }
 
         private static AnimationTick Rewind(double time, long step)
         {
-            return new AnimationTick(time, step, AnimationTimeSource.Update, true, 0.016f);
+            return new AnimationTick(time, step, AnimationTimeSource.Update, true);
         }
 
         private AnimationRuntimeGraph ExternalGraph(Animator animator, Sink sink)

@@ -40,13 +40,13 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 }
 
                 Graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, Clip, 0.6d, 0.5f));
-                Graph.Commit(new AnimationTick(1d, 99L, AnimationTimeSource.Update, false, 0.016f));
+                Graph.Commit(new AnimationTick(1d, 99L, AnimationTimeSource.Update));
             }
         }
 
         private static AnimationTick Tick(long step)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0.016f);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update);
         }
 
         private AnimationClip TwoMarkerClip(string name)
@@ -137,7 +137,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 }
 
                 graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, 0.6d, 0.5f));
-                graph.Commit(new AnimationTick(1d, 99L, AnimationTimeSource.Update, false, 0.016f));
+                graph.Commit(new AnimationTick(1d, 99L, AnimationTimeSource.Update));
             };
 
             try

@@ -221,23 +221,17 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         // ---------------------------------------------------------------- H10
 
         [Test]
-        public void H10_TickDelta_SanitisesNonFiniteAndNegativeValues()
+        public void H10_AbsoluteClocks_SanitiseNonFiniteValues()
         {
-            var nanTick = new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.NaN);
-            var infiniteTick = new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.PositiveInfinity);
-            var negativeTick = new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, -1f);
+            var nanTick = new AnimationTick(double.NaN, double.PositiveInfinity, 0L, AnimationTimeSource.Update);
+            Assert.AreEqual(0d, nanTick.ClipTime);
+            Assert.AreEqual(0d, nanTick.TransitionTime);
 
-            NoteEvidence(
-                "H10",
-                "TransitionDelta: NaN -> " + nanTick.TransitionDelta
-                + ", +Inf -> " + infiniteTick.TransitionDelta
-                + ", -1 -> " + negativeTick.TransitionDelta);
-
-            Assert.AreEqual(0f, nanTick.TransitionDelta);
-            Assert.AreEqual(0f, infiniteTick.TransitionDelta);
-            Assert.AreEqual(0f, negativeTick.TransitionDelta);
-
-            Assert.AreEqual(0d, new AnimationTick(double.NaN, 0L, AnimationTimeSource.Update).ClipTime);
+            var suppressed = new AnimationTick(1d, 2d, 3L, AnimationTimeSource.Replay, false, true);
+            Assert.IsTrue(suppressed.SuppressEvents);
+            NoteEvidence("H10", "absolute clocks clip=" + suppressed.ClipTime
+                + " transition=" + suppressed.TransitionTime + " step=" + suppressed.StepIndex
+                + " suppressed=" + suppressed.SuppressEvents);
         }
 
         // ---------------------------------------------------------------- H06, H08, H20 (static only)

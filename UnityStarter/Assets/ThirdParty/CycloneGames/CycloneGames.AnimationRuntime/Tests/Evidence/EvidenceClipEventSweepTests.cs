@@ -35,7 +35,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick Tick(long step)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0.016f);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update);
         }
 
         private AnimationClip ClipWith(string name, float length, params float[] times)
@@ -92,13 +92,13 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 Begin(graph, clip, length, policy);
                 graph.Commit(policy == AnimationTimePolicy.TickDriven
-                    ? new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0.016f)
+                    ? new AnimationTick(0d, 0L, AnimationTimeSource.Update)
                     : Tick(0L));
 
                 float hitch = length * hitchMultiplier;
                 if (policy == AnimationTimePolicy.TickDriven)
                 {
-                    graph.Commit(new AnimationTick(hitch, 1L, AnimationTimeSource.Update, false, hitch));
+                    graph.Commit(new AnimationTick(hitch, 1L, AnimationTimeSource.Update));
                 }
                 else
                 {
@@ -273,9 +273,9 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
-                graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0.016f));
-                graph.Commit(new AnimationTick(0.6d, 1L, AnimationTimeSource.Update, false, 0.6f));
-                graph.Commit(new AnimationTick(1.1d, 2L, AnimationTimeSource.Update, false, 0.5f));
+                graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update));
+                graph.Commit(new AnimationTick(0.6d, 1L, AnimationTimeSource.Update));
+                graph.Commit(new AnimationTick(1.1d, 2L, AnimationTimeSource.Update));
 
                 NoteEvidence("loop", "0.1=" + sink.Count("M0") + " 0.5=" + sink.Count("M1")
                     + " 0.9=" + sink.Count("M2"));
