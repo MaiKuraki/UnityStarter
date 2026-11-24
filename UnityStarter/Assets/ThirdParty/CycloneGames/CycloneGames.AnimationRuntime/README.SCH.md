@@ -295,7 +295,7 @@ flowchart TD
 | --- | --- | --- | --- | --- |
 | `Update` | `Normal` | 每帧一次 | `LateUpdate` 中的相机 | 0 帧 |
 | `LateUpdate` | `Normal` | 每帧一次 | 本组件之后的相机 | Brain 确实在之后运行时为 0 帧 |
-| `FixedUpdate` | `AnimatePhysics` | 每个物理步一次 | `LateUpdate` 中的相机 | 0–1 个物理步，需要插值 |
+| `FixedUpdate` | `Fixed`（2022.3 下为 `AnimatePhysics`） | 每个物理步一次 | `LateUpdate` 中的相机 | 0–1 个物理步，需要插值 |
 
 组件使用 `[DefaultExecutionOrder(-100)]`。`FixedUpdate` 模式下每个物理步恰好 commit 一次，commit-rate LOD 与可见性跳过会被忽略并在开发构建中报告。某帧没有物理步时，不 commit、不产生 root delta。某帧有两个或更多物理步时，每步各 commit 一次，宿主必须累加 delta 而不是覆盖。`StepIndex` 抑制同一相位内的重复 commit。
 

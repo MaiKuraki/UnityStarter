@@ -295,7 +295,7 @@ Source: Unity manual, "Event function execution order" (2022.3 and Unity 6). `Fi
 | --- | --- | --- | --- | --- |
 | `Update` | `Normal` | once per frame | camera in `LateUpdate` | 0 frames |
 | `LateUpdate` | `Normal` | once per frame | camera after this component | 0 frames if the Brain runs after |
-| `FixedUpdate` | `AnimatePhysics` | once per physics step | camera in `LateUpdate` | 0-1 fixed step; interpolation required |
+| `FixedUpdate` | `Fixed` (`AnimatePhysics` on 2022.3) | once per physics step | camera in `LateUpdate` | 0-1 fixed step; interpolation required |
 
 The component runs at `[DefaultExecutionOrder(-100)]`. In `FixedUpdate` mode every physics step commits once, commit-rate LOD and visibility skipping are ignored and reported in development builds. A frame with zero fixed steps produces no commit and no root delta. A frame with two or more fixed steps produces one commit per step; the host sums the deltas instead of overwriting them. `StepIndex` suppresses a duplicate commit within the same phase.
 
