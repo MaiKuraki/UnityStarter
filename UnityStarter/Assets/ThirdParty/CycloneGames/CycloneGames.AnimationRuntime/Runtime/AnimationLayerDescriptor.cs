@@ -20,14 +20,8 @@ namespace CycloneGames.AnimationRuntime
         All = X | Y | Z | Rotation
     }
 
-    /// <summary>
-    /// Immutable layer description consumed by <see cref="AnimationRuntimeGraph"/>. The graph never reads a
-    /// <see cref="AnimationLayerProfile"/> directly, which keeps runtime tests free of ScriptableObject assets.
-    ///
-    /// Root motion is not a layer property: a Playable output produces a single root delta, so a per-layer
-    /// axis filter cannot be honoured. Root motion is filtered once, on the binding component, and forwarded
-    /// as a single event.
-    /// </summary>
+    /// <summary>Immutable layer description consumed by <see cref="AnimationRuntimeGraph"/>.</summary>
+    /// <remarks>A Playable output produces one root delta, so root motion is filtered on the binding.</remarks>
     public readonly struct AnimationLayerDescriptor
     {
         public readonly AvatarMask Mask;

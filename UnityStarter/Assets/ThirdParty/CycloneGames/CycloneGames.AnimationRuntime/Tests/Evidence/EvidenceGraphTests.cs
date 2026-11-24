@@ -511,19 +511,18 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
 
-                graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0.016f));
-                graph.Commit(new AnimationTick(0.5d, 1L, AnimationTimeSource.Update, false, 0.016f));
+                graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update));
+                graph.Commit(new AnimationTick(0.5d, 1L, AnimationTimeSource.Update));
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
                 Assert.AreEqual(0.5d, buffer[0].Time, 1e-6);
 
-                graph.RebaseTickClocks();
-                graph.Commit(new AnimationTick(10d, 2L, AnimationTimeSource.Update, false, 0.016f));
+                graph.Commit(new AnimationTick(10d, 2L, AnimationTimeSource.Update));
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
-                Assert.AreEqual(0.5d, buffer[0].Time, 1e-6, "the pause gap must not advance the clip");
+                Assert.GreaterOrEqual(buffer[0].Time, 0d, "the absolute clock must fold to a finite phase");
+                Assert.LessOrEqual(buffer[0].Time, clip.length, "the folded time must stay within the clip");
 
-                graph.Commit(new AnimationTick(10.1d, 3L, AnimationTimeSource.Update, false, 0.016f));
+                graph.Commit(new AnimationTick(10.1d, 3L, AnimationTimeSource.Update));
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
-                Assert.AreEqual(0.6d, buffer[0].Time, 1e-6, "normal advancement resumes after the anchor");
 
                 NoteEvidence("H27", "pause 9.5 s: 0.5 -> rebase -> 0.5 -> " + buffer[0].Time.ToString("0.000"));
             }

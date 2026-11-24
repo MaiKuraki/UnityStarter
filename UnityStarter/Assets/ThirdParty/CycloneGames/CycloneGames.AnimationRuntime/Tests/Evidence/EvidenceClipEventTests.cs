@@ -42,7 +42,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick TickWithDelta(long step, float delta)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, delta);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update);
         }
 
         private AnimationClip CreateEventClip(string name, float length, float eventTime)
@@ -130,10 +130,10 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
                 graph.Commit(TickWithDelta(0L, 0f));            // anchor at t=0
-                graph.Commit(new AnimationTick(1.6d, 1L, AnimationTimeSource.Update, false, 0.016f));
+                graph.Commit(new AnimationTick(1.6d, 1L, AnimationTimeSource.Update));
                 Assert.AreEqual(1, sink.Count, "crossing 0.5 on the first loop");
-                graph.Commit(new AnimationTick(2.4d, 2L, AnimationTimeSource.Update, false, 0.016f));
-                graph.Commit(new AnimationTick(2.6d, 3L, AnimationTimeSource.Update, false, 0.016f));
+                graph.Commit(new AnimationTick(2.4d, 2L, AnimationTimeSource.Update));
+                graph.Commit(new AnimationTick(2.6d, 3L, AnimationTimeSource.Update));
                 Assert.AreEqual(2, sink.Count, "the marker fires again after the wrap");
 
                 NoteEvidence("E2", "events across wraps = " + sink.Count);
@@ -258,13 +258,13 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Loop));
                 graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.EveryCrossing));
-                graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0.016f));
+                graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update));
 
-                graph.Commit(new AnimationTick(1.6d, 1L, AnimationTimeSource.Update, false, 0.016f));
-                graph.Commit(new AnimationTick(2.4d, 2L, AnimationTimeSource.Update, false, 0.016f));
-                graph.Commit(new AnimationTick(2.6d, 3L, AnimationTimeSource.Update, false, 0.016f));
-                graph.Commit(new AnimationTick(3.4d, 4L, AnimationTimeSource.Update, false, 0.016f));
-                graph.Commit(new AnimationTick(3.6d, 5L, AnimationTimeSource.Update, false, 0.016f));
+                graph.Commit(new AnimationTick(1.6d, 1L, AnimationTimeSource.Update));
+                graph.Commit(new AnimationTick(2.4d, 2L, AnimationTimeSource.Update));
+                graph.Commit(new AnimationTick(2.6d, 3L, AnimationTimeSource.Update));
+                graph.Commit(new AnimationTick(3.4d, 4L, AnimationTimeSource.Update));
+                graph.Commit(new AnimationTick(3.6d, 5L, AnimationTimeSource.Update));
 
                 Assert.AreEqual(3, exitCount, "EveryCrossing fires on each crossing");
                 NoteEvidence("E6", "every-loop exit events = " + exitCount);
@@ -441,7 +441,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 int before = sink.Count;
                 Assert.AreEqual(3, before, "all three markers have been crossed");
 
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0f, 0.5f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0f, 0.5f, 0d)));
                 graph.Commit(TickWithDelta(3L, 0.016f));
 
                 NoteEvidence("E12", "markers before the zero-duration fade = " + before
@@ -470,7 +470,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
-                    new AnimationFade(0f, 1f));
+                    new AnimationFade(0f, 1f, 0d));
                 graph.Commit(TickWithDelta(0L, 0.016f));
 
                 NoteEvidence("E13", "marker at t=0 with a zero-duration fade = " + sink.Count);
@@ -576,12 +576,12 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             try
             {
                 graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
-                graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, 0f));
-                graph.Commit(new AnimationTick(0.3d, 1L, AnimationTimeSource.Update, false, 0.3f));
+                graph.Commit(new AnimationTick(0d, 0L, AnimationTimeSource.Update));
+                graph.Commit(new AnimationTick(0.3d, 1L, AnimationTimeSource.Update));
                 Assert.AreEqual(1, sink.Count, "only the 0.2 marker has been crossed");
 
                 // 2.5 s of elapsed time on a 1 s clip: the clip clamps at its end, a 0.7 L displacement.
-                graph.Commit(new AnimationTick(2.5d, 2L, AnimationTimeSource.Update, false, 2.5f));
+                graph.Commit(new AnimationTick(2.5d, 2L, AnimationTimeSource.Update));
 
                 NoteEvidence("E15", "markers after a 2.5 s hitch on a 1 s clip = " + sink.Count
                     + " (expected 3: 0.2, then 0.5 and 0.8, never 0.2 again)");

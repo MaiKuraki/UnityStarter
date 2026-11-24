@@ -1,3 +1,5 @@
+using System;
+using System.Reflection;
 using CycloneGames.AnimationRuntime.Core;
 using NUnit.Framework;
 using UnityEngine;
@@ -270,8 +272,9 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
         // ---------------------------------------------------------------- H17
 
         [Test]
-        public void H17_CommitHotPath_DoesNotAllocate()
+        public void H17a_CommitEarlyReturnPath_DoesNotAllocate()
         {
+            // Nothing is dirty, so Commit returns before ApplyLayer/Evaluate.
             CreateActor("H17Actor", out Animator animator);
             AnimationClip clip = CreateClip("H17Clip", 1f);
             var graph = new AnimationRuntimeGraph(animator, new[] { AnimationLayerDescriptor.Default });
@@ -282,22 +285,151 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.Commit(Tick(0L, 0d));
 
                 long step = 1;
-                long delta = MeasureAllocationDelta(WarmupIterations, MeasuredIterations, () =>
+                long delta = MeasureAllocationDeltaExact(WarmupIterations, MeasuredIterations, () =>
                 {
                     graph.Commit(Tick(step++, 0.5d));
-                });
+                }, out bool exact);
 
                 NoteEvidence(
-                    "H17",
-                    MeasuredIterations + " commits on a live playback: heap delta " + FormatBytes(delta)
-                    + " (" + (delta / (double)MeasuredIterations).ToString("0.000") + " B/commit)");
+                    "H17a",
+                    MeasuredIterations + " early-return commits: heap delta " + FormatBytes(delta)
+                    + " (" + (delta / (double)MeasuredIterations).ToString("0.000") + " B/commit, exact="
+                    + exact + ")");
 
                 Assert.Less(delta, 64L * 1024,
-                    "Commit must not allocate: no LINQ, no boxing, no per-commit closures");
+                    "Commit must not allocate on the early-return path: no LINQ, no boxing, no closures");
             }
             finally
             {
                 graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void H17b_CommitFullApplyPath_AllocationBudget()
+        {
+            // Every commit moves clip time through UpdatePlayback, so ApplyLayer and Evaluate really run.
+            // This is the path H17a never reaches; it must stay within the same budget.
+            CreateActor("H17bActor", out Animator animator);
+            AnimationClip clip = CreateClip("H17bClip", 1f);
+            var graph = new AnimationRuntimeGraph(animator, new[] { AnimationLayerDescriptor.Default });
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0.25d, 1f));
+                graph.Commit(Tick(0L, 0d));
+
+                long step = 1;
+                long delta = MeasureAllocationDeltaExact(WarmupIterations, MeasuredIterations, () =>
+                {
+                    double time = (step % 60) * 0.016d;
+                    graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, clip, time, 1f));
+                    graph.Commit(Tick(step, time));
+                    step++;
+                }, out bool exact);
+
+                AnimationRuntimeStats stats = graph.GetStats();
+                NoteEvidence(
+                    "H17b",
+                    MeasuredIterations + " full-apply commits: heap delta " + FormatBytes(delta)
+                    + " (" + (delta / (double)MeasuredIterations).ToString("0.000") + " B/commit, exact="
+                    + exact + ", evaluations=" + stats.Evaluations + ", writes=" + stats.NativeWrites + ")");
+
+                Assert.Greater(stats.Evaluations, 0L, "the measured path must really evaluate the graph");
+                Assert.Less(delta, 64L * 1024,
+                    "a dirty commit must not allocate per frame; this covers ApplyLayer and Evaluate");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void H18_EnabledDiagnostics_AllocatePerReport()
+        {
+            // Documents the budgeted path: an enabled diagnostics channel formats a string per report.
+            // The README performance contract must not claim this path is allocation-free.
+            CreateActor("H18Actor", out Animator animator);
+            AnimationClip clip = CreateClip("H18Clip", 1f);
+            var diagnostics = new FormattingDiagnostics();
+            var graph = new AnimationRuntimeGraph(
+                animator,
+                new[] { new AnimationLayerDescriptor(null, false, 1f, 1) },
+                diagnostics);
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+                graph.Commit(Tick(0L, 0d));
+
+                long delta = MeasureAllocationDeltaExact(2000, 20000, () =>
+                {
+                    graph.BeginPlayback(new AnimationClipRequest(2, 0, 0, clip, 0d, 1f));
+                }, out bool exact);
+
+                NoteEvidence(
+                    "H18",
+                    "20000 capacity drops with a formatting diagnostics channel: " + FormatBytes(delta)
+                    + " (exact=" + exact + ", reports=" + diagnostics.Reports + ")");
+
+                Assert.Greater(diagnostics.Reports, 0, "the channel must receive the drop reports");
+                Assert.Greater(delta, 0L, "enabled diagnostics format a message; this path is budgeted, not zero");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        [Test]
+        public void H19_ClipEventQueue_StaysEmptyUntilTheFirstMarker()
+        {
+            // The README says the dispatch queue is empty until the first marker. Verify the array itself,
+            // not just the dispatch count, because the array is the allocation that matters.
+            CreateActor("H19Actor", out Animator animator);
+            AnimationClip clip = CreateClip("H19Clip", 1f);
+            var graph = new AnimationRuntimeGraph(animator, new[] { AnimationLayerDescriptor.Default });
+
+            try
+            {
+                graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
+
+                FieldInfo queueField = typeof(AnimationRuntimeGraph).GetField(
+                    "_pendingClipEvents",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.IsNotNull(queueField, "the dispatch queue field moved; update H19");
+
+                var before = (Array)queueField.GetValue(graph);
+                Assert.AreEqual(0, before.Length, "the queue must not allocate before the first marker");
+
+                for (int i = 0; i < 100000; i++)
+                {
+                    graph.Commit(Tick(i, (i % 60) * 0.016d));
+                }
+
+                var after = (Array)queueField.GetValue(graph);
+                NoteEvidence("H19", "100000 marker-less commits: queue length " + after.Length);
+                Assert.AreEqual(0, after.Length, "no clip markers means no dispatch queue allocation");
+            }
+            finally
+            {
+                graph.Dispose();
+            }
+        }
+
+        private sealed class FormattingDiagnostics : IAnimationDiagnostics
+        {
+            public int Reports;
+
+            public bool IsEnabled(AnimationDiagnosticLevel level)
+            {
+                return level >= AnimationDiagnosticLevel.Warning;
+            }
+
+            public void Report(AnimationDiagnosticLevel level, string message)
+            {
+                Reports++;
             }
         }
     }

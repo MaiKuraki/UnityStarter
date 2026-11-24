@@ -14,45 +14,37 @@ namespace CycloneGames.AnimationRuntime.Tests
         [Test]
         public void FirstStep_IsValid()
         {
-            var tick = new AnimationTick(0d, 0L, AnimationTimeSource.Update);
-
-            Assert.IsTrue(tick.IsValid);
+            Assert.IsTrue(new AnimationTick(0d, 0L, AnimationTimeSource.Update).IsValid);
         }
 
         [Test]
-        public void NonFiniteTime_IsClampedToZero()
+        public void NonFiniteClocks_AreClampedToZero()
         {
-            var tick = new AnimationTick(double.NaN, 1L, AnimationTimeSource.External);
-
+            var tick = new AnimationTick(double.NaN, double.PositiveInfinity, 1L, AnimationTimeSource.External);
             Assert.AreEqual(0d, tick.ClipTime);
+            Assert.AreEqual(0d, tick.TransitionTime);
         }
 
         [Test]
-        public void NegativeDelta_IsClampedToZero()
+        public void ConvenienceConstructor_UsesClipTimeAsTransitionTime()
         {
-            var tick = new AnimationTick(1d, 1L, AnimationTimeSource.FixedUpdate, false, -0.5f);
-
-            Assert.AreEqual(0f, tick.TransitionDelta);
-        }
-
-        [Test]
-        public void NonFiniteDelta_IsClampedToZero()
-        {
-            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.NaN).TransitionDelta);
-            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.PositiveInfinity).TransitionDelta);
-            Assert.AreEqual(0f, new AnimationTick(0d, 0L, AnimationTimeSource.Update, false, float.NegativeInfinity).TransitionDelta);
-        }
-
-        [Test]
-        public void Create_PreservesStepAndSource()
-        {
-            var tick = AnimationTick.Create(12.5d, 42L, AnimationTimeSource.LateUpdate, 0.016f);
-
+            var tick = new AnimationTick(12.5d, 42L, AnimationTimeSource.LateUpdate);
             Assert.AreEqual(12.5d, tick.ClipTime);
+            Assert.AreEqual(12.5d, tick.TransitionTime);
             Assert.AreEqual(42L, tick.StepIndex);
             Assert.AreEqual(AnimationTimeSource.LateUpdate, tick.Source);
-            Assert.AreEqual(0.016f, tick.TransitionDelta, 1e-6f);
             Assert.IsFalse(tick.IsBackward);
+            Assert.IsFalse(tick.SuppressEvents);
+        }
+
+        [Test]
+        public void SeparateClocks_ArePreserved()
+        {
+            var tick = new AnimationTick(3d, 7d, 9L, AnimationTimeSource.Replay, true, true);
+            Assert.AreEqual(3d, tick.ClipTime);
+            Assert.AreEqual(7d, tick.TransitionTime);
+            Assert.IsTrue(tick.IsBackward);
+            Assert.IsTrue(tick.SuppressEvents);
         }
     }
 
@@ -73,6 +65,41 @@ namespace CycloneGames.AnimationRuntime.Tests
             Assert.AreEqual(8, AnimationRuntimeLimits.MaxLayers);
             Assert.AreEqual(8, AnimationRuntimeLimits.MaxLayerCapacity);
             Assert.AreEqual(4, AnimationRuntimeLimits.DefaultLayerCapacity);
+        }
+
+        [Test]
+        public void RuntimeBudgets_AreStable()
+        {
+            Assert.AreEqual(64, AnimationRuntimeLimits.MaxSweepLegs);
+            Assert.AreEqual(4096, AnimationRuntimeLimits.MaxPendingClipEventsPerCommit);
+            Assert.AreEqual(32, AnimationRuntimeLimits.InitialClipEventQueueCapacity);
+            Assert.AreEqual(512, AnimationRuntimeLimits.SteadyClipEventQueueCapacity);
+            Assert.GreaterOrEqual(AnimationRuntimeLimits.MaxPendingClipEventsPerCommit,
+                AnimationRuntimeLimits.SteadyClipEventQueueCapacity);
+        }
+
+        [Test]
+        public void ClockMath_RejectsOverflowingProduct()
+        {
+            Assert.IsFalse(AnimationClockMath.TryUnwrapped(
+                0d, 0d, 1e300d, float.MaxValue, out double unwrapped));
+            Assert.AreEqual(0d, unwrapped);
+        }
+
+        [Test]
+        public void ClockMath_AcceptsFiniteStep()
+        {
+            Assert.IsTrue(AnimationClockMath.TryUnwrapped(0.25d, 10d, 10.5d, 2d, out double unwrapped));
+            Assert.AreEqual(1.25d, unwrapped, 1e-12d);
+        }
+
+        [Test]
+        public void ClockMath_ClampFinite_NonFiniteDegradesToZero()
+        {
+            Assert.AreEqual(0d, AnimationClockMath.ClampFinite(double.NaN, 1f));
+            Assert.AreEqual(0d, AnimationClockMath.ClampFinite(double.PositiveInfinity, 1f));
+            Assert.AreEqual(0d, AnimationClockMath.ClampFinite(-1d, 1f));
+            Assert.AreEqual(1d, AnimationClockMath.ClampFinite(4d, 1f));
         }
 
         [Test]

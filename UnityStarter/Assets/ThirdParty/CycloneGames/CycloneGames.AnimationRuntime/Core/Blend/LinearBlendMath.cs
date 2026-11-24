@@ -2,16 +2,8 @@ using System;
 
 namespace CycloneGames.AnimationRuntime.Core
 {
-    /// <summary>
-    /// 1D threshold blend, the math behind a gait blend (idle / walk / run / sprint).
-    /// Allocation-free, branch-light and independent of Unity so it can be unit tested headlessly.
-    /// Weights always sum to 1 and at most two entries are non-zero.
-    /// </summary>
-    /// <remarks>
-    /// <see cref="Evaluate"/> clears the whole destination span before writing, so its cost is
-    /// O(weights.Length) plus O(log thresholds.Length) for the segment search. With the intended
-    /// 8-or-fewer children that is a single cache line of clears and measures ~34 ns on a desktop CPU.
-    /// </remarks>
+    /// <summary>1D threshold blend. Weights sum to 1; at most two entries are non-zero.</summary>
+    /// <remarks>O(weights.Length) plus a binary segment search.</remarks>
     public static class LinearBlendMath
     {
         /// <summary>

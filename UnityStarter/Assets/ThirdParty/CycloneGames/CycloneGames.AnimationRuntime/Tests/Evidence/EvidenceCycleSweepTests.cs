@@ -129,7 +129,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
                             for (int i = 0; i <= commits; i++)
                             {
-                                graph.Commit(new AnimationTick(i * step, i, AnimationTimeSource.Update, false, 0.016f));
+                                graph.Commit(new AnimationTick(i * step, i, AnimationTimeSource.Update));
                             }
 
                             var actual = new List<int>(Markers.Length);
@@ -202,7 +202,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
                             for (int i = 0; i <= commits; i++)
                             {
-                                graph.Commit(new AnimationTick(i * step, i, AnimationTimeSource.Update, false, 0.016f));
+                                graph.Commit(new AnimationTick(i * step, i, AnimationTimeSource.Update));
                             }
 
                             double end = start - total;
