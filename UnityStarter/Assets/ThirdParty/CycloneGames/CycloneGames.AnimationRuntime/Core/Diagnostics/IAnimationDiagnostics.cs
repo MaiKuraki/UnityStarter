@@ -8,10 +8,7 @@ namespace CycloneGames.AnimationRuntime.Core
         Error = 2
     }
 
-    /// <summary>
-    /// Minimal diagnostics seam. The core assembly has no logging dependency; hosts bind it to
-    /// CycloneGames.Logging or to UnityEngine.Debug through an adapter.
-    /// </summary>
+    /// <summary>Diagnostics seam with no logging dependency.</summary>
     public interface IAnimationDiagnostics
     {
         /// <summary>Whether a message at this level would be emitted. Callers must check before formatting.</summary>

@@ -25,7 +25,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick TickWithDelta(long step, float delta)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, delta);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update);
         }
 
         private static double MeasureMicroseconds(int iterations, Action body, int rounds = 3)
@@ -201,7 +201,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                     int instance = i + 1;
                     graph.FadePlayback(
                         new AnimationPlaybackKey(instance, 0, layer, 0),
-                        new AnimationFade(1e6f, 1f, AnimationFadeEasing.Linear));
+                        new AnimationFade(1e6f, 1f, 0d, AnimationFadeEasing.Linear));
                 }
             });
             double exitArmed = MeasureCommitCost(8, 8, 64, clip, AnimationTimePolicy.External, null, graph =>
@@ -279,7 +279,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             var key = new AnimationPlaybackKey(1, 0, 0, 0);
             graph.BeginPlayback(
                 new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
-                new AnimationFade(1e6f, 1f, AnimationFadeEasing.Linear));
+                new AnimationFade(1e6f, 1f, 0d, AnimationFadeEasing.Linear));
             graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.EveryCrossing));
             graph.Commit(TickWithDelta(0L, 0.016f));
 

@@ -14,34 +14,32 @@ namespace CycloneGames.AnimationRuntime
     /// <summary>Why a playback transition completed.</summary>
     public enum AnimationTransitionReason : byte
     {
-        /// <summary>The fade reached its target weight.</summary>
         FadeCompleted = 0,
-
-        /// <summary>The playback crossed its configured exit time.</summary>
         ExitTime = 1
     }
 
-    /// <summary>
-    /// A weight ramp for one playback. <see cref="Duration"/> is in seconds and is advanced by
-    /// <see cref="AnimationTick.TransitionDelta"/>; a duration of zero applies the target weight immediately and produces
-    /// no completion event.
-    /// </summary>
+    /// <summary>A weight ramp. Progress is (TransitionTime - AbsoluteStartTime) / Duration.</summary>
     public readonly struct AnimationFade
     {
         public readonly float Duration;
         public readonly float TargetWeight;
         public readonly AnimationFadeEasing Easing;
+        public readonly double AbsoluteStartTime;
 
-        public AnimationFade(float duration, float targetWeight, AnimationFadeEasing easing = AnimationFadeEasing.Linear)
+        public AnimationFade(float duration, float targetWeight, double absoluteStartTime,
+            AnimationFadeEasing easing = AnimationFadeEasing.Linear)
         {
             Duration = float.IsNaN(duration) || float.IsInfinity(duration) || duration < 0f ? 0f : duration;
             TargetWeight = float.IsNaN(targetWeight) || targetWeight <= 0f ? 0f : (targetWeight >= 1f ? 1f : targetWeight);
             Easing = easing <= AnimationFadeEasing.EaseOut ? easing : AnimationFadeEasing.Linear;
+            AbsoluteStartTime = double.IsNaN(absoluteStartTime) || double.IsInfinity(absoluteStartTime)
+                ? 0d
+                : absoluteStartTime;
         }
 
         public bool IsInstant => Duration <= 0f;
 
-        /// <summary>Evaluates the easing curve at a normalized time in [0,1]. Public so tests can use the same curve.</summary>
+        /// <summary>Evaluates the easing curve at a normalized time in [0,1]. Public so hosts can share the curve.</summary>
         public static float Evaluate(AnimationFadeEasing easing, float t)
         {
             if (t <= 0f)

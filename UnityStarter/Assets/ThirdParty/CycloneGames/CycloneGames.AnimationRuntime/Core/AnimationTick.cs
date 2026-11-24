@@ -14,104 +14,89 @@ namespace CycloneGames.AnimationRuntime.Core
     }
 
     /// <summary>
-    /// How the runtime maps commit ticks onto clip time. The policy is fixed at graph construction so the hot
-    /// path never branches on a mutable flag, and so a host cannot end up with two time authorities by accident.
+    /// How the runtime maps commit ticks onto clip time. Both policies consume the same absolute clock;
+    /// the difference is only who supplies the clip-local seconds. Neither policy accumulates anything.
     /// </summary>
     public enum AnimationTimePolicy : byte
     {
-        /// <summary>
-        /// The host owns clip time. <c>BeginPlayback</c>/<c>UpdatePlayback</c> carry absolute local seconds and
-        /// <see cref="AnimationTick.ClipTime"/> is diagnostic only. This is the contract a timeline or replay system wants.
-        /// </summary>
+        /// <summary>The host supplies absolute clip-local seconds on every request. Tick.ClipTime is the global authority.</summary>
         External = 0,
 
-        /// <summary>
-        /// The runtime derives clip time from consecutive tick times, using the start clock captured when a playback
-        /// began. <c>UpdatePlayback</c> then only changes weight/speed; use <c>SeekPlayback</c> for an explicit seek.
-        /// This is the contract a self-driven actor wants.
-        /// </summary>
+        /// <summary>The graph folds the global Tick.ClipTime through the request's speed and loop mode.</summary>
         TickDriven = 1
     }
 
-    /// <summary>Wrap behaviour applied to clip time when the graph runs <see cref="AnimationTimePolicy.TickDriven"/>.</summary>
+    /// <summary>Wrap behaviour applied to the absolute clock when the graph folds it.</summary>
     public enum AnimationLoopMode : byte
     {
-        /// <summary>Stop at the clip bounds.</summary>
         Clamp = 0,
-
-        /// <summary>Wrap around the clip length.</summary>
         Loop = 1,
-
-        /// <summary>Reverse direction at the clip bounds.</summary>
         PingPong = 2
     }
 
     /// <summary>
-    /// One commit tick. <see cref="StepIndex"/> always drives commit idempotency.
-    ///
-    /// <see cref="ClipTime"/> is the clip clock: authoritative only when the graph was constructed with
-    /// <see cref="AnimationTimePolicy.TickDriven"/>. Under <see cref="AnimationTimePolicy.External"/> it is a
-    /// diagnostic value, because the host already supplied absolute local time through its clip requests.
-    ///
-    /// <see cref="TransitionDelta"/> is the transition clock and is always authoritative: it advances weight fades and
-    /// exit timers regardless of the clip time policy.
+    /// One commit frame. All clocks are absolute; the runtime never accumulates a delta, so a pose and its
+    /// weights are a pure function of (ClipTime, TransitionTime, StepIndex). Replaying the same tick
+    /// sequence reproduces the same state, and rewinding to an earlier tick reproduces the earlier weights.
     /// </summary>
     public readonly struct AnimationTick
     {
         /// <summary>Sentinel that never matches a real step.</summary>
-        public static readonly AnimationTick None = new AnimationTick(0d, -1L, AnimationTimeSource.Update);
+        public static AnimationTick None => new AnimationTick(0d, 0d, -1L, AnimationTimeSource.Update);
 
-        /// <summary>Clip clock reading for this commit. Authoritative only under TickDriven.</summary>
+        /// <summary>Global authoritative clock in seconds. Feeds clip folding and the event sweep.</summary>
         public readonly double ClipTime;
+
+        /// <summary>Global authoritative clock in seconds for weight ramps, layer fades and exit timing.</summary>
+        public readonly double TransitionTime;
 
         /// <summary>Monotonic step index. Two commits with the same index evaluate once.</summary>
         public readonly long StepIndex;
 
-        /// <summary>Whether the host clock moved backwards (scrub, rewind). Tick-driven graphs re-base their clocks.</summary>
-        public readonly bool IsBackward;
-
-        /// <summary>Where <see cref="ClipTime"/> came from. Diagnostics only.</summary>
+        /// <summary>Where the clock came from. Diagnostics only.</summary>
         public readonly AnimationTimeSource Source;
 
-        /// <summary>Transition delta in seconds, clamped to a non-negative finite value. Advances fades and exit timers.</summary>
-        public readonly float TransitionDelta;
+        /// <summary>Whether the host clock moved backwards (scrub, rewind).</summary>
+        public readonly bool IsBackward;
 
-        public AnimationTick(
-            double time,
-            long stepIndex,
-            AnimationTimeSource source,
-            bool isBackward = false,
-            float delta = 0f)
+        /// <summary>
+        /// When set, this commit still advances pose and weights but dispatches no clip or transition
+        /// events. Used by rollback re-simulation so audio, VFX and gameplay callbacks do not re-fire.
+        /// </summary>
+        public readonly bool SuppressEvents;
+
+        /// <summary>Convenience for hosts whose clip clock and transition clock are the same.</summary>
+        public AnimationTick(double clipTime, long stepIndex, AnimationTimeSource source,
+            bool isBackward = false, bool suppressEvents = false)
+            : this(clipTime, clipTime, stepIndex, source, isBackward, suppressEvents)
         {
-            ClipTime = Sanitize(time);
+        }
+
+        public AnimationTick(double clipTime, double transitionTime, long stepIndex,
+            AnimationTimeSource source, bool isBackward = false, bool suppressEvents = false)
+        {
+            ClipTime = Sanitize(clipTime);
+            TransitionTime = Sanitize(transitionTime);
             StepIndex = stepIndex;
             Source = source;
             IsBackward = isBackward;
-            TransitionDelta = SanitizeDelta(delta);
+            SuppressEvents = suppressEvents;
         }
 
-        /// <summary>Whether this tick carries a usable step index. Index 0 is a valid first step.</summary>
+        /// <summary>Index 0 is a valid first step.</summary>
         public bool IsValid => StepIndex >= 0;
-
-        /// <summary>Convenience factory for host adapters that drive a single phase.</summary>
-        public static AnimationTick Create(double time, long stepIndex, AnimationTimeSource source, float deltaTime)
-        {
-            return new AnimationTick(time, stepIndex, source, false, deltaTime);
-        }
 
         private static double Sanitize(double value)
         {
             return double.IsNaN(value) || double.IsInfinity(value) ? 0d : value;
         }
 
-        private static float SanitizeDelta(float value)
-        {
-            return float.IsNaN(value) || float.IsInfinity(value) || value < 0f ? 0f : value;
-        }
-
         public override string ToString()
         {
-            return "Tick(t=" + ClipTime + ", step=" + StepIndex + ", " + Source + (IsBackward ? ", backward" : string.Empty) + ")";
+            return "Tick(clip=" + ClipTime + ", transition=" + TransitionTime
+                + ", step=" + StepIndex + ", " + Source
+                + (IsBackward ? ", backward" : string.Empty)
+                + (SuppressEvents ? ", suppressed" : string.Empty) + ")";
         }
     }
 }

@@ -113,7 +113,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         protected static AnimationTick Tick(long step, double time)
         {
-            return new AnimationTick(time, step, AnimationTimeSource.Update, false, 0.016f);
+            return new AnimationTick(time, step, AnimationTimeSource.Update);
         }
 
         /// <summary>

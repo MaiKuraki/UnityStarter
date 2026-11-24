@@ -6,13 +6,23 @@ namespace CycloneGames.AnimationRuntime.Editor
 {
     /// <summary>
     /// Inspector for <see cref="AnimationRuntimeBehaviour"/>.
-    /// Authoring fields first, then a throttled runtime block (layer weights, live playbacks, counters) fed by the
-    /// runtime's zero-allocation snapshot API. The graph is never touched outside the throttled block.
+    /// Authoring fields first, then a throttled runtime block fed by the graph's zero-allocation snapshot API.
+    /// Every string shown in the runtime block is rebuilt only on the throttled refresh, so repainting the
+    /// inspector does not allocate. GUIContent instances and profile validation are cached the same way.
     /// </summary>
     [CanEditMultipleObjects]
     [CustomEditor(typeof(AnimationRuntimeBehaviour))]
     public sealed class AnimationRuntimeBehaviourEditor : UnityEditor.Editor
     {
+        private static readonly string[] StatusLabels =
+        {
+            "Layers", "Time policy", "Playables", "Playbacks", "Dropped playbacks",
+            "Recreated playables", "Reused playables", "Commits", "Evaluations",
+            "Native writes", "Dropped clip events", "Pose hash", "Phase order"
+        };
+
+        private const int StatusRowCount = 13;
+
         private SerializedProperty _animator;
         private SerializedProperty _profile;
         private SerializedProperty _timePolicy;
@@ -22,19 +32,34 @@ namespace CycloneGames.AnimationRuntime.Editor
         private SerializedProperty _rootMotionScale;
         private SerializedProperty _initializeOnAwake;
         private SerializedProperty _logDiagnostics;
+        private SerializedProperty _dispatchClipEvents;
+        private SerializedProperty _updateRateHz;
+        private SerializedProperty _pauseWhenInvisible;
+
+        private GUIContent _animatorLabel;
+        private GUIContent _profileLabel;
+        private GUIContent _dispatchClipEventsLabel;
+        private readonly string[] _layerHeaders = new string[Core.AnimationRuntimeLimits.MaxLayers];
 
         private bool _bindingFoldout = true;
         private bool _frameFoldout = true;
         private bool _runtimeFoldout = true;
         private double _nextRefresh;
+        private double _nextProfileValidation;
+        private string _profileReport = string.Empty;
         private AnimationRuntimeStats _stats;
         private int _layerCount;
+        private readonly string[] _statusValues = new string[StatusRowCount];
+        private readonly Color[] _statusColors = new Color[StatusRowCount];
         private readonly float[] _layerWeights = new float[Core.AnimationRuntimeLimits.MaxLayers];
+        private readonly string[] _layerWeightLabels = new string[Core.AnimationRuntimeLimits.MaxLayers];
+        private readonly string[] _layerOccupancy = new string[Core.AnimationRuntimeLimits.MaxLayers];
         private readonly int[] _layerActive = new int[Core.AnimationRuntimeLimits.MaxLayers];
         private readonly int[] _layerCapacity = new int[Core.AnimationRuntimeLimits.MaxLayers];
         private readonly bool[] _layerExternal = new bool[Core.AnimationRuntimeLimits.MaxLayers];
         private readonly int[] _layerSnapshotCount = new int[Core.AnimationRuntimeLimits.MaxLayers];
         private readonly AnimationPlaybackSnapshot[][] _layerSnapshots = new AnimationPlaybackSnapshot[Core.AnimationRuntimeLimits.MaxLayers][];
+        private readonly string[][] _layerRows = new string[Core.AnimationRuntimeLimits.MaxLayers][];
 
         private void OnEnable()
         {
@@ -47,10 +72,21 @@ namespace CycloneGames.AnimationRuntime.Editor
             _rootMotionScale = serializedObject.FindProperty("_rootMotionScale");
             _initializeOnAwake = serializedObject.FindProperty("_initializeOnAwake");
             _logDiagnostics = serializedObject.FindProperty("_logDiagnostics");
+            _dispatchClipEvents = serializedObject.FindProperty("_dispatchClipEvents");
+            _updateRateHz = serializedObject.FindProperty("_updateRateHz");
+            _pauseWhenInvisible = serializedObject.FindProperty("_pauseWhenInvisible");
+
+            _animatorLabel = new GUIContent("Animator", "Sampled by the runtime graph. Falls back to a child Animator.");
+            _profileLabel = new GUIContent("Layer Profile", "Layer stack for this archetype. Empty uses one full-body layer.");
+            _dispatchClipEventsLabel = new GUIContent(
+                "Dispatch Clip Events",
+                "Disable when a timeline (Choreography) owns event dispatch, or when Animator.fireEvents is left enabled.");
 
             for (int i = 0; i < _layerSnapshots.Length; i++)
             {
                 _layerSnapshots[i] = new AnimationPlaybackSnapshot[Core.AnimationRuntimeLimits.MaxLayerCapacity];
+                _layerRows[i] = new string[Core.AnimationRuntimeLimits.MaxLayerCapacity];
+                _layerHeaders[i] = "Layer " + i;
             }
         }
 
@@ -79,10 +115,26 @@ namespace CycloneGames.AnimationRuntime.Editor
 
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUILayout.PropertyField(_animator, new GUIContent("Animator", "Sampled by the runtime graph. Falls back to a child Animator."));
-                EditorGUILayout.PropertyField(_profile, new GUIContent("Layer Profile", "Layer stack for this archetype. Empty uses one full-body layer."));
+                EditorGUILayout.PropertyField(_animator, _animatorLabel);
+                EditorGUILayout.PropertyField(_profile, _profileLabel);
                 EditorGUILayout.PropertyField(_initializeOnAwake);
                 EditorGUILayout.PropertyField(_logDiagnostics);
+                DrawProfileValidation();
+            }
+        }
+
+        /// <summary>Profile validation is throttled; building the report allocates and is never needed per repaint.</summary>
+        private void DrawProfileValidation()
+        {
+            if (InspectorUiUtility.ShouldRefresh(ref _nextProfileValidation))
+            {
+                var profile = _profile.objectReferenceValue as AnimationLayerProfile;
+                _profileReport = profile != null ? profile.GetValidationReport().TrimEnd() : string.Empty;
+            }
+
+            if (!string.IsNullOrEmpty(_profileReport))
+            {
+                EditorGUILayout.HelpBox(_profileReport, MessageType.Warning);
             }
         }
 
@@ -117,7 +169,7 @@ namespace CycloneGames.AnimationRuntime.Editor
                 if (phase == AnimationCommitPhase.FixedUpdate)
                 {
                     EditorGUILayout.HelpBox(
-                        "Commits once per physics step. Set Animator.updateMode to AnimatePhysics and enable Rigidbody interpolation, otherwise pose and root motion run on different clocks.",
+                        "Commits once per physics step. Animator.updateMode must be AnimatePhysics and Rigidbody interpolation enabled; a mismatch is reported as an error in development builds.",
                         MessageType.Info);
                 }
                 else
@@ -144,15 +196,13 @@ namespace CycloneGames.AnimationRuntime.Editor
                     if (childAnimator)
                     {
                         EditorGUILayout.HelpBox(
-                            "Backend root motion needs the Animator on this GameObject. It is on '"
-                            + assignedAnimator.name
-                            + "', so the runtime will reject Backend ownership and log an error.",
+                            "Backend root motion needs the Animator on this GameObject. The assigned Animator is on a child object, so the runtime will reject Backend ownership and log an error. Move the component, or use RootMotionOwnership.External.",
                             MessageType.Error);
                     }
                     else
                     {
                         EditorGUILayout.HelpBox(
-                            "The runtime implements OnAnimatorMove in this mode. Remove any other OnAnimatorMove handler on the same character or root motion is applied twice.",
+                            "The runtime implements OnAnimatorMove in this mode. Subscribe a movement component to RootMotionApplied and remove any other OnAnimatorMove handler, otherwise the character will not move or root motion is applied twice.",
                             MessageType.Warning);
                     }
                 }
@@ -162,6 +212,14 @@ namespace CycloneGames.AnimationRuntime.Editor
                         "A movement component owns root motion and reads Animator.deltaPosition. The runtime does not implement OnAnimatorMove.",
                         MessageType.None);
                 }
+
+                EditorGUILayout.PropertyField(_dispatchClipEvents, _dispatchClipEventsLabel);
+
+                EditorGUILayout.PropertyField(_updateRateHz);
+                EditorGUILayout.PropertyField(_pauseWhenInvisible);
+                EditorGUILayout.HelpBox(
+                    "Update Rate Hz limits commits, not pose correctness: skipped frames accumulate their full delta. 0 commits every frame/step. Culling pauses commits only; graph state is preserved.",
+                    MessageType.None);
             }
         }
 
@@ -174,6 +232,13 @@ namespace CycloneGames.AnimationRuntime.Editor
 
             var behaviour = (AnimationRuntimeBehaviour)target;
             AnimationRuntimeGraph graph = behaviour.Graph;
+
+            if (targets.Length > 1)
+            {
+                EditorGUILayout.HelpBox(
+                    "Runtime data below describes the first selected object only. Authoring fields apply to all selected objects.",
+                    MessageType.None);
+            }
 
             if (graph == null || !graph.IsInitialized)
             {
@@ -188,42 +253,20 @@ namespace CycloneGames.AnimationRuntime.Editor
             bool refreshed = InspectorUiUtility.ShouldRefresh(ref _nextRefresh);
             if (refreshed)
             {
-                CacheRuntime(graph);
+                CacheRuntime(behaviour, graph);
             }
 
             InspectorUiUtility.BeginPanel();
-
-            InspectorUiUtility.DrawStatusRow("Layers", _layerCount.ToString(), InspectorUiUtility.NeutralColor);
-            InspectorUiUtility.DrawStatusRow("Time policy", _stats.TimePolicy.ToString(), InspectorUiUtility.RuntimeColor);
-            InspectorUiUtility.DrawStatusRow("Playables", _stats.PlayableCount.ToString(), InspectorUiUtility.NeutralColor);
-            InspectorUiUtility.DrawStatusRow(
-                "Playbacks",
-                _stats.ActivePlaybacks + " / peak " + _stats.PeakPlaybacks,
-                _stats.ActivePlaybacks > 0 ? InspectorUiUtility.SuccessColor : InspectorUiUtility.NeutralColor);
-            InspectorUiUtility.DrawStatusRow(
-                "Dropped",
-                _stats.DroppedPlaybacks.ToString(),
-                _stats.DroppedPlaybacks > 0 ? InspectorUiUtility.WarningColor : InspectorUiUtility.NeutralColor);
-            InspectorUiUtility.DrawStatusRow(
-                "Recreated playables",
-                _stats.RecreatedPlayables.ToString(),
-                _stats.RecreatedPlayables > 0 ? InspectorUiUtility.WarningColor : InspectorUiUtility.NeutralColor);
-            InspectorUiUtility.DrawStatusRow(
-                "Reused playables",
-                _stats.ReusedPlayables.ToString(),
-                _stats.ReusedPlayables > 0 ? InspectorUiUtility.SuccessColor : InspectorUiUtility.NeutralColor);
-            InspectorUiUtility.DrawStatusRow("Commits", _stats.Commits.ToString(), InspectorUiUtility.NeutralColor);
-            InspectorUiUtility.DrawStatusRow(
-                "Evaluations",
-                _stats.Evaluations.ToString(),
-                _stats.Evaluations < _stats.Commits ? InspectorUiUtility.SuccessColor : InspectorUiUtility.NeutralColor);
-            InspectorUiUtility.DrawStatusRow("Native writes", _stats.NativeWrites.ToString(), InspectorUiUtility.NeutralColor);
+            for (int i = 0; i < StatusRowCount; i++)
+            {
+                InspectorUiUtility.DrawStatusRow(StatusLabels[i], _statusValues[i], _statusColors[i]);
+            }
 
             InspectorUiUtility.EndPanel();
 
             for (int layer = 0; layer < _layerCount; layer++)
             {
-                DrawLayer(graph, layer);
+                DrawLayer(layer);
             }
 
             if (refreshed && Application.isPlaying)
@@ -232,19 +275,16 @@ namespace CycloneGames.AnimationRuntime.Editor
             }
         }
 
-        private void DrawLayer(AnimationRuntimeGraph graph, int layer)
+        private void DrawLayer(int layer)
         {
             EditorGUILayout.Space(2f);
             EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Layer " + layer, EditorStyles.miniBoldLabel, GUILayout.Width(60f));
+            EditorGUILayout.LabelField(_layerHeaders[layer], EditorStyles.miniBoldLabel, GUILayout.Width(60f));
 
             Color barColor = _layerExternal[layer] ? InspectorUiUtility.WarningColor : InspectorUiUtility.RuntimeColor;
-            InspectorUiUtility.DrawBar(_layerWeights[layer], barColor);
+            InspectorUiUtility.DrawBar(_layerWeights[layer], barColor, _layerWeightLabels[layer]);
 
-            string occupancy = _layerExternal[layer]
-                ? "external"
-                : _layerActive[layer] + "/" + _layerCapacity[layer];
-            EditorGUILayout.LabelField(occupancy, EditorStyles.miniLabel, GUILayout.Width(64f));
+            EditorGUILayout.LabelField(_layerOccupancy[layer], EditorStyles.miniLabel, GUILayout.Width(64f));
             EditorGUILayout.EndHorizontal();
 
             if (_layerExternal[layer])
@@ -256,22 +296,45 @@ namespace CycloneGames.AnimationRuntime.Editor
             int count = _layerSnapshotCount[layer];
             for (int i = 0; i < count; i++)
             {
-                AnimationPlaybackSnapshot playback = _layerSnapshots[layer][i];
-                EditorGUILayout.LabelField(
-                    "  #" + playback.InstanceId
-                    + " ch " + playback.PlaybackChannel
-                    + " clip " + playback.ClipChannel
-                    + "  t " + playback.Time.ToString("0.000")
-                    + "  w " + playback.Weight.ToString("0.00")
-                    + (playback.Connected ? string.Empty : "  (pending)"),
-                    EditorStyles.miniLabel);
+                EditorGUILayout.LabelField(_layerRows[layer][i], EditorStyles.miniLabel);
             }
         }
 
-        private void CacheRuntime(AnimationRuntimeGraph graph)
+        /// <summary>
+        /// The only place where runtime display strings are built. Runs at most four times per second, so a
+        /// repaint or a mouse-move over the inspector allocates nothing.
+        /// </summary>
+        private void CacheRuntime(AnimationRuntimeBehaviour behaviour, AnimationRuntimeGraph graph)
         {
             _stats = graph.GetStats();
             _layerCount = graph.LayerCount;
+
+            _statusValues[0] = _layerCount.ToString();
+            _statusValues[1] = _stats.TimePolicy.ToString();
+            _statusValues[2] = _stats.PlayableCount.ToString();
+            _statusValues[3] = _stats.ActivePlaybacks + " / peak " + _stats.PeakPlaybacks;
+            _statusValues[4] = _stats.DroppedPlaybacks.ToString();
+            _statusValues[5] = _stats.RecreatedPlayables.ToString();
+            _statusValues[6] = _stats.ReusedPlayables.ToString();
+            _statusValues[7] = _stats.Commits.ToString();
+            _statusValues[8] = _stats.Evaluations.ToString();
+            _statusValues[9] = _stats.NativeWrites.ToString();
+            _statusValues[10] = graph.DroppedClipEvents.ToString();
+            _statusValues[11] = graph.ComputePoseHash().ToString("X16");
+            _statusValues[12] = "0x" + behaviour.PhaseOrderMask.ToString("X2");
+
+            for (int i = 0; i < StatusRowCount; i++)
+            {
+                _statusColors[i] = InspectorUiUtility.NeutralColor;
+            }
+
+            _statusColors[1] = InspectorUiUtility.RuntimeColor;
+            if (_stats.ActivePlaybacks > 0) _statusColors[3] = InspectorUiUtility.SuccessColor;
+            if (_stats.DroppedPlaybacks > 0 || graph.DroppedClipEvents > 0) _statusColors[4] = InspectorUiUtility.WarningColor;
+            if (graph.DroppedClipEvents > 0) _statusColors[10] = InspectorUiUtility.WarningColor;
+            if (_stats.RecreatedPlayables > 0) _statusColors[5] = InspectorUiUtility.WarningColor;
+            if (_stats.ReusedPlayables > 0) _statusColors[6] = InspectorUiUtility.SuccessColor;
+            if (_stats.Evaluations < _stats.Commits) _statusColors[8] = InspectorUiUtility.SuccessColor;
 
             int layers = _layerCount < _layerSnapshots.Length ? _layerCount : _layerSnapshots.Length;
             for (int layer = 0; layer < layers; layer++)
@@ -281,6 +344,22 @@ namespace CycloneGames.AnimationRuntime.Editor
                 _layerCapacity[layer] = graph.GetLayerCapacity(layer);
                 _layerExternal[layer] = graph.IsLayerExternallySourced(layer);
                 _layerSnapshotCount[layer] = graph.CopyPlaybackSnapshots(layer, _layerSnapshots[layer]);
+
+                _layerWeightLabels[layer] = _layerWeights[layer].ToString("0.000");
+                _layerOccupancy[layer] = _layerExternal[layer]
+                    ? "external"
+                    : _layerActive[layer] + "/" + _layerCapacity[layer];
+
+                for (int i = 0; i < _layerSnapshotCount[layer]; i++)
+                {
+                    AnimationPlaybackSnapshot playback = _layerSnapshots[layer][i];
+                    _layerRows[layer][i] = "  #" + playback.InstanceId
+                        + " ch " + playback.PlaybackChannel
+                        + " clip " + playback.ClipChannel
+                        + "  t " + playback.Time.ToString("0.000")
+                        + "  w " + playback.Weight.ToString("0.00")
+                        + (playback.Connected ? string.Empty : "  (pending)");
+                }
             }
         }
     }

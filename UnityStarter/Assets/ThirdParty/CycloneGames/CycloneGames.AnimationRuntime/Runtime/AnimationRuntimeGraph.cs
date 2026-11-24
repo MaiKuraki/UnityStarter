@@ -9,22 +9,12 @@ using UnityEngine.Playables;
 
 namespace CycloneGames.AnimationRuntime
 {
-    /// <summary>
-    /// Owns one <see cref="UnityEngine.Playables.PlayableGraph"/> and turns clip requests into a skeleton pose.
-    ///
-    /// Two time policies share the same topology and the same playback pool:
-    /// <list type="bullet">
-    /// <item><see cref="AnimationTimePolicy.External"/>: the host supplies absolute local seconds on every
-    /// request; the runtime never advances a clip from a tick. This is what a timeline or replay system wants.</item>
-    /// <item><see cref="AnimationTimePolicy.TickDriven"/>: the runtime advances each playback from consecutive tick
-    /// times, using the start clock captured at <see cref="BeginPlayback"/>. Speed and wrap mode come from the request.</item>
-    /// </list>
-    ///
-    /// Topology is fixed at construction: <c>layerCount</c> layers, each with a fixed playback capacity and one
-    /// extra input reserved for an external source (a locomotion blend node). No input count changes later.
-    /// Native writes are epsilon-gated, graph evaluation is skipped while nothing is dirty (unless a layer is
-    /// driven by an external node), and commits are idempotent per <see cref="AnimationTick.StepIndex"/>.
-    /// </summary>
+    /// <summary>Turns clip requests into a skeleton pose through one <see cref="UnityEngine.Playables.PlayableGraph"/>.</summary>
+    /// <remarks>
+    /// Topology is fixed at construction: each layer has a fixed playback capacity and one reserved
+    /// external source input. Input counts never change. Native writes are epsilon-gated and commits
+    /// are idempotent per <see cref="AnimationTick.StepIndex"/>.
+    /// </remarks>
     public sealed class AnimationRuntimeGraph : IDisposable
     {
         private const byte PlaybackInUse = 1 << 0;
@@ -35,9 +25,9 @@ namespace CycloneGames.AnimationRuntime
         private const byte ExitArmed = 1 << 0;
         private const byte ExitFired = 1 << 1;
         private const byte ExitEveryCrossing = 1 << 2;
+        private const byte TransitionFadeBit = 1 << 0;
+        private const byte TransitionExitBit = 1 << 1;
 
-        // Profiler markers are free when no profiler is attached, and answer "where did the frame go" without
-        // adding temporary instrumentation to shipping code.
         private static readonly ProfilerMarker CommitMarker = new ProfilerMarker("AnimationRuntime.Commit");
 
         private struct Playback
@@ -55,19 +45,12 @@ namespace CycloneGames.AnimationRuntime
             public byte ClipChannel;
         }
 
-        /// <summary>
-        /// Tick-driven clock for one slot. Kept outside <see cref="Playback"/> so the pose struct stays one cache
-        /// line; this data is read once per commit and never per bone.
-        /// </summary>
+        /// <summary>Folding parameters for one slot, kept outside <see cref="Playback"/> to preserve its 64-byte layout.</summary>
         private struct PlaybackClock
         {
-            public double StartTickTime;
             public double StartLocalTime;
             public float Speed;
             public byte Loop;
-
-            /// <summary>0 until the first commit anchors the clock.</summary>
-            public byte Started;
         }
 
         /// <summary>Cold per-slot ramp state, kept out of <see cref="Playback"/> so the pose struct stays 64 B.</summary>
@@ -76,7 +59,9 @@ namespace CycloneGames.AnimationRuntime
             public float FromWeight;
             public float TargetWeight;
             public float Duration;
-            public float Elapsed;
+            public double StartTransitionTime;
+            public double FadeAbsoluteStart;
+            public byte FadeFired;
             public byte Easing;
             public byte ExitFlags;
 
@@ -120,16 +105,16 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
+        /// <summary>
+        /// One slot's transition deliveries for the current commit. A playback can complete a fade and cross
+        /// its exit point in the same commit, so both reasons are held as bits in one queue entry. Indexing
+        /// the queue by (layer, slot) makes overflow structurally impossible: there is exactly one entry per
+        /// possible playback and at most two reasons per entry.
+        /// </summary>
         private struct TransitionEvent
         {
             public AnimationPlaybackHandle Handle;
-            public AnimationTransitionReason Reason;
-
-            public TransitionEvent(AnimationPlaybackHandle handle, AnimationTransitionReason reason)
-            {
-                Handle = handle;
-                Reason = reason;
-            }
+            public byte Reasons;
         }
 
         private struct Layer
@@ -147,8 +132,17 @@ namespace CycloneGames.AnimationRuntime
             public float AppliedWeight;
             public float ExternalWeight;
             public float AppliedExternalWeight;
+            public float LayerFadeFrom;
+            public float LayerFadeTarget;
+            public float LayerFadeDuration;
+            public double LayerFadeStart;
+            public bool LayerFadeActive;
+            public byte LayerFadeEasing;
             public byte Capacity;
             public byte ActivePlaybacks;
+
+            /// <summary>Bit per in-use playback slot; capacity is at most 8.</summary>
+            public byte ActiveMask;
             public bool Additive;
             public bool ApplyFootIK;
             public bool ApplyPlayableIK;
@@ -165,12 +159,15 @@ namespace CycloneGames.AnimationRuntime
 
         private PlayableGraph _graph;
         private AnimationLayerMixerPlayable _topMixer;
+        private readonly long[] _droppedClipEventsByLayer;
         private bool _initialized;
         private bool _dirty = true;
         private int _graphId;
         private long _lastStepIndex = long.MinValue;
         private double _lastTickTime;
+        private double _lastTransitionTime = double.NaN;
         private long _droppedPlaybacks;
+        private long _droppedClipEvents;
         private long _recreatedPlayables;
         private long _reusedPlayables;
         private long _commits;
@@ -178,27 +175,27 @@ namespace CycloneGames.AnimationRuntime
         private long _nativeWrites;
         private int _activePlaybacks;
         private int _peakPlaybacks;
-        private int _activeTransitions;
         private bool _warnedRigMismatch;
         private bool _warnedLayerClamp;
         private bool _warnedClipMismatch;
         private bool _warnedWeightConflict;
+        private bool _warnedClipEventOverflow;
         private bool _hasPendingRelease;
         private bool _dispatchClipEvents;
         private IAnimationClipEventSink _clipEventSink;
         private readonly ConditionalWeakTable<AnimationClip, AnimationClipEvent[]> _clipEventCache =
             new ConditionalWeakTable<AnimationClip, AnimationClipEvent[]>();
 
-        /// <summary>Initial marker queue; the array doubles when one commit exceeds it.</summary>
-        private const int InitialPendingClipEventCapacity = 256;
-
-        private ClipEventDispatch[] _pendingClipEvents = new ClipEventDispatch[InitialPendingClipEventCapacity];
+        /// <summary>Marker dispatch queue; allocated on first use and shrunk after a drain.</summary>
+        private ClipEventDispatch[] _pendingClipEvents = Array.Empty<ClipEventDispatch>();
         private int _pendingClipEventCount;
         private bool _dispatchingEvents;
         private bool _warnedEventSinkError;
         private bool _warnedReentrantCommit;
+
+        /// <summary>Indexed by layer * MaxLayerCapacity + slot; never overflows, never allocates on the hot path.</summary>
         private readonly TransitionEvent[] _pendingTransitions;
-        private int _pendingTransitionCount;
+        private bool _hasPendingTransitions;
 
         /// <summary>
         /// Raised after a commit, once per completed fade. Handlers run on the main thread after the graph has
@@ -246,6 +243,7 @@ namespace CycloneGames.AnimationRuntime
 
             _layerCount = _descriptors.Length;
             _layers = new Layer[_layerCount];
+            _droppedClipEventsByLayer = new long[_layerCount];
             _pendingTransitions = new TransitionEvent[
                 AnimationRuntimeLimits.MaxLayers * AnimationRuntimeLimits.MaxLayerCapacity];
             Initialize();
@@ -266,6 +264,11 @@ namespace CycloneGames.AnimationRuntime
         public int GraphId => _graphId;
 
         public int PlayableCount => _graph.IsValid() ? _graph.GetPlayableCount() : 0;
+
+        /// <summary>
+        /// Clip markers discarded because one commit exceeded <see cref="AnimationRuntimeLimits.MaxPendingClipEventsPerCommit"/>.
+        /// </summary>
+        public long DroppedClipEvents => _droppedClipEvents;
 
         /// <summary>
         /// The underlying graph. Exposed so a host can create an auxiliary node (a locomotion blend) and hand it
@@ -365,6 +368,7 @@ namespace CycloneGames.AnimationRuntime
 
             _lastStepIndex = long.MinValue;
             _lastTickTime = 0d;
+            _lastTransitionTime = double.NaN;
             _dirty = true;
             _warnedRigMismatch = false;
             _warnedLayerClamp = false;
@@ -437,6 +441,15 @@ namespace CycloneGames.AnimationRuntime
         {
             StopAllInternal(true);
 
+            // A rebuild must not deliver events queued against the previous graph id.
+            _pendingClipEventCount = 0;
+            _hasPendingTransitions = false;
+            Array.Clear(_pendingTransitions, 0, _pendingTransitions.Length);
+            if (_pendingClipEvents.Length > AnimationRuntimeLimits.SteadyClipEventQueueCapacity)
+            {
+                _pendingClipEvents = Array.Empty<ClipEventDispatch>();
+            }
+
             if (_graph.IsValid())
             {
                 _graph.Destroy();
@@ -461,10 +474,7 @@ namespace CycloneGames.AnimationRuntime
 
         // ------------------------------------------------------------------ playback API
 
-        /// <summary>
-        /// Starts or replaces a playback at its requested weight. Native work happens at <see cref="Commit"/>, so
-        /// this is safe to call from gameplay code without touching the Playable graph.
-        /// </summary>
+        /// <summary>Starts or replaces a playback. Native work happens at <see cref="Commit"/>.</summary>
         public AnimationPlaybackHandle BeginPlayback(in AnimationClipRequest request)
         {
             return BeginPlaybackCore(request, default, false);
@@ -528,12 +538,12 @@ namespace CycloneGames.AnimationRuntime
                 layer.Generations[slot] = generation;
                 if (wrapped)
                 {
-                    // A 32-bit wrap is practically unreachable, but if it happens every outstanding handle must
-                    // die rather than alias a slot from 4.29 B reuses ago.
+                    // A generation wrap invalidates every outstanding handle.
                     BumpGraphId();
                 }
 
                 playback.Flags |= PlaybackInUse;
+                layer.ActiveMask |= (byte)(1 << slot);
                 layer.ActivePlaybacks++;
                 _activePlaybacks++;
                 AnimationRuntimeRegistry.OnPlaybackCountChanged(1);
@@ -555,11 +565,9 @@ namespace CycloneGames.AnimationRuntime
             playback.Flags &= unchecked((byte)~PlaybackPendingRelease);
 
             ref PlaybackClock clock = ref layer.Clocks[slot];
-            clock.StartTickTime = 0d;
             clock.StartLocalTime = playback.Time;
             clock.Speed = request.Speed;
             clock.Loop = (byte)request.Loop;
-            clock.Started = 0;
             layer.Transitions[slot].LastClipTime = -1f;
             layer.Transitions[slot].ExitLastNormalized = 0f;
 
@@ -666,10 +674,7 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-        /// <summary>
-        /// Moves a live playback to an explicit local time. In tick-driven mode this re-bases the playback clock, which
-        /// is the supported way to scrub without fighting the tick accumulator.
-        /// </summary>
+        /// <summary>Moves a live playback to an explicit local time.</summary>
         public bool SeekPlayback(in AnimationPlaybackKey key, double localTime)
         {
             if (!_initialized)
@@ -689,9 +694,7 @@ namespace CycloneGames.AnimationRuntime
             ref PlaybackClock clock = ref layer.Clocks[slot];
             playback.Time = ClampTime(localTime, playback.Length);
             layer.Transitions[slot].Seeked = 1;
-            clock.StartTickTime = _lastTickTime;
             clock.StartLocalTime = playback.Time;
-            clock.Started = 0;
             _dirty = true;
             return true;
         }
@@ -779,33 +782,6 @@ namespace CycloneGames.AnimationRuntime
                 layer.Transitions[slot].ExitFlags = 0;
                 _dirty = true;
             }
-        }
-
-        /// <summary>
-        /// Re-anchors every tick-driven playback at the next commit. Call after a pause, a disabled interval or a
-        /// scene reload so the first commit does not advance clips by the elapsed wall-clock gap.
-        /// </summary>
-        public void RebaseTickClocks()
-        {
-            if (!_initialized || _timePolicy != AnimationTimePolicy.TickDriven)
-            {
-                return;
-            }
-
-            for (int layerIndex = 0; layerIndex < _layerCount; layerIndex++)
-            {
-                ref Layer layer = ref _layers[layerIndex];
-                for (int slot = 0; slot < layer.Capacity; slot++)
-                {
-                    if ((layer.Playbacks[slot].Flags & PlaybackInUse) != 0)
-                    {
-                        layer.Clocks[slot].StartLocalTime = layer.Playbacks[slot].Time;
-                        layer.Clocks[slot].Started = 0;
-                    }
-                }
-            }
-
-            _dirty = true;
         }
 
         /// <summary>Requests a playback to stop. The slot is released at the next commit.</summary>
@@ -915,17 +891,13 @@ namespace CycloneGames.AnimationRuntime
             }
 
             _activePlaybacks = 0;
-            _activeTransitions = 0;
             _hasPendingRelease = false;
         }
 
         // ------------------------------------------------------------------ commit
 
-        /// <summary>
-        /// Applies pending playback changes and evaluates the graph when something is dirty. Idempotent per
-        /// <see cref="AnimationTick.StepIndex"/>. A graph with an external source always evaluates, because the
-        /// runtime cannot observe changes made inside a host-owned node.
-        /// </summary>
+        /// <summary>Applies pending changes and evaluates the graph when dirty.</summary>
+        /// <remarks>Idempotent per <see cref="AnimationTick.StepIndex"/>. External-source layers always evaluate.</remarks>
         public void Commit(in AnimationTick tick)
         {
             if (!_initialized)
@@ -956,6 +928,8 @@ namespace CycloneGames.AnimationRuntime
             }
 
             _commits++;
+            double transitionTime = tick.TransitionTime;
+            bool transitionClockMoved = transitionTime != _lastTransitionTime;
 
 #if DEBUG
             if ((_commits % LivenessCheckInterval) == 0)
@@ -964,8 +938,8 @@ namespace CycloneGames.AnimationRuntime
             }
 #endif
 
-            if (!_dirty && !HasExternalSource() && !ClockDrivenPlaybacksPending() && _activeTransitions == 0
-                && !_hasPendingRelease)
+            if (!_dirty && !HasExternalSource() && !ClockDrivenPlaybacksPending()
+                && (!transitionClockMoved || !HasActiveFades()) && !_hasPendingRelease)
             {
                 return;
             }
@@ -975,11 +949,12 @@ namespace CycloneGames.AnimationRuntime
             {
                 for (int i = 0; i < _layerCount; i++)
                 {
-                    ApplyLayer(i, tick.ClipTime, tick.IsBackward, tick.TransitionDelta);
+                    ApplyLayer(i, tick.ClipTime, tick.IsBackward, tick.TransitionTime);
                 }
 
                 _graph.Evaluate(0f);
                 _dirty = false;
+                _lastTransitionTime = transitionTime;
                 _evaluations++;
                 if (_hasPendingRelease)
                 {
@@ -994,12 +969,31 @@ namespace CycloneGames.AnimationRuntime
             _dispatchingEvents = true;
             try
             {
-                DrainClipEvents();
-                DrainTransitionEvents();
+                if (tick.SuppressEvents)
+                {
+                    DiscardPendingEvents();
+                }
+                else
+                {
+                    DrainClipEvents();
+                    DrainTransitionEvents();
+                }
             }
             finally
             {
                 _dispatchingEvents = false;
+            }
+        }
+
+        /// <summary>Drops queued events without invoking any sink.</summary>
+        private void DiscardPendingEvents()
+        {
+            _pendingClipEventCount = 0;
+            _hasPendingTransitions = false;
+            Array.Clear(_pendingTransitions, 0, _pendingTransitions.Length);
+            if (_pendingClipEvents.Length > AnimationRuntimeLimits.SteadyClipEventQueueCapacity)
+            {
+                Array.Resize(ref _pendingClipEvents, AnimationRuntimeLimits.SteadyClipEventQueueCapacity);
             }
         }
 
@@ -1016,13 +1010,42 @@ namespace CycloneGames.AnimationRuntime
             return false;
         }
 
+        /// <summary>True when a playback or layer ramp can still change at a different transition time.</summary>
+        private bool HasActiveFades()
+        {
+            for (int i = 0; i < _layerCount; i++)
+            {
+                ref Layer layer = ref _layers[i];
+                if (layer.LayerFadeActive)
+                {
+                    return true;
+                }
+
+                byte remaining = layer.ActiveMask;
+                while (remaining != 0)
+                {
+                    int slot = LowestSetBit(remaining);
+                    remaining &= (byte)(remaining - 1);
+                    if ((layer.Playbacks[slot].Flags & PlaybackTransitionActive) != 0)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         private bool HasPendingRelease()
         {
             for (int i = 0; i < _layerCount; i++)
             {
                 ref Layer layer = ref _layers[i];
-                for (int slot = 0; slot < layer.Capacity; slot++)
+                byte remaining = layer.ActiveMask;
+                while (remaining != 0)
                 {
+                    int slot = LowestSetBit(remaining);
+                    remaining &= (byte)(remaining - 1);
                     if ((layer.Playbacks[slot].Flags & PlaybackPendingRelease) != 0)
                     {
                         return true;
@@ -1055,12 +1078,17 @@ namespace CycloneGames.AnimationRuntime
             return false;
         }
 
-        private void ApplyLayer(int layerIndex, double tickTime, bool backward, float delta)
+        private void ApplyLayer(int layerIndex, double tickTime, bool backward, double transitionTime)
         {
             ref Layer layer = ref _layers[layerIndex];
 
-            for (int slot = 0; slot < layer.Capacity; slot++)
+            // Snapshot the mask: a pending release removes its own bit during this loop.
+            byte remaining = layer.ActiveMask;
+            while (remaining != 0)
             {
+                int slot = LowestSetBit(remaining);
+                remaining &= (byte)(remaining - 1);
+
                 ref Playback playback = ref layer.Playbacks[slot];
 
                 if ((playback.Flags & PlaybackPendingRelease) != 0)
@@ -1087,19 +1115,6 @@ namespace CycloneGames.AnimationRuntime
                 if (clockDriven)
                 {
                     ref PlaybackClock clock = ref layer.Clocks[slot];
-                    if (clock.Started == 0)
-                    {
-                        // Anchor on the first commit that sees the playback, not on whatever tick happened before it.
-                        clock.Started = 1;
-                        clock.StartTickTime = tickTime;
-                    }
-                    else if (backward)
-                    {
-                        // A rewind invalidates the accumulated elapsed time; continue from where the pose is.
-                        clock.StartTickTime = tickTime;
-                        clock.StartLocalTime = playback.Time;
-                    }
-
                     playback.Time = EvaluateClock(ref clock, playback.Length, tickTime, out unwrapped);
                 }
 
@@ -1117,11 +1132,10 @@ namespace CycloneGames.AnimationRuntime
 
                 if ((playback.Flags & PlaybackTransitionActive) != 0)
                 {
-                    AdvanceTransition(ref layer, ref playback, layerIndex, slot, delta);
+                    AdvanceTransition(ref layer, ref playback, layerIndex, slot, transitionTime);
                 }
 
-                // Time is always written: a playing playback advances every commit, and dropping the applied-time
-                // field is what keeps the playback struct inside one 64-byte cache line.
+                // Playback has no applied-time field, so its 64-byte layout stays intact.
                 playback.Playable.SetTime(playback.Time);
                 _nativeWrites++;
 
@@ -1135,10 +1149,14 @@ namespace CycloneGames.AnimationRuntime
                 }
             }
 
+            if (layer.LayerFadeActive)
+            {
+                AdvanceLayerFade(ref layer, transitionTime);
+            }
+
             if (layer.HasExternalSource)
             {
-                // A host may dispose its blend node without clearing the layer first. The destroyed playable is
-                // no longer valid, so drop the binding here instead of writing weights into a dead node.
+                // Drop the binding if the host destroyed its blend node without clearing the layer.
                 if (!layer.ExternalSource.IsValid())
                 {
                     layer.HasExternalSource = false;
@@ -1166,6 +1184,7 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
+        /// <summary>Folds the absolute tick clock into clip-local seconds.</summary>
         private static double EvaluateClock(ref PlaybackClock clock, float length, double tickTime, out double unwrapped)
         {
             unwrapped = 0d;
@@ -1175,40 +1194,16 @@ namespace CycloneGames.AnimationRuntime
                 return 0d;
             }
 
-            double time = clock.StartLocalTime + ((tickTime - clock.StartTickTime) * clock.Speed);
-            unwrapped = time;
-
-            switch ((AnimationLoopMode)clock.Loop)
+            if (!AnimationClockMath.TryUnwrapped(
+                    clock.StartLocalTime, 0d, tickTime, clock.Speed, out double computed))
             {
-                case AnimationLoopMode.Loop:
-                    time %= length;
-                    if (time < 0d)
-                    {
-                        time += length;
-                    }
-
-                    return time;
-
-                case AnimationLoopMode.PingPong:
-                {
-                    double span = length * 2d;
-                    time %= span;
-                    if (time < 0d)
-                    {
-                        time += span;
-                    }
-
-                    return time > length ? span - time : time;
-                }
-
-                default:
-                    if (time <= 0d)
-                    {
-                        return 0d;
-                    }
-
-                    return time > length ? length : time;
+                // Two finite inputs can still overflow when multiplied. Hold the last finite anchor.
+                unwrapped = AnimationClockMath.ClampFinite(clock.StartLocalTime, length);
+                return unwrapped;
             }
+
+            unwrapped = computed;
+            return FoldTime(computed, length, clock.Loop);
         }
 
         /// <summary>Builds the sweep window from the unfolded clock and the previous commit's reading.</summary>
@@ -1217,7 +1212,9 @@ namespace CycloneGames.AnimationRuntime
             bool rewind)
         {
             if (!clockDriven || seeked || rewind || transition.LastClipTime < 0d
-                || length <= AnimationRuntimeLimits.MinClipLength)
+                || length <= AnimationRuntimeLimits.MinClipLength
+                || !AnimationClockMath.IsFinite(unwrapped)
+                || !AnimationClockMath.IsFinite(transition.LastUnwrapped))
             {
                 return new SweepWindow(false, 0d, 0d);
             }
@@ -1243,8 +1240,7 @@ namespace CycloneGames.AnimationRuntime
                 playback.Flags &= unchecked((byte)~PlaybackConnected);
             }
 
-            // Ping-pong cache: switching back to the clip this slot used last commit reuses its native node
-            // instead of destroy + create. This is the idle <-> locomotion case, not a general clip cache.
+            // Reuse the native node when switching back to the clip used last commit.
             if (playback.Clip != null
                 && ReferenceEquals(layer.CachedClips[slot], playback.Clip)
                 && layer.CachedPlayables[slot].IsValid())
@@ -1339,11 +1335,6 @@ namespace CycloneGames.AnimationRuntime
             }
 
             bool wasInUse = (playback.Flags & PlaybackInUse) != 0;
-            if ((playback.Flags & PlaybackTransitionActive) != 0 && _activeTransitions > 0)
-            {
-                _activeTransitions--;
-            }
-
             playback.Flags &= unchecked((byte)~(PlaybackInUse | PlaybackPendingRelease | PlaybackTransitionActive | PlaybackReleaseAfterFade));
             layer.Transitions[slot] = default;
             playback.InstanceId = 0;
@@ -1353,6 +1344,9 @@ namespace CycloneGames.AnimationRuntime
             playback.Weight = 0f;
             playback.AppliedWeight = 0f;
             playback.Time = 0d;
+
+            // Keep the bit mask authoritative even when this slot was already free.
+            layer.ActiveMask &= unchecked((byte)~(1 << slot));
 
             if (wasInUse)
             {
@@ -1384,11 +1378,6 @@ namespace CycloneGames.AnimationRuntime
 
             if (fade.IsInstant)
             {
-                if (wasActive && _activeTransitions > 0)
-                {
-                    _activeTransitions--;
-                }
-
                 playback.Flags &= unchecked((byte)~(PlaybackTransitionActive | PlaybackReleaseAfterFade));
                 playback.Weight = fade.TargetWeight;
 
@@ -1397,7 +1386,8 @@ namespace CycloneGames.AnimationRuntime
                 instant.FromWeight = 0f;
                 instant.TargetWeight = 0f;
                 instant.Duration = 0f;
-                instant.Elapsed = 0f;
+                instant.FadeAbsoluteStart = 0d;
+                instant.FadeFired = 0;
                 instant.Easing = 0;
 
                 if (releaseAfterFade)
@@ -1409,16 +1399,13 @@ namespace CycloneGames.AnimationRuntime
                 return;
             }
 
-            if (!wasActive)
-            {
-                _activeTransitions++;
-            }
-
             ref PlaybackTransition transition = ref layer.Transitions[slot];
             transition.FromWeight = playback.Weight;
             transition.TargetWeight = fade.TargetWeight;
             transition.Duration = fade.Duration;
-            transition.Elapsed = 0f;
+            transition.FadeAbsoluteStart = fade.AbsoluteStartTime;
+            transition.StartTransitionTime = fade.AbsoluteStartTime;
+            transition.FadeFired = 0;
             transition.Easing = (byte)fade.Easing;
 
             playback.Flags |= PlaybackTransitionActive;
@@ -1432,13 +1419,18 @@ namespace CycloneGames.AnimationRuntime
             }
         }
 
-        private void AdvanceTransition(ref Layer layer, ref Playback playback, int layerIndex, int slot, float delta)
+        /// <summary>Computes ramp weight from the absolute transition clock.</summary>
+        private void AdvanceTransition(ref Layer layer, ref Playback playback, int layerIndex, int slot,
+            double transitionTime)
         {
             ref PlaybackTransition transition = ref layer.Transitions[slot];
-            transition.Elapsed += delta;
-
-            float progress = transition.Duration <= 0f ? 1f : transition.Elapsed / transition.Duration;
-            if (progress > 1f)
+            double elapsed = transitionTime - transition.StartTransitionTime;
+            float progress = transition.Duration <= 0f ? 1f : (float)(elapsed / transition.Duration);
+            if (progress < 0f)
+            {
+                progress = 0f;
+            }
+            else if (progress > 1f)
             {
                 progress = 1f;
             }
@@ -1448,74 +1440,104 @@ namespace CycloneGames.AnimationRuntime
 
             if (progress < 1f)
             {
+                transition.FadeFired = 0;
                 return;
             }
 
             playback.Weight = transition.TargetWeight;
-            playback.Flags &= unchecked((byte)~PlaybackTransitionActive);
-            if (_activeTransitions > 0)
+            if (transition.FadeFired == 0)
             {
-                _activeTransitions--;
+                transition.FadeFired = 1;
+                QueueTransitionEvent(layerIndex, slot, AnimationTransitionReason.FadeCompleted);
+
+                bool release = (playback.Flags & PlaybackReleaseAfterFade) != 0;
+                playback.Flags &= unchecked((byte)~PlaybackReleaseAfterFade);
+                if (release)
+                {
+                    playback.Flags |= PlaybackPendingRelease;
+                    _hasPendingRelease = true;
+                }
             }
 
-            bool release = (playback.Flags & PlaybackReleaseAfterFade) != 0;
-            playback.Flags &= unchecked((byte)~PlaybackReleaseAfterFade);
-            QueueTransitionEvent(layerIndex, slot, AnimationTransitionReason.FadeCompleted);
-            if (release)
-            {
-                playback.Flags |= PlaybackPendingRelease;
-                _hasPendingRelease = true;
-            }
+            // Keep PlaybackTransitionActive so a rewound clock recomputes the weight;
+            // FadeFired guards only the completion event and release.
         }
 
         private void CancelTransition(ref Layer layer, ref Playback playback, int slot)
         {
-            if ((playback.Flags & PlaybackTransitionActive) != 0 && _activeTransitions > 0)
-            {
-                _activeTransitions--;
-            }
-
             playback.Flags &= unchecked((byte)~(PlaybackTransitionActive | PlaybackReleaseAfterFade));
             layer.Transitions[slot] = default;
         }
 
         private void QueueTransitionEvent(int layerIndex, int slot, AnimationTransitionReason reason)
         {
-            if (TransitionCompleted == null || _pendingTransitionCount >= _pendingTransitions.Length)
+            if (TransitionCompleted == null)
             {
                 return;
             }
 
-            _pendingTransitions[_pendingTransitionCount++] = new TransitionEvent(
-                new AnimationPlaybackHandle(_graphId, layerIndex, slot, _layers[layerIndex].Generations[slot]),
-                reason);
+            // One entry per possible playback, indexed by (layer, slot). Both reasons fit in one byte, so a
+            // playback that completes a fade and crosses its exit point in the same commit is never dropped.
+            int index = layerIndex * AnimationRuntimeLimits.MaxLayerCapacity + slot;
+            ref TransitionEvent entry = ref _pendingTransitions[index];
+            entry.Handle = new AnimationPlaybackHandle(
+                _graphId, layerIndex, slot, _layers[layerIndex].Generations[slot]);
+            entry.Reasons |= reason == AnimationTransitionReason.ExitTime
+                ? TransitionExitBit
+                : TransitionFadeBit;
+            _hasPendingTransitions = true;
         }
 
         private void DrainTransitionEvents()
         {
-            if (_pendingTransitionCount == 0)
+            if (!_hasPendingTransitions)
             {
                 return;
             }
 
-            int count = _pendingTransitionCount;
-            _pendingTransitionCount = 0;
-
+            _hasPendingTransitions = false;
             Action<AnimationPlaybackHandle, AnimationTransitionReason> handler = TransitionCompleted;
-            if (handler == null)
-            {
-                return;
-            }
 
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < _pendingTransitions.Length; i++)
             {
-                try
+                byte reasons = _pendingTransitions[i].Reasons;
+                if (reasons == 0)
                 {
-                    handler(_pendingTransitions[i].Handle, _pendingTransitions[i].Reason);
+                    continue;
                 }
-                catch (Exception exception)
+
+                // Clear before invoking: a handler may reuse this slot during dispatch.
+                _pendingTransitions[i].Reasons = 0;
+                if (handler == null)
                 {
-                    ReportEventSinkException(exception);
+                    continue;
+                }
+
+                AnimationPlaybackHandle handle = _pendingTransitions[i].Handle;
+
+                // Documented order: clip events, then exit time, then fade completion.
+                if ((reasons & TransitionExitBit) != 0)
+                {
+                    try
+                    {
+                        handler(handle, AnimationTransitionReason.ExitTime);
+                    }
+                    catch (Exception exception)
+                    {
+                        ReportEventSinkException(exception);
+                    }
+                }
+
+                if ((reasons & TransitionFadeBit) != 0)
+                {
+                    try
+                    {
+                        handler(handle, AnimationTransitionReason.FadeCompleted);
+                    }
+                    catch (Exception exception)
+                    {
+                        ReportEventSinkException(exception);
+                    }
                 }
             }
         }
@@ -1757,7 +1779,7 @@ namespace CycloneGames.AnimationRuntime
             int layerIndex, int slot, AnimationClipEvent[] events, float length, double from, double to, byte loop)
         {
             double delta = to - from;
-            if (delta == 0d)
+            if (delta == 0d || !AnimationClockMath.IsFinite(delta))
             {
                 return;
             }
@@ -1778,6 +1800,7 @@ namespace CycloneGames.AnimationRuntime
 
             int direction = delta > 0d ? 1 : -1;
             double cursor = from;
+            int legs = 0;
 
             while (true)
             {
@@ -1837,6 +1860,12 @@ namespace CycloneGames.AnimationRuntime
                     return;
                 }
 
+                // Bound the walk; normal commits use at most three legs.
+                if (++legs >= AnimationRuntimeLimits.MaxSweepLegs)
+                {
+                    return;
+                }
+
                 cursor = end;
             }
         }
@@ -1845,7 +1874,7 @@ namespace CycloneGames.AnimationRuntime
         private static bool SpanCrosses(float length, double from, double to, byte loop, float position)
         {
             double delta = to - from;
-            if (delta == 0d)
+            if (delta == 0d || !AnimationClockMath.IsFinite(delta))
             {
                 return false;
             }
@@ -1861,6 +1890,7 @@ namespace CycloneGames.AnimationRuntime
 
             int direction = delta > 0d ? 1 : -1;
             double cursor = from;
+            int legs = 0;
 
             while (true)
             {
@@ -1902,6 +1932,11 @@ namespace CycloneGames.AnimationRuntime
                 }
 
                 if (last)
+                {
+                    return false;
+                }
+
+                if (++legs >= AnimationRuntimeLimits.MaxSweepLegs)
                 {
                     return false;
                 }
@@ -2052,9 +2087,34 @@ namespace CycloneGames.AnimationRuntime
 
         private void QueueClipEvent(int layerIndex, int slot, in AnimationClipEvent clipEvent)
         {
+            if (_pendingClipEventCount >= AnimationRuntimeLimits.MaxPendingClipEventsPerCommit)
+            {
+                _droppedClipEvents++;
+                if (layerIndex >= 0 && layerIndex < _droppedClipEventsByLayer.Length)
+                {
+                    _droppedClipEventsByLayer[layerIndex]++;
+                }
+                if (!_warnedClipEventOverflow)
+                {
+                    _warnedClipEventOverflow = true;
+                    Warn("Clip-event dispatch budget exceeded; further markers in this commit are dropped. "
+                        + "See AnimationRuntimeGraph.DroppedClipEvents. This warning is reported once per graph.");
+                }
+
+                return;
+            }
+
             if (_pendingClipEventCount == _pendingClipEvents.Length)
             {
-                Array.Resize(ref _pendingClipEvents, _pendingClipEvents.Length * 2);
+                int next = _pendingClipEvents.Length == 0
+                    ? AnimationRuntimeLimits.InitialClipEventQueueCapacity
+                    : _pendingClipEvents.Length * 2;
+                if (next > AnimationRuntimeLimits.MaxPendingClipEventsPerCommit)
+                {
+                    next = AnimationRuntimeLimits.MaxPendingClipEventsPerCommit;
+                }
+
+                Array.Resize(ref _pendingClipEvents, next);
             }
 
             _pendingClipEvents[_pendingClipEventCount++] = new ClipEventDispatch(
@@ -2072,22 +2132,26 @@ namespace CycloneGames.AnimationRuntime
             int count = _pendingClipEventCount;
             _pendingClipEventCount = 0;
             IAnimationClipEventSink sink = _clipEventSink;
-            if (sink == null)
+            if (sink != null)
             {
-                return;
+                for (int i = 0; i < count; i++)
+                {
+                    ClipEventDispatch dispatch = _pendingClipEvents[i];
+                    try
+                    {
+                        sink.OnClipEvent(dispatch.Handle, dispatch.Event);
+                    }
+                    catch (Exception exception)
+                    {
+                        ReportEventSinkException(exception);
+                    }
+                }
             }
 
-            for (int i = 0; i < count; i++)
+            // Shrink the queue after a drain.
+            if (_pendingClipEvents.Length > AnimationRuntimeLimits.SteadyClipEventQueueCapacity)
             {
-                ClipEventDispatch dispatch = _pendingClipEvents[i];
-                try
-                {
-                    sink.OnClipEvent(dispatch.Handle, dispatch.Event);
-                }
-                catch (Exception exception)
-                {
-                    ReportEventSinkException(exception);
-                }
+                Array.Resize(ref _pendingClipEvents, AnimationRuntimeLimits.SteadyClipEventQueueCapacity);
             }
         }
 
@@ -2102,11 +2166,173 @@ namespace CycloneGames.AnimationRuntime
 
             float clamped = weight <= 0f ? 0f : (weight >= 1f ? 1f : weight);
             ref Layer layer = ref _layers[layerIndex];
+            layer.LayerFadeActive = false;
             if (layer.Weight != clamped)
             {
                 layer.Weight = clamped;
                 _dirty = true;
             }
+        }
+
+        /// <summary>Ramps a layer weight using the absolute <see cref="AnimationTick.TransitionTime"/>.</summary>
+        public void SetLayerWeight(int layerIndex, float weight, in AnimationFade fade)
+        {
+            if (layerIndex < 0 || layerIndex >= _layerCount)
+            {
+                return;
+            }
+
+            float clamped = weight <= 0f ? 0f : (weight >= 1f ? 1f : weight);
+            ref Layer layer = ref _layers[layerIndex];
+            if (fade.IsInstant)
+            {
+                layer.LayerFadeActive = false;
+                layer.Weight = clamped;
+                _dirty = true;
+                return;
+            }
+
+            layer.LayerFadeFrom = layer.Weight;
+            layer.LayerFadeTarget = clamped;
+            layer.LayerFadeDuration = fade.Duration;
+            layer.LayerFadeEasing = (byte)fade.Easing;
+            layer.LayerFadeStart = fade.AbsoluteStartTime;
+            layer.LayerFadeActive = true;
+            _dirty = true;
+        }
+
+        private void AdvanceLayerFade(ref Layer layer, double transitionTime)
+        {
+            float progress = layer.LayerFadeDuration <= 0f
+                ? 1f
+                : (float)((transitionTime - layer.LayerFadeStart) / layer.LayerFadeDuration);
+            if (progress < 0f)
+            {
+                progress = 0f;
+            }
+            else if (progress > 1f)
+            {
+                progress = 1f;
+            }
+
+            float eased = AnimationFade.Evaluate((AnimationFadeEasing)layer.LayerFadeEasing, progress);
+            layer.Weight = layer.LayerFadeFrom + ((layer.LayerFadeTarget - layer.LayerFadeFrom) * eased);
+            if (progress >= 1f)
+            {
+                layer.LayerFadeActive = false;
+            }
+        }
+
+        /// <summary>Changes the weight of the host-owned source slot without reconnecting it.</summary>
+        public bool SetLayerSourceWeight(int layerIndex, float weight)
+        {
+            if (!_initialized || layerIndex < 0 || layerIndex >= _layerCount)
+            {
+                return false;
+            }
+
+            ref Layer layer = ref _layers[layerIndex];
+            if (!layer.HasExternalSource)
+            {
+                return false;
+            }
+
+            float clamped = weight <= 0f ? 0f : (weight >= 1f ? 1f : weight);
+            if (layer.ExternalWeight != clamped)
+            {
+                layer.ExternalWeight = clamped;
+                _dirty = true;
+            }
+
+            return true;
+        }
+
+        /// <summary>Creates an Animation C# Job playable in this graph.</summary>
+        /// <remarks>Attach it with <see cref="SetLayerSource"/>; the host owns the job data and node lifetime.</remarks>
+        public AnimationScriptPlayable CreateJobPlayable<TJob>(in TJob job, int inputCount = 1)
+            where TJob : struct, IAnimationJob
+        {
+            return _initialized ? AnimationScriptPlayable.Create(_graph, job, inputCount) : default;
+        }
+
+        /// <summary>Clears transition anchors, exit cursors, event windows and queued events for a replay.</summary>
+        /// <remarks>Playbacks, playables and current poses are preserved.</remarks>
+        public void ResetToTick(in AnimationTick tick)
+        {
+            if (!_initialized)
+            {
+                return;
+            }
+
+            for (int layerIndex = 0; layerIndex < _layerCount; layerIndex++)
+            {
+                ref Layer layer = ref _layers[layerIndex];
+                byte remaining = layer.ActiveMask;
+                while (remaining != 0)
+                {
+                    int slot = LowestSetBit(remaining);
+                    remaining &= (byte)(remaining - 1);
+
+                    ref PlaybackTransition transition = ref layer.Transitions[slot];
+                    transition.LastClipTime = -1d;
+                    transition.LastUnwrapped = tick.ClipTime;
+                    transition.Seeked = 0;
+                    transition.StartTransitionTime = transition.FadeAbsoluteStart;
+                    transition.FadeFired = 0;
+                    transition.ExitFlags &= unchecked((byte)~ExitFired);
+                    transition.ExitLastNormalized = NormalizeTime(
+                        layer.Playbacks[slot].Time, layer.Playbacks[slot].Length);
+                }
+
+                layer.LayerFadeActive = false;
+            }
+
+            DiscardPendingEvents();
+            _lastStepIndex = long.MinValue;
+            _dirty = true;
+        }
+
+        /// <summary>FNV-1a hash of live layer and playback state; allocation-free.</summary>
+        public ulong ComputePoseHash()
+        {
+            ulong hash = 14695981039346656037UL;
+            for (int layerIndex = 0; layerIndex < _layerCount; layerIndex++)
+            {
+                ref Layer layer = ref _layers[layerIndex];
+                hash = MixHash(hash, BitConverter.DoubleToInt64Bits(layer.Weight));
+                hash = MixHash(hash, BitConverter.DoubleToInt64Bits(layer.ExternalWeight));
+
+                byte remaining = layer.ActiveMask;
+                while (remaining != 0)
+                {
+                    int slot = LowestSetBit(remaining);
+                    remaining &= (byte)(remaining - 1);
+
+                    ref Playback playback = ref layer.Playbacks[slot];
+                    hash = MixHash(hash, playback.InstanceId);
+                    hash = MixHash(hash, playback.PlaybackChannel);
+                    hash = MixHash(hash, playback.ClipChannel);
+                    hash = MixHash(hash, BitConverter.DoubleToInt64Bits(playback.Time));
+                    hash = MixHash(hash, BitConverter.DoubleToInt64Bits(playback.Weight));
+                    hash = MixHash(hash, BitConverter.DoubleToInt64Bits(playback.Length));
+                    hash = MixHash(hash, playback.Flags);
+                }
+            }
+
+            return hash;
+        }
+
+        private static ulong MixHash(ulong hash, long value)
+        {
+            return (hash ^ (ulong)value) * 1099511628211UL;
+        }
+
+        /// <summary>Markers dropped by the per-commit event budget on one layer.</summary>
+        public long GetDroppedClipEvents(int layerIndex)
+        {
+            return layerIndex >= 0 && layerIndex < _droppedClipEventsByLayer.Length
+                ? _droppedClipEventsByLayer[layerIndex]
+                : 0L;
         }
 
         public float GetLayerWeight(int layerIndex)
@@ -2212,14 +2438,13 @@ namespace CycloneGames.AnimationRuntime
 
             ref Layer layer = ref _layers[layerIndex];
             int written = 0;
-            for (int slot = 0; slot < layer.Capacity && written < buffer.Length; slot++)
+            byte remaining = layer.ActiveMask;
+            while (remaining != 0 && written < buffer.Length)
             {
-                ref Playback playback = ref layer.Playbacks[slot];
-                if ((playback.Flags & PlaybackInUse) == 0)
-                {
-                    continue;
-                }
+                int slot = LowestSetBit(remaining);
+                remaining &= (byte)(remaining - 1);
 
+                ref Playback playback = ref layer.Playbacks[slot];
                 buffer[written] = new AnimationPlaybackSnapshot(
                     playback.InstanceId,
                     playback.PlaybackChannel,
@@ -2305,10 +2530,7 @@ namespace CycloneGames.AnimationRuntime
         }
 
 #if DEBUG
-        /// <summary>
-        /// A humanoid clip on a generic rig (or the reverse) produces a wrong pose without throwing. This is the
-        /// most common content error in mixed-rig projects, so it is reported once per clip start in dev builds.
-        /// </summary>
+        /// <summary>Reports a humanoid/generic rig mismatch once per graph in development builds.</summary>
         private void ValidateClipForAnimator(AnimationClip clip)
         {
             if (_warnedRigMismatch || clip == null || _animator == null)
@@ -2335,11 +2557,7 @@ namespace CycloneGames.AnimationRuntime
         /// <summary>Commits between liveness scans. 30 commits is roughly half a second at 60 Hz.</summary>
         private const int LivenessCheckInterval = 30;
 
-        /// <summary>
-        /// Development-only guard against the one fatal lifetime mistake: an owner released a clip while a playback
-        /// was still sampling it. Detects the destroyed object, terminates the playback and names the instance so
-        /// the offending caller can be found. Ship builds pay nothing for this.
-        /// </summary>
+        /// <summary>Development guard: terminates playbacks whose clip was destroyed while sampling.</summary>
         private void CheckClipLiveness()
         {
             for (int layerIndex = 0; layerIndex < _layerCount; layerIndex++)
@@ -2351,9 +2569,7 @@ namespace CycloneGames.AnimationRuntime
 
                     if ((playback.Flags & PlaybackInUse) == 0)
                     {
-                        // A pooled slot can still hold a playable bound to a clip the asset system destroyed
-                        // after the playback ended. Nothing samples it, but it keeps a native node (and the stale
-                        // clip reference) alive until teardown, so drop it here instead.
+                        // Drop cached playables bound to a destroyed clip.
                         if (playback.Playable.IsValid() && playback.BoundClip == null)
                         {
                             if (_graph.IsValid())
@@ -2378,8 +2594,7 @@ namespace CycloneGames.AnimationRuntime
                         continue;
                     }
 
-                    // Unity's overloaded operator reports true for a destroyed object, which is exactly the case
-                    // this guard exists to catch. A valid clip never compares equal to null.
+                    // Unity's == operator reports true for a destroyed object.
                     if (playback.Clip != null)
                     {
                         continue;
@@ -2425,11 +2640,31 @@ namespace CycloneGames.AnimationRuntime
 
         private static int FindPlayback(ref Layer layer, int instanceId, int playbackChannel, int clipChannel)
         {
-            for (int slot = 0; slot < layer.Capacity; slot++)
+            // Full layers use a forward scan; sparse layers use the mask.
+            if (layer.ActivePlaybacks >= layer.Capacity)
             {
+                for (int slot = 0; slot < layer.Capacity; slot++)
+                {
+                    ref Playback dense = ref layer.Playbacks[slot];
+                    if (dense.InstanceId == instanceId
+                        && dense.PlaybackChannel == playbackChannel
+                        && dense.ClipChannel == clipChannel)
+                    {
+                        return slot;
+                    }
+                }
+
+                return -1;
+            }
+
+            byte remaining = layer.ActiveMask;
+            while (remaining != 0)
+            {
+                int slot = LowestSetBit(remaining);
+                remaining &= (byte)(remaining - 1);
+
                 ref Playback playback = ref layer.Playbacks[slot];
-                if ((playback.Flags & PlaybackInUse) != 0
-                    && playback.InstanceId == instanceId
+                if (playback.InstanceId == instanceId
                     && playback.PlaybackChannel == playbackChannel
                     && playback.ClipChannel == clipChannel)
                 {
@@ -2442,15 +2677,36 @@ namespace CycloneGames.AnimationRuntime
 
         private static int FindFreeSlot(ref Layer layer)
         {
-            for (int slot = 0; slot < layer.Capacity; slot++)
+            // Only slots below the configured capacity may be handed out.
+            byte slotMask = (byte)((1 << layer.Capacity) - 1);
+            byte free = (byte)(~layer.ActiveMask & slotMask);
+            return free == 0 ? -1 : LowestSetBit(free);
+        }
+
+        /// <summary>Index of the lowest set bit in a non-zero byte.</summary>
+        private static int LowestSetBit(byte mask)
+        {
+            // Widen once to int so the three probe steps contain no repeated byte casts.
+            int bits = mask;
+            int index = 0;
+            if ((bits & 0x0F) == 0)
             {
-                if ((layer.Playbacks[slot].Flags & PlaybackInUse) == 0)
-                {
-                    return slot;
-                }
+                bits >>= 4;
+                index += 4;
             }
 
-            return -1;
+            if ((bits & 0x03) == 0)
+            {
+                bits >>= 2;
+                index += 2;
+            }
+
+            if ((bits & 0x01) == 0)
+            {
+                index += 1;
+            }
+
+            return index;
         }
 
         private static double ClampTime(double time, float length)
