@@ -139,8 +139,11 @@ namespace CycloneGames.AnimationRuntime.Editor
             EditorGUILayout.EndHorizontal();
         }
 
-        /// <summary>Draws a thin weight bar. Used for layer weight and per-playback weight.</summary>
-        internal static void DrawBar(float value, Color color)
+        /// <summary>
+        /// Draws a thin weight bar. The label is supplied by the caller from the throttled cache, so a repaint
+        /// never formats a float or allocates a string.
+        /// </summary>
+        internal static void DrawBar(float value, Color color, string label)
         {
             Rect rect = GUILayoutUtility.GetRect(0f, BarHeight, GUILayout.ExpandWidth(true));
             EditorGUI.DrawRect(rect, new Color(0f, 0f, 0f, 0.08f));
@@ -151,13 +154,10 @@ namespace CycloneGames.AnimationRuntime.Editor
                 EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width * clamped, rect.height), color);
             }
 
-            GUI.Label(new Rect(rect.x + 4f, rect.y, rect.width - 8f, rect.height), clamped.ToString("0.000"), EditorStyles.miniLabel);
+            GUI.Label(new Rect(rect.x + 4f, rect.y, rect.width - 8f, rect.height), label, EditorStyles.miniLabel);
         }
 
-        /// <summary>
-        /// Returns true when the throttled runtime block should refresh and advances the timer.
-        /// Editors call this instead of repainting every frame.
-        /// </summary>
+        /// <summary>Returns true when the throttled refresh is due and advances the timer.</summary>
         internal static bool ShouldRefresh(ref double nextRefreshTime)
         {
             double now = EditorApplication.timeSinceStartup;

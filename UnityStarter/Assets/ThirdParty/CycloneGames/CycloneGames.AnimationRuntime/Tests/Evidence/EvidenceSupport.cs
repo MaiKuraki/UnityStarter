@@ -113,7 +113,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         protected static AnimationTick Tick(long step, double time)
         {
-            return new AnimationTick(time, step, AnimationTimeSource.Update, false, 0.016f);
+            return new AnimationTick(time, step, AnimationTimeSource.Update);
         }
 
         /// <summary>
@@ -154,6 +154,38 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             long after = GC.GetTotalMemory(false);
             return after - before;
+        }
+
+        /// <summary>
+        /// Allocation delta that prefers the per-thread counter where the host supports it and falls back to
+        /// the heap trend in the editor's Mono host. <paramref name="exact"/> reports which channel was used.
+        /// </summary>
+        protected static long MeasureAllocationDeltaExact(
+            int warmupIterations,
+            int measuredIterations,
+            Action body,
+            out bool exact)
+        {
+            for (int i = 0; i < warmupIterations; i++)
+            {
+                body();
+            }
+
+            long counterBefore = GC.GetAllocatedBytesForCurrentThread();
+            long heapBefore = GC.GetTotalMemory(false);
+
+            for (int i = 0; i < measuredIterations; i++)
+            {
+                body();
+            }
+
+            long counterDelta = GC.GetAllocatedBytesForCurrentThread() - counterBefore;
+            long heapDelta = GC.GetTotalMemory(false) - heapBefore;
+
+            // A non-zero counter is authoritative. A zero counter with a flat heap means "no allocation";
+            // a zero counter with a moving heap means the host does not implement the counter (editor Mono).
+            exact = counterDelta != 0L || heapDelta == 0L;
+            return exact ? counterDelta : heapDelta;
         }
 
         protected static string FormatBytes(long bytes)

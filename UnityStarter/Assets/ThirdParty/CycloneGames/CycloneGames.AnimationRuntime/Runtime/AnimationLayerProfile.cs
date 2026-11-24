@@ -72,6 +72,66 @@ namespace CycloneGames.AnimationRuntime
             return descriptors;
         }
 
+        /// <summary>Returns authoring problems for Editor tooling, or an empty string.</summary>
+        public string GetValidationReport()
+        {
+            if (_layers == null || _layers.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            var report = new System.Text.StringBuilder();
+            if (_layers.Length > Core.AnimationRuntimeLimits.MaxLayers)
+            {
+                report.Append("Layer count ").Append(_layers.Length)
+                    .Append(" exceeds the maximum of ").Append(Core.AnimationRuntimeLimits.MaxLayers)
+                    .Append("; only the first layers will be built.\n");
+            }
+
+            for (int i = 0; i < _layers.Length; i++)
+            {
+                Layer layer = _layers[i];
+
+                if (layer.Additive && layer.Mask == null)
+                {
+                    report.Append("Layer ").Append(i)
+                        .Append(" is additive without an AvatarMask; a full-body additive pose needs an explicit reference pose.\n");
+                }
+
+                if (layer.Capacity < Core.AnimationRuntimeLimits.MinLayerCapacity
+                    || layer.Capacity > Core.AnimationRuntimeLimits.MaxLayerCapacity)
+                {
+                    report.Append("Layer ").Append(i).Append(" capacity ").Append(layer.Capacity)
+                        .Append(" is outside [").Append(Core.AnimationRuntimeLimits.MinLayerCapacity)
+                        .Append(", ").Append(Core.AnimationRuntimeLimits.MaxLayerCapacity)
+                        .Append("]; re-save the asset to clamp it.\n");
+                }
+
+                if (float.IsNaN(layer.Weight) || layer.Weight < 0f || layer.Weight > 1f)
+                {
+                    report.Append("Layer ").Append(i).Append(" weight ").Append(layer.Weight)
+                        .Append(" is outside [0, 1]. A weight of 0 means unset and projects to 1.\n");
+                }
+
+                if (string.IsNullOrEmpty(layer.Name))
+                {
+                    continue;
+                }
+
+                for (int j = 0; j < i; j++)
+                {
+                    if (string.Equals(layer.Name, _layers[j].Name, StringComparison.Ordinal))
+                    {
+                        report.Append("Layer ").Append(i).Append(" reuses the name '").Append(layer.Name)
+                            .Append("' from layer ").Append(j).Append(".\n");
+                        break;
+                    }
+                }
+            }
+
+            return report.ToString();
+        }
+
         private void OnValidate()
         {
             if (_layers == null)

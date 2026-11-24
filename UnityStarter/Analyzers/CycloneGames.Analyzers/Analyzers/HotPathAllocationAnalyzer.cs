@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -15,6 +16,23 @@ namespace CycloneGames.Analyzers
             "Update", "LateUpdate", "FixedUpdate",
             "OnTick", "Tick", "PreUpdate", "PostUpdate",
             "OnUpdate", "OnPreTick", "OnPostTick"
+        };
+
+        /// <summary>
+        /// Hot-path names scoped to one namespace prefix. The pose backend drives its work from Commit and
+        /// Begin*/Update*/End* instead of Unity Update callbacks, so the global list would be blind to its
+        /// entire hot path. Scoping avoids turning these rules on for every unrelated Commit method in the
+        /// repository (there are many, including offline code generators).
+        /// </summary>
+        private const string AnimationRuntimeNamespace = "CycloneGames.AnimationRuntime";
+
+        private static readonly string[] ScopedHotPathMethodNames =
+        {
+            "Commit", "BeginPlayback", "UpdatePlayback", "EndPlayback", "FadePlayback",
+            "SeekPlayback", "ApplyLayer", "ApplyWeights", "QueueClipEvent", "DrainClipEvents",
+            "DrainTransitionEvents", "DiscardPendingEvents", "QueueClockSpan", "HandleAnimatorMove",
+            "TickFrame", "CommitNow", "AdvanceTransition", "AdvanceLayerFade", "EvaluateClock",
+            "FoldTime", "ComputePoseHash", "ResetToTick", "CreateJobPlayable"
         };
 
         private static readonly string[] LinqMethodNames =
@@ -46,11 +64,11 @@ namespace CycloneGames.Analyzers
             var methodDecl = (MethodDeclarationSyntax)context.Node;
             if (!AnalyzerSourceScope.IsRepositoryOwned(methodDecl.SyntaxTree)) return;
             var methodName = methodDecl.Identifier.Text;
-
-            if (!IsHotPathMethod(methodName)) return;
-
             var methodSymbol = context.SemanticModel.GetDeclaredSymbol(methodDecl);
             if (methodSymbol == null) return;
+
+            var namespaceName = methodSymbol.ContainingNamespace?.ToString() ?? string.Empty;
+            if (!IsHotPathMethod(methodName, namespaceName)) return;
 
             // 1. Check foreach and skip known zero-allocation enumerators in IL2CPP.
             foreach (var forEachStmt in methodDecl.DescendantNodes().OfType<ForEachStatementSyntax>())
@@ -158,12 +176,23 @@ namespace CycloneGames.Analyzers
             return false;
         }
 
-        private static bool IsHotPathMethod(string methodName)
+        private static bool IsHotPathMethod(string methodName, string namespaceName)
         {
             foreach (var name in HotPathMethodNames)
             {
                 if (methodName == name) return true;
             }
+
+            if (!namespaceName.StartsWith(AnimationRuntimeNamespace, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            foreach (var name in ScopedHotPathMethodNames)
+            {
+                if (methodName == name) return true;
+            }
+
             return false;
         }
     }

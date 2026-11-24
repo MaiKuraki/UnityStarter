@@ -57,7 +57,7 @@ namespace CycloneGames.AnimationRuntime.Tests
 
         private static AnimationTick Tick(long step)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0.016f);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update);
         }
 
         [Test]

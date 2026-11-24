@@ -25,7 +25,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick TickWithDelta(long step, float delta)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, delta);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update);
         }
 
         private static double MeasureMicroseconds(int iterations, Action body, int rounds = 3)
@@ -143,7 +143,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             Assert.AreEqual(12, handle);
             Assert.AreEqual(64, playback, "Playback must remain one cache line");
-            Assert.LessOrEqual(perSlot, 176, "per-slot cold+hot footprint guard (event cache adds one reference)");
+            Assert.LessOrEqual(perSlot, 192, "per-slot cold+hot footprint guard (clock now carries StartTick)");
         }
 
         [Test]
@@ -201,7 +201,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                     int instance = i + 1;
                     graph.FadePlayback(
                         new AnimationPlaybackKey(instance, 0, layer, 0),
-                        new AnimationFade(1e6f, 1f, AnimationFadeEasing.Linear));
+                        new AnimationFade(1e6f, 1f, 0d, AnimationFadeEasing.Linear));
                 }
             });
             double exitArmed = MeasureCommitCost(8, 8, 64, clip, AnimationTimePolicy.External, null, graph =>
@@ -279,7 +279,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             var key = new AnimationPlaybackKey(1, 0, 0, 0);
             graph.BeginPlayback(
                 new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
-                new AnimationFade(1e6f, 1f, AnimationFadeEasing.Linear));
+                new AnimationFade(1e6f, 1f, 0d, AnimationFadeEasing.Linear));
             graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.EveryCrossing));
             graph.Commit(TickWithDelta(0L, 0.016f));
 

@@ -23,7 +23,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick At(double time, long step, float delta)
         {
-            return new AnimationTick(time, step, AnimationTimeSource.Update, false, delta);
+            return new AnimationTick(time, step, AnimationTimeSource.Update);
         }
 
         private AnimationClip ClipWith(string name, float length, float markerTime)
@@ -59,7 +59,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Clamp));
                 graph.Commit(At(0d, 0L, 0.016f));
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0f, 0f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0f, 0f, 0d)));
                 graph.Commit(At(0.6d, 1L, 0.1f));
 
                 NoteEvidence("weight-zero", "events=" + sink.Total);
@@ -84,7 +84,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Clamp));
                 graph.Commit(At(0d, 0L, 0.016f));
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(10f, 0f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(10f, 0f, 0d)));
 
                 for (int i = 1; i <= 10; i++)
                 {
@@ -115,7 +115,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Clamp));
                 graph.Commit(At(0d, 0L, 0.016f));
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(duration, 0f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(duration, 0f, 0d)));
                 graph.Commit(At(0.6d, 1L, 0.1f));
 
                 NoteEvidence("weight-nonfinite", "duration=" + duration + " events=" + sink.Total);
@@ -141,13 +141,13 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Clamp));
                 graph.Commit(At(0d, 0L, 0.016f));
 
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(1f, 0f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(1f, 0f, 0d)));
                 graph.Commit(At(0.1d, 1L, 0.1f));
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(1f, 1f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(1f, 1f, 0d)));
                 graph.Commit(At(0.2d, 2L, 0.1f));
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(1f, 0f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(1f, 0f, 0d)));
                 graph.Commit(At(0.3d, 3L, 0.1f));
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.1f, 1f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.1f, 1f, 0d)));
 
                 for (int i = 4; i <= 60; i++)
                 {
@@ -183,7 +183,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                         graph.BeginPlayback(new AnimationClipRequest(
                             instance, 0, layer, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Clamp));
                         Assert.IsTrue(graph.FadePlayback(
-                            new AnimationPlaybackKey(instance, 0, layer, 0), new AnimationFade(1f, 0f)));
+                            new AnimationPlaybackKey(instance, 0, layer, 0), new AnimationFade(1f, 0f, 0d)));
                     }
                 }
 
@@ -216,7 +216,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.BeginPlayback(new AnimationClipRequest(
                     1, 0, 0, clip, 1d, 1f, false, 0, -1f, AnimationLoopMode.Clamp));
                 graph.Commit(At(0d, 0L, 0.016f));
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(1f, 0f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(1f, 0f, 0d)));
 
                 for (int i = 1; i <= 10; i++)
                 {
@@ -246,7 +246,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
             {
                 graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f, false, 0, 1f, AnimationLoopMode.Clamp));
                 graph.Commit(At(0d, 0L, 0.016f));
-                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.1f, 0f)));
+                Assert.IsTrue(graph.FadePlayback(key, new AnimationFade(0.1f, 0f, 0d)));
 
                 for (int i = 1; i <= 20; i++)
                 {

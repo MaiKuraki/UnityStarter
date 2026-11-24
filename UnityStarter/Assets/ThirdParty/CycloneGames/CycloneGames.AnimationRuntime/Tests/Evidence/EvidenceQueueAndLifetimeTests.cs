@@ -31,7 +31,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick Tick(long step)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0.016f);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update);
         }
 
         private AnimationClip ClipWithMarkers(int markerCount)
@@ -169,14 +169,14 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                             keys[i].InstanceId, keys[i].PlaybackChannel, keys[i].Layer, clip, 0d, 1f));
                     }
 
-                    graph.Commit(new AnimationTick(step * 0.016d, step++, AnimationTimeSource.Update, false, 0.016f));
+                    graph.Commit(new AnimationTick(step * 0.016d, step++, AnimationTimeSource.Update));
                     for (int i = 0; i < keys.Count; i++)
                     {
                         graph.UpdatePlayback(new AnimationClipRequest(
                             keys[i].InstanceId, keys[i].PlaybackChannel, keys[i].Layer, clip, 1d, 1f));
                     }
 
-                    graph.Commit(new AnimationTick(step * 0.016d, step++, AnimationTimeSource.Update, false, 0.016f));
+                    graph.Commit(new AnimationTick(step * 0.016d, step++, AnimationTimeSource.Update));
                 });
 
                 NoteEvidence("queue-alloc", "peak 512 then 2000 cycles: heap delta " + FormatBytes(heapDelta));

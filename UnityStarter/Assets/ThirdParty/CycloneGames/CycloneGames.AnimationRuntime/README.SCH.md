@@ -2,50 +2,48 @@
 
 [English](README.md) | 简体中文
 
-Unity Playables 的底层姿态运行时。
+| | |
+| --- | --- |
+| 包 | `com.cyclone-games.animation-runtime` |
+| Unity | 2022.3 或更高 |
+| 依赖 | `com.cyclone-games.logging` |
+| 程序集 | `CycloneGames.AnimationRuntime.Core`（`noEngineReferences: true`）、`.Runtime`、`.Editor` |
 
-## 概述
+## 1. 范围
 
-`CycloneGames.AnimationRuntime` 是 Unity Playables 图下面的姿态层。它拥有一个 `PlayableGraph`，接收 clip 请求，把计算出的骨骼姿态写回 Animator。
+本包通过一个 `PlayableGraph` 把 clip 请求映射为骨骼姿势，负责层、playback 槽位、权重、fade、exit time、clip 事件与 root motion 转发。
 
-角色能力变多之后，AnimatorController 会变得难以维护。状态、过渡、Any State 规则和参数都挤在一个资产里，审查和合并都困难，也没有干净的办法做测试。这个运行时把 Controller 从姿态路径里移除。宿主指定 clip、Layer、时间和权重，运行时负责采样和混合。编排仍然放在时间轴或玩法代码里。
+序列编排、状态机、Montage 分段、音频/VFX 路由与资源加载由宿主负责。
+
+## 2. 架构
 
 ```mermaid
 flowchart LR
-    Host[宿主<br/>时间轴、玩法] --> Runtime[AnimationRuntimeGraph<br/>layers + playback 池]
-    Runtime --> Playables[PlayableGraph<br/>clip playable + blend 节点]
-    Playables --> Animator[Animator<br/>骨骼姿态]
-    Runtime -.-> Observers[统计、快照<br/>过渡与 clip 事件]
+    Host[宿主：时间轴或玩法] -->|AnimationClipRequest| Graph[AnimationRuntimeGraph]
+    Host -->|AnimationTick| Graph
+    Graph -->|SetTime / SetInputWeight| Mixer[PlayableGraph：层 mixer + clip playables]
+    Mixer -->|AnimationPlayableOutput| Animator[Animator]
+    Graph -->|事件 / 快照 / 统计| Host
 ```
 
-运行时支持固定 Layer、AvatarMask、additive、池化的 clip playback、权重 Fade、归一化 ExitTime、clip 事件派发和 RootMotion 转发。clip 时间可以由宿主给，也可以由 tick 时钟推进。计数器和每个 playback 的快照用于诊断。
-
-时间轴、蒙太奇分段、状态机和音频/VFX 路由不属于这个模块。
-
-## 图拓扑
-
-```
+```text
 AnimationPlayableOutput
-  └─ AnimationLayerMixerPlayable          每层一个输入，可配 mask 与 additive
-       └─ AnimationMixerPlayable          playback 槽位 + 一个外部源槽位
+  └─ AnimationLayerMixerPlayable        每层一个输入，可带 AvatarMask 与 additive 标志
+       └─ AnimationMixerPlayable        playback 槽位 + 一个预留的外部源槽位
             ├─ AnimationClipPlayable × N
-            └─ 外部 Playable              LinearBlendNode 或 DirectionalBlendNode
+            └─ Playable                宿主自有的 blend 节点或 AnimationScriptPlayable
 ```
 
-Layer 上限为 8，每层 playback 槽位上限为 8。Playback 是占用一个槽位的一次 clip 播放：Slot 是存储位置，playback channel 把会竞争的播放分到一组，clip channel 让多个播放并存。`SetLayerSource` 与 `ClearLayerSource` 只连接或断开预留的源槽位，不改变 mixer 输入数量。一个 Animator 只支持一个输出，`AnimationRuntimeRegistry` 会拒绝同一 Animator 上的第二个 graph。
+拓扑在构造期固定。层数上限为 8，每层 playback 容量上限为 8。一个 Animator 只支持一个输出，`AnimationRuntimeRegistry` 会拒绝同一 Animator 上的第二个 graph。预留源槽位通过 `SetLayerSource` 连接、通过 `ClearLayerSource` 释放，输入数量不会变化。
 
-## 时间策略
-
-策略在构造期选定，之后不变。`External` 由宿主拥有 clip 时间；`TickDriven` 由运行时用 tick 时间推进 clip。两种模式下，`AnimationTick.TransitionDelta` 都用来推进 fade 和 exit 计时。
-
-时间轴、回放、编辑器拖拽用 External。`BeginPlayback` 与 `UpdatePlayback` 携带绝对本地秒数。
+## 3. 快速上手
 
 ```csharp
 using CycloneGames.AnimationRuntime;
 using CycloneGames.AnimationRuntime.Core;
 using UnityEngine;
 
-public sealed class ExternalAnimationDriver : MonoBehaviour
+public sealed class PoseDriver : MonoBehaviour
 {
     [SerializeField] private Animator _animator;
     [SerializeField] private AnimationClip _clip;
@@ -65,12 +63,7 @@ public sealed class ExternalAnimationDriver : MonoBehaviour
         _graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, _clip, localTime, 1f));
 
         _step = _step == long.MaxValue ? 0L : _step + 1L;
-        _graph.Commit(new AnimationTick(
-            Time.timeAsDouble,
-            _step,
-            AnimationTimeSource.Update,
-            false,
-            Time.deltaTime));
+        _graph.Commit(new AnimationTick(Time.timeAsDouble, _step, AnimationTimeSource.Update));
     }
 
     private void OnDestroy()
@@ -81,36 +74,66 @@ public sealed class ExternalAnimationDriver : MonoBehaviour
 }
 ```
 
-没有时间轴的 actor 用 TickDriven。`LocalTime` 是起始偏移，`Speed` 与 `Loop` 描述时钟如何走。
+`AnimationRuntimeBehaviour` 以 `MonoBehaviour` 形式提供同样的流程，commit 相位可序列化配置。
+
+## 4. 时间模型
+
+`AnimationTick` 是唯一的时间载体。
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `ClipTime` | `double` | 绝对时钟；`TickDriven` 下折叠为 clip-local 秒数。 |
+| `TransitionTime` | `double` | 权重 ramp、层 fade 与 exit 计时的绝对时钟。 |
+| `StepIndex` | `long` | 单调步号；重复步号使 `Commit` 成为空操作。 |
+| `Source` | `AnimationTimeSource` | tick 来源，用于诊断。 |
+| `IsBackward` | `bool` | 宿主时钟向后移动。 |
+| `SuppressEvents` | `bool` | 推进姿势与权重但不派发事件。 |
+
+```mermaid
+sequenceDiagram
+    participant H as 宿主
+    participant G as AnimationRuntimeGraph
+    participant P as PlayableGraph
+    H->>G: BeginPlayback / UpdatePlayback
+    H->>G: Commit(AnimationTick)
+    G->>G: 解析权重、时钟、事件窗口
+    G->>P: SetTime / SetInputWeight
+    G->>P: Evaluate(0f)
+    G-->>H: clip 事件、transition 事件
+```
+
+两个构造函数：
+
+```csharp
+// 便捷形式：TransitionTime = ClipTime。
+new AnimationTick(clipTime, stepIndex, AnimationTimeSource.Update);
+
+// 分离时钟，用于重放或独立的过渡权威。
+new AnimationTick(clipTime, transitionTime, stepIndex, AnimationTimeSource.Replay,
+    isBackward: false, suppressEvents: true);
+```
+
+| 策略 | clip-local 时间来源 |
+| --- | --- |
+| `External` | 每次 `BeginPlayback` / `UpdatePlayback` 的 `AnimationClipRequest.LocalTime`。 |
+| `TickDriven` | `ClipTime * Speed + StartLocalTime`，按 `AnimationLoopMode` 折叠。 |
 
 ```csharp
 _graph = new AnimationRuntimeGraph(
     _animator,
     new[] { AnimationLayerDescriptor.Default },
-    diagnostics: null,
     timePolicy: AnimationTimePolicy.TickDriven);
 
 _graph.BeginPlayback(new AnimationClipRequest(
-    instanceId: 1,
-    playbackChannel: 0,
-    layer: 0,
-    clip: _clip,
-    localTime: 0d,
-    weight: 1f,
-    holdLastFrame: false,
-    clipChannel: 0,
-    speed: 1.25f,
-    loop: AnimationLoopMode.Loop));
+    instanceId: 1, playbackChannel: 0, layer: 0, clip: _clip,
+    localTime: 0d, weight: 1f, speed: 1.25f, loop: AnimationLoopMode.Loop));
 
-_step = _step == long.MaxValue ? 0L : _step + 1L;
-_graph.Commit(new AnimationTick(Time.timeAsDouble, _step, AnimationTimeSource.LateUpdate, false, Time.deltaTime));
+_graph.Commit(new AnimationTick(Time.timeAsDouble, step, AnimationTimeSource.LateUpdate));
 ```
 
-暂停或禁用一段时间后调用 `RebaseTickClocks()`。`AnimationRuntimeBehaviour` 会在 `OnEnable` 里做这件事。
+非有限 tick 时钟被钳制为 0。有限时钟与有限 speed 相乘仍可能溢出；`AnimationClockMath` 拒绝该步，graph 保持上一个有限姿势。
 
-## Layer 与 Profile
-
-Layer 是 mixer 的一个输入，可配 `AvatarMask`、additive 标记和权重。graph 读 descriptor，不读 `ScriptableObject`，运行时测试不需要资产。
+## 5. 层
 
 ```csharp
 [SerializeField] private AnimationLayerProfile _profile;
@@ -122,13 +145,42 @@ AnimationLayerDescriptor[] descriptors = _profile != null
 var graph = new AnimationRuntimeGraph(_animator, descriptors);
 ```
 
-Layer 权重是相对值，由顶层 mixer 归一化。Layer 内 playback 权重也是相对值，由 layer mixer 归一化。profile 里权重 0 表示"未设置"，投影为 1；运行时要静音一个 Layer，用 `SetLayerWeight(0)`。
+Descriptor 携带 `AvatarMask`、`Additive`、`Weight`、`Capacity`、`ApplyFootIK` 与 `ApplyPlayableIK`。层权重由顶层 mixer 归一化，playback 权重在层内归一化。Profile 权重为 0 表示未设置，投影为 1；`SetLayerWeight(0)` 用于运行时静音。
 
-容量是预算。超出容量的请求会增加 `DroppedPlaybacks`，开发构建里报一次警告。
+```csharp
+graph.SetLayerWeight(0, 0.8f);
+graph.SetLayerWeight(0, 1f, new AnimationFade(0.25f, 1f, transitionTime));
+```
 
-## Blend
+超出容量的请求会累加 `DroppedPlaybacks`，并在开发构建中报告一次警告。
 
-`LinearBlendNode` 把一个参数映射到多个阈值。`DirectionalBlendNode` 把方向与幅度映射到多个角度。两者在 graph 内自建 mixer，通过 `SetLayerSource` 接入。
+## 6. Playback
+
+| 字段 | 含义 |
+| --- | --- |
+| `InstanceId` | 所有者标识。 |
+| `PlaybackChannel` | 竞争组；不同 channel 的 playback 互不竞争。 |
+| `ClipChannel` | 同一 key 下重叠变体的子通道。 |
+| `Layer` | 层索引。 |
+| `LocalTime` | `External` 下为绝对 clip-local 秒数，`TickDriven` 下为起始偏移。 |
+| `Weight` | 请求权重。 |
+| `Speed`、`Loop` | `TickDriven` 的折叠参数。 |
+| `HoldLastFrame` | 把姿势固定在 clip 末尾。 |
+
+```csharp
+AnimationPlaybackHandle handle = graph.BeginPlayback(
+    new AnimationClipRequest(1, 0, 0, _clip, 0d, 1f));
+
+graph.UpdatePlayback(new AnimationClipRequest(1, 0, 0, _clip, 0.4d, 1f));
+graph.SeekPlayback(new AnimationPlaybackKey(1, 0, 0), 0.2d);
+bool alive = graph.IsPlaybackAlive(handle);
+
+graph.EndPlayback(new AnimationPlaybackKey(1, 0, 0));
+```
+
+对已有 key 再次 `BeginPlayback` 会原位替换 playback。槽位复用会递增 32 位 generation，旧句柄无法通过 `IsPlaybackAlive`。`BeginPlayback`、`UpdatePlayback`、`EndPlayback` 只标记状态，native 写入发生在 `Commit`。
+
+## 7. Blend
 
 ```csharp
 LinearBlendNode gait = LinearBlendNode.Create(
@@ -136,118 +188,292 @@ LinearBlendNode gait = LinearBlendNode.Create(
     new[] { idle, walk, run },
     new[] { 0f, 0.5f, 1f },
     BlendTimeMode.Normalized);
-
 graph.SetLayerSource(0, gait.Playable);
-
 gait.SetParameter(speed01);
 gait.SetTime(phase01);
+graph.SetLayerSourceWeight(0, 0.9f);
 ```
 
-`BlendTimeMode.Normalized` 让每个子 clip 采样同一相位，长度不同时脚不会滑。`Absolute` 让每个子 clip 采样同一秒数。零权重子节点在八次更新后断开，计数在 `SetTime` 与 `Apply` 两条路径都会推进。
+`BlendTimeMode.Normalized` 让每个子节点采样同一相位，`Absolute` 采样相同秒数。`DirectionalBlendNode` 接收角度（度）与可选的中心索引。
 
-## Fade 与 ExitTime
-
-`AnimationFade` 让一个 playback 从当前权重过渡到目标权重。
+## 8. Fade、exit time 与 clip 事件
 
 ```csharp
-graph.BeginPlayback(request, new AnimationFade(0.2f, 1f, AnimationFadeEasing.SmoothStep));
-graph.FadePlayback(key, new AnimationFade(0.15f, 0f));
-graph.EndPlayback(key, new AnimationFade(0.1f, 0f));
+graph.BeginPlayback(request, new AnimationFade(0.2f, 1f, transitionTime, AnimationFadeEasing.SmoothStep));
+graph.FadePlayback(key, new AnimationFade(0.15f, 0f, transitionTime));
+graph.EndPlayback(key, new AnimationFade(0.1f, 0f, transitionTime));
+
+graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.Once));
 
 graph.TransitionCompleted += (handle, reason) =>
 {
-    if (reason == AnimationTransitionReason.FadeCompleted)
-    {
-        // 复用槽位，或开始下一个 clip。
-    }
+    if (reason == AnimationTransitionReason.FadeCompleted) { /* next clip */ }
 };
 ```
 
-新 playback 带 fade 时从 0 开始。同 key 替换时从当前权重开始。时长为 0 立即应用目标，不发完成事件。fade 激活期间由它拥有权重；`UpdatePlayback` 的权重修改会被忽略，开发构建提示一次。`EndPlayback` 带 fade 时，斜坡完成后的下一次 commit 释放槽位。`StopAll` 和 `Dispose` 取消 fade，不发事件。
-
-`AnimationExitTime` 是 clip 上的归一化时间点，通过 `TransitionCompleted` 以 `ExitTime` 报告，不会停止 playback。
-
-```csharp
-graph.SetExitTime(key, new AnimationExitTime(0.5f, AnimationExitMode.Once));
-```
-
-`Once` 首次越过目标时触发，回退到目标之前会重新武装。`EveryCrossing` 每次越过目标都触发，包括循环绕回和 PingPong 反向段。
-
-## Clip 事件
-
-clip 事件来自 `AnimationClip.events`。首次使用某个 clip 时转换成排序数组并缓存，事件交给 graph 上的单一 sink。
+`AnimationFade.AbsoluteStartTime` 是必填参数。进度为 `(TransitionTime - AbsoluteStartTime) / Duration`，因此 fade 是 tick 时钟的纯函数。`AnimationExitMode.Once` 在首次穿越时触发；`EveryCrossing` 在循环回绕与 ping-pong 反向段也会触发。
 
 ```csharp
 public sealed class FootstepSink : IAnimationClipEventSink
 {
     public void OnClipEvent(in AnimationPlaybackHandle handle, in AnimationClipEvent clipEvent)
     {
-        if (clipEvent.FunctionName == "Footstep")
-        {
-            PlayFootstep(clipEvent.StringParameter);
-        }
+        if (clipEvent.FunctionName == "Footstep") { /* play audio */ }
     }
 }
 
 graph.SetClipEventSink(new FootstepSink());
 ```
 
-扫描区间是半开的 `(previous, current]`。首次 commit 用 `[0, current]`，所以 0 处的标记会触发。循环绕回拆成 `(previous, 1]` 与 `[0, current]`。回退 seek 抑制事件。跨越超过一个 clip 时，该次 commit 里每个标记各触发一次。
+Clip 事件来自 `AnimationClip.events`，首次使用时转换为排序数组。扫描区间为半开 `(previous, current]`，首次 commit 使用 `[0, current]`。循环回绕拆为 `(previous, 1]` 与 `[0, current]`。向后跳转抑制事件。单次 commit 内的派发顺序为 clip 事件、exit time、fade 完成。
 
-一次 commit 内的顺序是 clip 事件、exit time、fade 完成。时间轴接管事件时设 `DispatchClipEvents = false`。派发开启且 `Animator.fireEvents` 为 true 时，Unity 会再触发一次同一个标记，构图阶段会报一次。
+| 预算 | 默认值 | 作用 |
+| --- | --- | --- |
+| `MaxSweepLegs` | 64 | 单次事件或 exit-time 扫描可走的段数上限。 |
+| `MaxPendingClipEventsPerCommit` | 4096 | 单次 commit 派发的 marker 上限；溢出累加 `DroppedClipEvents`。 |
+| `InitialClipEventQueueCapacity` | 32 | 队列首次分配大小。 |
+| `SteadyClipEventQueueCapacity` | 512 | 排空后保留的容量。 |
 
-## RootMotion
+宿主自行派发事件时设置 `DispatchClipEvents = false`。开启派发且 `Animator.fireEvents` 为真时，Unity 会再次触发同一 marker；graph 构造时报告一次。
 
-一个 Playable 输出只产生一个 root delta，所以 RootMotion 在绑定层决定。`RootMotionOwnership.External` 把 `Animator.deltaPosition` 留给移动组件。`Backend` 把过滤后的 delta 通过 `RootMotionApplied` 转发。`Disabled` 忽略。
+## 9. 确定性与回滚
+
+```mermaid
+flowchart LR
+    A[记录 tick 序列] --> B[首次执行：pose hash]
+    B --> C[回滚]
+    C --> D[ResetToTick]
+    D --> E[SuppressEvents 重放]
+    E --> F[比对 pose hash]
+```
+
+```csharp
+// 从干净状态开始重放；playback 与 playable 保留。
+graph.ResetToTick(new AnimationTick(t0, t0, 0L, AnimationTimeSource.Replay));
+
+for (int step = 0; step < recorded.Length; step++)
+{
+    graph.UpdatePlayback(recorded[step].Request);
+    graph.Commit(new AnimationTick(
+        recorded[step].ClipTime, recorded[step].TransitionTime, step,
+        AnimationTimeSource.Replay, false, suppressEvents: true));
+}
+
+ulong hash = graph.ComputePoseHash();
+```
+
+`ResetToTick` 清除过渡锚点、exit 游标、事件窗口与排队事件。`SuppressEvents` 的 commit 仍推进姿势与权重，但不派发任何事件。`ComputePoseHash` 返回 live 层与 playback 状态的 FNV-1a 哈希，零分配。动画状态不进入 gameplay 快照；宿主快照输入并重新求值姿势。
+
+## 10. 帧生命周期与渲染顺序
+
+### 10.1 已文档化的顺序
+
+```mermaid
+flowchart TD
+    A["FixedUpdate：每帧 0..N 次"] --> B["物理模拟"]
+    B --> C["Update"]
+    C --> D["LateUpdate"]
+    D --> E["Camera / Cinemachine Brain"]
+    E --> F["Render"]
+```
+
+来源：Unity 手册「Event function execution order」（2022.3 与 Unity 6）。`FixedUpdate` 与物理模拟先于 `Update`，`Update` 先于 `LateUpdate`，`LateUpdate` 先于渲染。`OnAnimatorMove` 与 `OnAnimatorIK` 在内部动画更新阶段执行。手册未指定该阶段相对 `LateUpdate` 的位置。`Animator.updateMode` 决定动画更新所属相位。
+
+| 阶段 | 工作内容 | 本包 |
+| --- | --- | --- |
+| `FixedUpdate` | 物理步玩法，每帧 0..N 次 | 相位为 `FixedUpdate` 时每步一次 `Commit` |
+| 物理模拟 | Rigidbody / CharacterController 解算 | 不写 transform；宿主消费 root delta |
+| `Update` | 逐帧玩法 | 相位为 `Update` 时 `Commit` |
+| 内部动画更新（手册未指定相对位置） | Animator、`OnAnimatorMove`、`OnAnimatorIK` | 转发 root delta 与 IK pass |
+| `LateUpdate` | 相机、最终脚本写入 | 相位为 `LateUpdate` 时 `Commit` |
+| Camera / Brain | Cinemachine follow 与 aim | 宿主配置 |
+| Render | 显示已采样的姿势 | 消费方 |
+
+### 10.2 Commit 相位与姿势年龄
+
+| `AnimationCommitPhase` | 需要的 `Animator.updateMode` | commit 次数 | 消费方 | 姿势年龄 |
+| --- | --- | --- | --- | --- |
+| `Update` | `Normal` | 每帧一次 | `LateUpdate` 中的相机 | 0 帧 |
+| `LateUpdate` | `Normal` | 每帧一次 | 本组件之后的相机 | Brain 确实在之后运行时为 0 帧 |
+| `FixedUpdate` | `AnimatePhysics` | 每个物理步一次 | `LateUpdate` 中的相机 | 0–1 个物理步，需要插值 |
+
+组件使用 `[DefaultExecutionOrder(-100)]`。`FixedUpdate` 模式下每个物理步恰好 commit 一次，commit-rate LOD 与可见性跳过会被忽略并在开发构建中报告。某帧没有物理步时，不 commit、不产生 root delta。某帧有两个或更多物理步时，每步各 commit 一次，宿主必须累加 delta 而不是覆盖。`StepIndex` 抑制同一相位内的重复 commit。
+
+开发构建中，相位与 `Animator.updateMode` 不一致时 `Initialize` 报告错误。
+
+### 10.3 FK、IK 与 root motion
+
+| 特性 | 执行位置 | 结果 |
+| --- | --- | --- |
+| FK：clip 采样与层混合 | `Commit` 内的 `PlayableGraph.Evaluate(0f)` | 在 commit 相位解算，不在内部动画更新阶段 |
+| 通过 `AnimationScriptPlayable` 的 IK | `Commit` 内的图求值 | 相位明确；用 `SetLayerSource` 接入 |
+| 通过 `OnAnimatorIK` 的 IK | Unity 内部动画更新 | 转发给 `IAnimationIKPass`；相对 `LateUpdate` 的位置不是契约 |
+| root motion | `OnAnimatorMove`，内部动画更新阶段 | `Backend` 转发一次 `Animator.deltaPosition` 与 `deltaRotation` |
+
+| `RootMotionOwnership` | 行为 |
+| --- | --- |
+| `External` | `Animator.deltaPosition` 交给移动组件。 |
+| `Backend` | `OnAnimatorMove` 通过 `RootMotionApplied` 转发过滤后的 delta。 |
+| `Disabled` | 忽略 root motion。 |
 
 ```csharp
 behaviour.RootMotionApplied += (delta, rotation) => controller.ApplyRootMotion(delta, rotation);
+behaviour.SetIKPass(new CharacterIKPass());   // 转发 OnAnimatorIK(int layerIndex)
 ```
 
-`Backend` 要求 Animator 与 `AnimationRuntimeBehaviour` 在同一个 GameObject。子物体 Animator 会被检测并以错误拒绝。`IsRootMotionActive` 表示转发是否生效。
+`Backend` 要求 Animator 与组件在同一 GameObject。运行时不写角色 `Transform`。`FixedUpdate` 模式下 root delta 必须在物理步内消费；在 `Update` 或 `LateUpdate` 消费会破坏固定步长比例，导致位移错误。
 
-## 生命周期
+### 10.4 相机与物理规则
+
+1. `CinemachineBrain.UpdateMethod` 与模型一致：`FixedUpdate` commit 用 `FixedUpdate`，`Update` 或 `LateUpdate` commit 用 `LateUpdate`。`SmartUpdate` 需要在目标配置上验证其选择。
+2. `FixedUpdate` 模式启用 `Rigidbody.interpolation`；Brain 使用 `FixedUpdate` 而不开插值会产生台阶式抖动。
+3. 相机跟随 root transform，不跟随骨骼。commit 之前读骨骼会拿到上一拍的姿势。
+4. 开启插值时不要用 `Rigidbody.position` 驱动相机；那是原始物理位置，不是渲染位置。
+5. 玩法 hitbox 从物理步内求值的事件生成；渲染期的 clip 事件查询的是过期的物理场景。
+6. 只由一个移动组件消费 root motion。同一 Animator 上两个 `OnAnimatorMove` 处理器会把 delta 应用两次。
+
+### 10.5 保证与验证
+
+| 本包保证 | 宿主职责 |
+| --- | --- |
+| 每个选定相位一次 commit，`FixedUpdate` 下每个物理步一次 | `Animator.updateMode` 与 commit 相位一致 |
+| `StepIndex` 抑制重复 commit | `CinemachineBrain.UpdateMethod` 与模型一致 |
+| 初始化时断言 `Animator.updateMode`；`FixedUpdate` 拒绝 rate LOD | Rigidbody 插值、相机顺序与执行顺序 |
+| 不写 `Transform`；root delta 只转发一次 | 多物理步时累加 delta |
+| `PhaseOrderMask` 在开发构建中记录出现过的相位 | 在目标设备上核实内部动画更新的位置 |
+
+`PhaseOrderMask` 是当前渲染帧内出现过的相位位掩码。宿主可在目标设备上把掩码与配置的模型比对。非开发构建中该掩码为 0。
 
 ```csharp
-// 池化 actor 换模型。冲突时返回 false，当前绑定保持不变。
-if (behaviour.TryRebind(newAnimator))
-{
-    // 旧 graph 的 handle 已失效。
-}
-
-// 结束 playback，销毁 graph，释放 Animator 归属。
-graph.Dispose();
+int mask = behaviour.PhaseOrderMask;
+bool sawPhysicsCommit = (mask & (int)AnimationRuntimePhase.FixedUpdate) != 0
+    && (mask & (int)AnimationRuntimePhase.Commit) != 0;
+bool sawIKPass = (mask & (int)AnimationRuntimePhase.AnimatorIK) != 0;
 ```
 
-同一 Animator 上的第二个 graph 会抛异常，消息含 Animator 名。Rebind 到已被占用的 Animator 返回 false。构造期间异常会释放归属。播放中 clip 被销毁时，开发看门狗终止 playback，并报告 instance 与 channel。缺少 Animator 时组件自动禁用，找到后 `Initialize` 会重新启用。
+`AnimationRuntimePhase` 包含 `Update`、`LateUpdate`、`FixedUpdate`、`Commit`、`AnimatorMove`、`AnimatorIK`。
 
-`Animator` 字段为空且组件下面有多个 Animator 时，使用层级顺序里的第一个。Editor 和开发构建会记录一条警告；发布构建仍走单次查找。角色有多套 rig 时，显式赋值。
+## 11. Unity 特性覆盖面
 
-## 诊断
+| 特性 | API |
+| --- | --- |
+| 层 mixer、mask、additive 层 | 固定拓扑，`AnimationLayerDescriptor` |
+| 池化 clip playable | `AnimationClipPlayable`，ping-pong 槽位缓存 |
+| 脚部 IK / Playable IK | `AnimationClipPlayable.SetApplyFootIK`、`SetApplyPlayableIK` |
+| 手动求值 | `DirectorUpdateMode.Manual`、`Evaluate(0f)` |
+| Animation C# Jobs | `CreateJobPlayable<TJob>` |
+| IK pass | `IAnimationIKPass`、`OnAnimatorIK` |
+| 层权重 ramp | `SetLayerWeight(int, float, in AnimationFade)` |
+| 宿主源槽位 | `SetLayerSource`、`SetLayerSourceWeight`、`ClearLayerSource` |
+
+```csharp
+using UnityEngine.Animations;
+
+public struct LookAtJob : IAnimationJob
+{
+    public void ProcessRootMotion(AnimationStream stream) { }
+    public void ProcessAnimation(AnimationStream stream) { }
+}
+
+AnimationScriptPlayable job = graph.CreateJobPlayable(new LookAtJob(), 1);
+graph.SetLayerSource(0, job);
+```
+
+job 数据与节点生命周期由宿主拥有，在 `ClearLayerSource` 之前自行释放。`IAnimationJob` 的签名以当前 Unity 版本为准。
+
+## 12. 诊断
 
 ```csharp
 AnimationRuntimeStats stats = graph.GetStats();
-// ActivePlaybacks, PeakPlaybacks, DroppedPlaybacks, RecreatedPlayables, ReusedPlayables,
-// Commits, Evaluations, NativeWrites, TimePolicy.
+// ActivePlaybacks, PeakPlaybacks, LayerCount, PlayableCount, DroppedPlaybacks,
+// RecreatedPlayables, ReusedPlayables, Commits, Evaluations, NativeWrites, TimePolicy.
 
 var buffer = new AnimationPlaybackSnapshot[8];
 int count = graph.CopyPlaybackSnapshots(0, buffer);
+
+long droppedTotal = graph.DroppedClipEvents;
+long droppedOnLayer0 = graph.GetDroppedClipEvents(0);
 ```
 
-`IAnimationDiagnostics` 控制消息是否格式化。`LoggingAnimationDiagnostics` 适配 `CycloneGames.Logging`。Inspector 每秒刷新四次，读的是同一套快照 API。
+`IAnimationDiagnostics` 控制消息格式化，`LoggingAnimationDiagnostics` 适配 `CycloneGames.Logging`。
 
-## 扩展
+### Inspector 运行时面板
 
-宿主在播放前解析 clip 引用，运行时不加载资产。
+进入 Play Mode 且图初始化后，展开 `Runtime` 分组。面板以 4 Hz 读取 `GetStats` 与 `CopyPlaybackSnapshots`，字符串只在这次刷新里重建。
 
-```csharp
-public sealed class ProjectClipResolver : IAnimationClipResolver
-{
-    public bool TryResolve(in AnimationClipReference reference, out AnimationClip clip)
-    {
-        return _map.TryGetValue(reference.Location, out clip);
-    }
-}
+| 卡片 | 数值 | 判读 |
+| --- | --- | --- |
+| `Layers` | 图的实际层数 | 与 Profile 不一致：Profile 没生效，正在用默认层 |
+| `Playables` | 存活的 Playable 节点数 | 只增不减：有 playable 没有销毁 |
+| `Playbacks` | 活跃 / 峰值 | 峰值接近容量：需要提高层容量 |
+| `Dropped` | 因容量不足被拒绝的 `BeginPlayback` 次数 | 大于 0：层的容量小于请求模式 |
+| `Eval` | `求值次数 / commit 次数` | `0 / 24`：没有脏数据，每次 commit 都早退；`24 / 24`：每次 commit 都求值 |
+| `Reuse` | playable 复用率 | 有活跃 playback 却为 0：每次请求都在重建 playable |
+
+`Pose` 是当前姿态的 FNV-1a 哈希，以及距上次刷新是否变化。有 clip 在播时持续 `stable`，说明 commit 没有作用到图上。哈希按 4 Hz 采样，不是逐帧。
+
+`Phase` 列出当前帧执行过的回调：`FixedUpdate`、`Update`、`AnimatorMove`、`AnimatorIK`、`LateUpdate`、`Commit`。绿色表示该回调执行过。`Commit@Late` 表示 commit 在 `LateUpdate` 内执行，由 `CommitPhase` 决定，后缀随配置变化。该掩码只在开发构建写入，发布包中恒为 0。
+
+| 层元素 | 含义 |
+| --- | --- |
+| 权重条 | 当前层权重 |
+| `活跃 / 容量` | 该层的活跃 playback 数与容量 |
+| `drop N` | 该层丢弃的 clip 事件数 |
+| `external` | 该层由宿主 `Playable` 驱动，不列出 playback 行 |
+| playback 行 | `#实例 ch通道 clip通道 t 时间 w 权重`，未连接时带 `pending` |
+| 时间条 | 该 playback 的 `Time / Length` |
+
+常见故障的判读顺序：
+
+| 现象 | 检查 |
+| --- | --- |
+| 看不到动作 | `Playbacks` 为 0、playback 行的 `t` 不变，或 `Pose` 一直 `stable` |
+| 请求被拒 | `Dropped` 大于 0，或 `活跃 / 容量` 已满 |
+| playable 泄漏 | `Playables` 持续增长且不回落 |
+| 每次请求都重建 | 有活跃 playback 时 `Reuse` 仍为 0 |
+| commit 没有执行 | `Eval` 为 `0 / N` 且 `Commit` 未亮 |
+| IK 晚一帧 | `Commit@Late` 且 `AnimatorIK` 已触发；注册 IK pass 时校验会给出提示 |
+| clip 事件丢失 | 层内的 `drop N`，或 `Phase` 下方的 `clip events dropped` |
+
+`Log Diagnostics` 只控制 Console 消息。面板直接读取图，关闭诊断后仍然可用。
+
+## 13. 性能契约
+
+`Commit` 通过每层 8 位占用掩码只遍历活跃 slot，成本与活跃 playback 数成正比。派发队列在首个 marker 之前为空，单次 commit 有上限，排空后收缩。transition 事件按 `(layer, slot)` 索引，每种 reason 占一个 bit。
+
+`Playback` 为 64 字节。native 写入有 epsilon 门控，无脏数据时跳过 graph 求值，稳态 `Commit` 零分配。所有预算集中在 `AnimationRuntimeLimits` 的 `static readonly` 字段。
+
+`AnimationRuntimeBehaviour` 的 `UpdateRateHz` 与 `PauseWhenInvisible` 为大规模人群跳过 commit。每个 actor 仍各自持有一个 `PlayableGraph` 与 Animator 绑定。
+
+## 14. 扩展点
+
+| 接缝 | 契约 |
+| --- | --- |
+| `IAnimationClipResolver` | 播放前把 `AnimationClipReference.Location` 解析为 clip。 |
+| `IAnimationDiagnostics` | 门控并转发诊断消息。 |
+| `IAnimationClipEventSink` | 接收 clip marker，每个 graph 一个。 |
+| `IAnimationIKPass` | 接收 Unity IK pass。 |
+| `SetLayerSource` | 接入同一 `PlayableGraph` 内宿主自有的 `Playable`。 |
+
+`PlayableGraph` 对外暴露用于创建宿主节点，拓扑视为只读。
+
+## 15. 构建与测试
+
+```mermaid
+flowchart LR
+    Core[CycloneGames.AnimationRuntime.Core] --> Runtime[CycloneGames.AnimationRuntime]
+    Logging[CycloneGames.Logging.Core] --> Runtime
+    Core --> Editor[CycloneGames.AnimationRuntime.Editor]
+    Runtime --> Editor
+    Logging --> Editor
+    Runtime --> Tests[Tests.Editor / Tests.PlayMode / Tests.Evidence]
 ```
 
-自定义 blend 节点必须位于同一个 `PlayableGraph`，通过 `SetLayerSource` 接入。Layer 只有一个源槽位，节点自己管理子节点。
+Core 程序集无引擎引用、无依赖；Runtime 与 Editor 引用 `CycloneGames.Logging.Core`。测试使用 NUnit 与 `optionalUnityReferences: ["TestAssemblies"]`。
+
+| 命令 | 用途 |
+| --- | --- |
+| `dotnet build UnityCompileCheck.csproj -c Release` | 用 Unity 2022.3 托管 DLL 编译 Core、Runtime 与 Editor。 |
+| `dotnet build UnityTestsCompileCheck.csproj -c Release` | 同时编译测试程序集。 |
+| `dotnet test CycloneGames.Analyzers.Tests -c Release` | 运行 analyzer 规则。 |
+| `dotnet bin/Release/net8.0/AnimationRuntimeAudit_fixed.dll` | 运行引擎无关验证程序。 |

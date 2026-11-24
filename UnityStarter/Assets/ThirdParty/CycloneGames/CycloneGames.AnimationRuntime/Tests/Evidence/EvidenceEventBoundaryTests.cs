@@ -21,7 +21,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
         private static AnimationTick Tick(long step)
         {
-            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update, false, 0.016f);
+            return new AnimationTick(step * 0.016d, step, AnimationTimeSource.Update);
         }
 
         private AnimationClip ClipWith(string name, float length, params AnimationEvent[] events)
