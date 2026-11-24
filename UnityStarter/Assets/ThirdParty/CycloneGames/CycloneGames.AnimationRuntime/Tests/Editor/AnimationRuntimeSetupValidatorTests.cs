@@ -97,7 +97,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         [Test]
         public void AnimatePhysicsOutsideFixedUpdate_IsAFrameWarning()
         {
-            Animator animator = CreateAnimator(false, AnimatorUpdateMode.AnimatePhysics);
+            Animator animator = CreateAnimator(false, AnimatorUpdateModeCompat.FixedMode);
 
             int count = Validate(animator, true, AnimationCommitPhase.LateUpdate, RootMotionOwnership.External);
 
@@ -177,7 +177,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         [Test]
         public void ValidSetup_ProducesNoFindings()
         {
-            Animator animator = CreateAnimator(false, AnimatorUpdateMode.AnimatePhysics);
+            Animator animator = CreateAnimator(false, AnimatorUpdateModeCompat.FixedMode);
 
             int count = Validate(
                 animator, true, AnimationCommitPhase.FixedUpdate, RootMotionOwnership.Backend,
@@ -189,7 +189,7 @@ namespace CycloneGames.AnimationRuntime.Tests
         [Test]
         public void FindingsStopAtTheBufferCapacity()
         {
-            Animator animator = CreateAnimator(true, AnimatorUpdateMode.AnimatePhysics);
+            Animator animator = CreateAnimator(true, AnimatorUpdateModeCompat.FixedMode);
             var small = new AnimationSetupFinding[1];
 
             int count = AnimationRuntimeSetupValidator.Validate(
