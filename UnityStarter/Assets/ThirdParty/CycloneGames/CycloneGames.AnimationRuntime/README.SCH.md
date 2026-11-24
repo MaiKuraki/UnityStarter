@@ -395,7 +395,47 @@ long droppedTotal = graph.DroppedClipEvents;
 long droppedOnLayer0 = graph.GetDroppedClipEvents(0);
 ```
 
-`IAnimationDiagnostics` 控制消息格式化，`LoggingAnimationDiagnostics` 适配 `CycloneGames.Logging`。Inspector 每秒刷新四次，读取同一套快照 API，显示层权重、逐 playback 状态、pose hash、丢弃的 marker 与相位掩码。
+`IAnimationDiagnostics` 控制消息格式化，`LoggingAnimationDiagnostics` 适配 `CycloneGames.Logging`。
+
+### Inspector 运行时面板
+
+进入 Play Mode 且图初始化后，展开 `Runtime` 分组。面板以 4 Hz 读取 `GetStats` 与 `CopyPlaybackSnapshots`，字符串只在这次刷新里重建。
+
+| 卡片 | 数值 | 判读 |
+| --- | --- | --- |
+| `Layers` | 图的实际层数 | 与 Profile 不一致：Profile 没生效，正在用默认层 |
+| `Playables` | 存活的 Playable 节点数 | 只增不减：有 playable 没有销毁 |
+| `Playbacks` | 活跃 / 峰值 | 峰值接近容量：需要提高层容量 |
+| `Dropped` | 因容量不足被拒绝的 `BeginPlayback` 次数 | 大于 0：层的容量小于请求模式 |
+| `Eval` | `求值次数 / commit 次数` | `0 / 24`：没有脏数据，每次 commit 都早退；`24 / 24`：每次 commit 都求值 |
+| `Reuse` | playable 复用率 | 有活跃 playback 却为 0：每次请求都在重建 playable |
+
+`Pose` 是当前姿态的 FNV-1a 哈希，以及距上次刷新是否变化。有 clip 在播时持续 `stable`，说明 commit 没有作用到图上。哈希按 4 Hz 采样，不是逐帧。
+
+`Phase` 列出当前帧执行过的回调：`FixedUpdate`、`Update`、`AnimatorMove`、`AnimatorIK`、`LateUpdate`、`Commit`。绿色表示该回调执行过。`Commit@Late` 表示 commit 在 `LateUpdate` 内执行，由 `CommitPhase` 决定，后缀随配置变化。该掩码只在开发构建写入，发布包中恒为 0。
+
+| 层元素 | 含义 |
+| --- | --- |
+| 权重条 | 当前层权重 |
+| `活跃 / 容量` | 该层的活跃 playback 数与容量 |
+| `drop N` | 该层丢弃的 clip 事件数 |
+| `external` | 该层由宿主 `Playable` 驱动，不列出 playback 行 |
+| playback 行 | `#实例 ch通道 clip通道 t 时间 w 权重`，未连接时带 `pending` |
+| 时间条 | 该 playback 的 `Time / Length` |
+
+常见故障的判读顺序：
+
+| 现象 | 检查 |
+| --- | --- |
+| 看不到动作 | `Playbacks` 为 0、playback 行的 `t` 不变，或 `Pose` 一直 `stable` |
+| 请求被拒 | `Dropped` 大于 0，或 `活跃 / 容量` 已满 |
+| playable 泄漏 | `Playables` 持续增长且不回落 |
+| 每次请求都重建 | 有活跃 playback 时 `Reuse` 仍为 0 |
+| commit 没有执行 | `Eval` 为 `0 / N` 且 `Commit` 未亮 |
+| IK 晚一帧 | `Commit@Late` 且 `AnimatorIK` 已触发；注册 IK pass 时校验会给出提示 |
+| clip 事件丢失 | 层内的 `drop N`，或 `Phase` 下方的 `clip events dropped` |
+
+`Log Diagnostics` 只控制 Console 消息。面板直接读取图，关闭诊断后仍然可用。
 
 ## 13. 性能契约
 

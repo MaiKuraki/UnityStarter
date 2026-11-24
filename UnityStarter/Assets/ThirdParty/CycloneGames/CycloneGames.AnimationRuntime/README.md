@@ -395,7 +395,47 @@ long droppedTotal = graph.DroppedClipEvents;
 long droppedOnLayer0 = graph.GetDroppedClipEvents(0);
 ```
 
-`IAnimationDiagnostics` gates message formatting; `LoggingAnimationDiagnostics` adapts it to `CycloneGames.Logging`. The Inspector refreshes four times per second and reads the same snapshot API. It shows layer weights, per-playback state, pose hash, dropped markers and the phase mask.
+`IAnimationDiagnostics` gates message formatting; `LoggingAnimationDiagnostics` adapts it to `CycloneGames.Logging`.
+
+### Inspector runtime panel
+
+Open the Runtime foldout in Play Mode after the graph initializes. The panel reads `GetStats` and `CopyPlaybackSnapshots` at 4 Hz. Strings are rebuilt during that refresh only.
+
+| Card | Value | Meaning |
+| --- | --- | --- |
+| `Layers` | graph layer count | differs from the profile: the profile did not apply, the default layer is in use |
+| `Playables` | live Playable node count | grows without falling: a playable is not being destroyed |
+| `Playbacks` | active / peak | peak close to capacity: raise the layer capacity |
+| `Dropped` | `BeginPlayback` calls rejected for capacity | above zero: the layer is too small for the request pattern |
+| `Eval` | `Evaluations / Commits` | `0 / 24`: no dirty data, every commit returned early; `24 / 24`: the graph evaluates on every commit |
+| `Reuse` | pooled playable reuse | zero while playbacks are active: playables are rebuilt per request |
+
+`Pose` is the FNV-1a hash of the current pose, plus whether it changed since the last refresh. `stable` while a clip is playing means the commit is not reaching the graph. The hash is sampled at 4 Hz, not per frame.
+
+`Phase` lists the callbacks that ran in the current frame: `FixedUpdate`, `Update`, `AnimatorMove`, `AnimatorIK`, `LateUpdate`, `Commit`. Green means the callback ran. `Commit@Late` means the commit runs inside `LateUpdate`, set by `CommitPhase`; the suffix follows the configured phase. The mask is written in development builds only and stays zero in a release player.
+
+| Layer element | Meaning |
+| --- | --- |
+| weight bar | current layer weight |
+| `active / capacity` | live playbacks against the layer capacity |
+| `drop N` | clip events discarded on this layer |
+| `external` | the layer is driven by a host `Playable`; no playback rows are listed |
+| playback row | `#instance chX clipY t time w weight`, with `pending` when the playable is not connected |
+| time bar | `Time / Length` of that playback |
+
+Readings for common faults:
+
+| Symptom | Check |
+| --- | --- |
+| no visible motion | `Playbacks` is zero, playback `t` does not change, or `Pose` stays `stable` |
+| requests rejected | `Dropped` above zero, or `active / capacity` at the limit |
+| playable leak | `Playables` grows and never falls |
+| rebuild per request | `Reuse` stays at zero with active playbacks |
+| commit not running | `Eval` is `0 / N` and the `Commit` chip is not green |
+| IK one frame late | `Commit@Late` with `AnimatorIK` active; the setup validator warns when an IK pass is registered |
+| lost clip events | `drop N` on the layer, or `clip events dropped` under `Phase` |
+
+`Log Diagnostics` only gates Console messages. The panel reads the graph directly and works with diagnostics disabled.
 
 ## 13. Performance contract
 

@@ -143,7 +143,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
             Assert.AreEqual(12, handle);
             Assert.AreEqual(64, playback, "Playback must remain one cache line");
-            Assert.LessOrEqual(perSlot, 176, "per-slot cold+hot footprint guard (event cache adds one reference)");
+            Assert.LessOrEqual(perSlot, 192, "per-slot cold+hot footprint guard (clock now carries StartTick)");
         }
 
         [Test]

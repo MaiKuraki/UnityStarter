@@ -57,19 +57,16 @@ namespace CycloneGames.AnimationRuntime
     [AddComponentMenu("CycloneGames/Animation/Animation Runtime")]
     public sealed class AnimationRuntimeBehaviour : MonoBehaviour
     {
-        [Header("Binding")]
         [Tooltip("Animator sampled by the runtime graph. Falls back to a child Animator when empty. Backend root motion requires the Animator on this same GameObject.")]
         [SerializeField] private Animator _animator;
 
         [Tooltip("Layer stack for this character archetype. Empty falls back to one full-body layer with four slots.")]
         [SerializeField] private AnimationLayerProfile _profile;
 
-        [Header("Time")]
         [Tooltip("External: the host supplies absolute clip time through UpdatePlayback. TickDriven: this component advances clips from its own clock.")]
         [SerializeField] private AnimationTimePolicy _timePolicy = AnimationTimePolicy.External;
 
-        [Header("Frame Model")]
-        [Tooltip("Phase in which the graph is committed. FixedUpdate is required when a movement component consumes root motion per physics step.")]
+        [Tooltip("Phase in which the graph is committed. FixedUpdate is required when a movement component consumes root motion per physics step. LateUpdate commits after OnAnimatorIK, so an IK pass sees the previous pose.")]
         [SerializeField] private AnimationCommitPhase _commitPhase = AnimationCommitPhase.LateUpdate;
 
         [Tooltip("Who applies root motion. External keeps an existing movement component in charge.")]
@@ -82,7 +79,6 @@ namespace CycloneGames.AnimationRuntime
         [Min(0f)]
         [SerializeField] private float _rootMotionScale = 1f;
 
-        [Header("Lifecycle")]
         [Tooltip("Initialize on Awake. Disable to call Initialize from a composition root.")]
         [SerializeField] private bool _initializeOnAwake = true;
 
@@ -92,7 +88,6 @@ namespace CycloneGames.AnimationRuntime
         [Tooltip("Dispatch AnimationClip events. Disable when a timeline (Choreography) owns event dispatch.")]
         [SerializeField] private bool _dispatchClipEvents = true;
 
-        [Header("Scalability")]
         [Tooltip("Commit rate in Hz. 0 commits every frame/step. Lower rates skip commits but pass the full accumulated delta to the next one, so fades and tick-driven clocks stay correct.")]
         [Min(0f)]
         [SerializeField] private float _updateRateHz = 0f;
@@ -135,6 +130,9 @@ namespace CycloneGames.AnimationRuntime
         /// initialized. False means <see cref="RootMotionApplied"/> will never fire.
         /// </summary>
         public bool IsRootMotionActive => _rootMotionActive;
+
+        /// <summary>True when an IK pass is registered. Unity calls OnAnimatorIK before LateUpdate.</summary>
+        public bool HasIKPass => _ikPass != null;
 
         /// <summary>Registers the receiver for Unity's IK pass. Pass null to detach.</summary>
         public void SetIKPass(IAnimationIKPass pass)

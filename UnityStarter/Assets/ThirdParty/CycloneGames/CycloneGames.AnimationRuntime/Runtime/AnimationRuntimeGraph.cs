@@ -49,6 +49,10 @@ namespace CycloneGames.AnimationRuntime
         private struct PlaybackClock
         {
             public double StartLocalTime;
+
+            /// <summary>Tick the fold is anchored to; NaN until the first commit that sees the playback.</summary>
+            public double StartTick;
+
             public float Speed;
             public byte Loop;
         }
@@ -566,6 +570,7 @@ namespace CycloneGames.AnimationRuntime
 
             ref PlaybackClock clock = ref layer.Clocks[slot];
             clock.StartLocalTime = playback.Time;
+            clock.StartTick = double.NaN;
             clock.Speed = request.Speed;
             clock.Loop = (byte)request.Loop;
             layer.Transitions[slot].LastClipTime = -1f;
@@ -575,6 +580,7 @@ namespace CycloneGames.AnimationRuntime
             {
                 playback.Time = playback.Length;
                 clock.StartLocalTime = playback.Time;
+                clock.StartTick = double.NaN;
                 clock.Speed = 0f;
             }
 
@@ -695,6 +701,7 @@ namespace CycloneGames.AnimationRuntime
             playback.Time = ClampTime(localTime, playback.Length);
             layer.Transitions[slot].Seeked = 1;
             clock.StartLocalTime = playback.Time;
+            clock.StartTick = double.NaN;
             _dirty = true;
             return true;
         }
@@ -1115,6 +1122,18 @@ namespace CycloneGames.AnimationRuntime
                 if (clockDriven)
                 {
                     ref PlaybackClock clock = ref layer.Clocks[slot];
+
+                    // Anchor on the first commit that sees this playback, and re-anchor on a host
+                    // rewind so the pose stays where it is. Both make (tickTime - StartTick) zero.
+                    if (double.IsNaN(clock.StartTick) || backward)
+                    {
+                        clock.StartTick = tickTime;
+                        if (backward)
+                        {
+                            clock.StartLocalTime = playback.Time;
+                        }
+                    }
+
                     playback.Time = EvaluateClock(ref clock, playback.Length, tickTime, out unwrapped);
                 }
 
@@ -1195,7 +1214,7 @@ namespace CycloneGames.AnimationRuntime
             }
 
             if (!AnimationClockMath.TryUnwrapped(
-                    clock.StartLocalTime, 0d, tickTime, clock.Speed, out double computed))
+                    clock.StartLocalTime, clock.StartTick, tickTime, clock.Speed, out double computed))
             {
                 // Two finite inputs can still overflow when multiplied. Hold the last finite anchor.
                 unwrapped = AnimationClockMath.ClampFinite(clock.StartLocalTime, length);
@@ -2274,6 +2293,9 @@ namespace CycloneGames.AnimationRuntime
                     remaining &= (byte)(remaining - 1);
 
                     ref PlaybackTransition transition = ref layer.Transitions[slot];
+                    ref PlaybackClock clock = ref layer.Clocks[slot];
+                    clock.StartLocalTime = layer.Playbacks[slot].Time;
+                    clock.StartTick = tick.ClipTime;
                     transition.LastClipTime = -1d;
                     transition.LastUnwrapped = tick.ClipTime;
                     transition.Seeked = 0;

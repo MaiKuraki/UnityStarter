@@ -11,9 +11,9 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
     /// </summary>
     public sealed class EvidenceTransitionTests : EvidenceTestBase
     {
-        private static double _transitionClock;
+        private double _transitionClock;
 
-        private static AnimationTick TickWithDelta(long step, float delta)
+        private AnimationTick TickWithDelta(long step, float delta)
         {
             if (step == 0L) _transitionClock = 0d;
             _transitionClock += delta;
@@ -99,14 +99,14 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
                 graph.FadePlayback(
                     new AnimationPlaybackKey(1, 0, 0, 0),
-                    new AnimationFade(0.2f, 0.5f, 0d, AnimationFadeEasing.Linear));
+                    new AnimationFade(0.2f, 0.5f, _transitionClock, AnimationFadeEasing.Linear));
                 graph.Commit(TickWithDelta(1L, 0.1f));
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
                 Assert.AreEqual(0.75f, buffer[0].Weight, 1e-4f);
 
                 graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
-                    new AnimationFade(0.2f, 1f, 0d, AnimationFadeEasing.Linear));
+                    new AnimationFade(0.2f, 1f, _transitionClock, AnimationFadeEasing.Linear));
                 graph.Commit(TickWithDelta(2L, 0.1f));
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
                 Assert.AreEqual(0.875f, buffer[0].Weight, 1e-4f,
@@ -138,7 +138,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
 
                 graph.BeginPlayback(
                     new AnimationClipRequest(1, 0, 0, clip, 0d, 1f),
-                    new AnimationFade(0.1f, 1f, 0d, AnimationFadeEasing.Linear));
+                    new AnimationFade(0.1f, 1f, _transitionClock, AnimationFadeEasing.Linear));
 
                 graph.Commit(TickWithDelta(1L, 0.05f));
                 Assert.AreEqual(0, events);
@@ -199,7 +199,7 @@ namespace CycloneGames.AnimationRuntime.Tests.Evidence
                 graph.BeginPlayback(new AnimationClipRequest(1, 0, 0, clip, 0d, 1f));
                 graph.Commit(TickWithDelta(0L, 0.016f));
 
-                graph.EndPlayback(key, new AnimationFade(0.1f, 0f, 0d, AnimationFadeEasing.Linear));
+                graph.EndPlayback(key, new AnimationFade(0.1f, 0f, _transitionClock, AnimationFadeEasing.Linear));
                 graph.Commit(TickWithDelta(1L, 0.05f));
                 Assert.AreEqual(1, graph.GetStats().ActivePlaybacks);
                 Assert.AreEqual(1, graph.CopyPlaybackSnapshots(0, buffer));
