@@ -21,7 +21,7 @@ The bridge does not decide what makes a position good. Candidate generation and 
 
 | Assembly | Purpose | Consumer reference |
 | --- | --- | --- |
-| `CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery` | Runs a query and publishes the best candidate. | Explicit |
+| `CycloneGames.BehaviorTree.Integrations.EnvQuery` | Runs a query and publishes the best candidate. | Explicit |
 | `CycloneGames.BehaviorTree.Integrations.EnvQuery.Tests.Editor` | Contract, fuzz, allocation and soak tests. | Test Runner only |
 
 Both assemblies are `noEngineReferences: true`. The query core and the blackboard are engine-free, so the same adapter runs in a player and in a headless process.

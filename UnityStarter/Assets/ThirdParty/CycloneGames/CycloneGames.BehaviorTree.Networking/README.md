@@ -28,7 +28,7 @@ The bridge synchronizes `RuntimeBlackboard` state across the network. Full snaps
 | `CycloneGames.BehaviorTree.Networking.Runtime` | `false` | `false` | Capturing or applying managed behavior-tree state, authority/observer helpers |
 | `CycloneGames.BehaviorTree.Networking.Tests.Editor` | N/A | N/A | Running EditMode tests |
 
-The Runtime assembly references `CycloneGames.BehaviorTree.Runtime`, `CycloneGames.BehaviorTree.Networking.Core`, and `CycloneGames.Networking.Core`.
+The Runtime assembly references `CycloneGames.BehaviorTree.Core`, `CycloneGames.BehaviorTree.Networking.Core`, and `CycloneGames.Networking.Core`.
 
 ```mermaid
 flowchart LR

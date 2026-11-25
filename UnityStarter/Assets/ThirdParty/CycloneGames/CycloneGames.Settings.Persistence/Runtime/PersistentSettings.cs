@@ -5,13 +5,9 @@ using CycloneGames.Persistence;
 
 namespace CycloneGames.Settings.Persistence
 {
-    /// <summary>
-    /// Coordinates settings state with one persistence store without owning either dependency.
-    /// </summary>
     public sealed class PersistentSettings<T>
     {
         private readonly SettingsState<T> _state;
-        private readonly SettingsMigrationPipeline<T> _migrations;
         private readonly PersistenceStore<T> _persistence;
         private int _operationState;
         private long _startedLoadCount;
@@ -21,26 +17,10 @@ namespace CycloneGames.Settings.Persistence
 
         public PersistentSettings(
             SettingsState<T> state,
-            SettingsMigrationPipeline<T> migrations,
             PersistenceStore<T> persistence)
         {
             _state = state ?? throw new ArgumentNullException(nameof(state));
-            _migrations = migrations ?? throw new ArgumentNullException(nameof(migrations));
             _persistence = persistence ?? throw new ArgumentNullException(nameof(persistence));
-
-            if (state.CurrentVersion != migrations.CurrentVersion)
-            {
-                throw new ArgumentException(
-                    "The settings state and migration pipeline must use the same current version.",
-                    nameof(migrations));
-            }
-
-            if (!ReferenceEquals(state.Schema, migrations.Schema))
-            {
-                throw new ArgumentException(
-                    "The settings state and migration pipeline must share one schema authority.",
-                    nameof(migrations));
-            }
         }
 
         public PersistentSettingsMemorySnapshot GetMemorySnapshot()
@@ -117,6 +97,8 @@ namespace CycloneGames.Settings.Persistence
             }
         }
 
+        // The revision captured before I/O is the compare-and-commit guard. A state change during
+        // the read wins; the loaded candidate is discarded without touching the authoritative value.
         private async Task<PersistentSettingsLoadResult> LoadCoreAsync(
             CancellationToken cancellationToken)
         {
@@ -130,9 +112,8 @@ namespace CycloneGames.Settings.Persistence
                 }
 
                 long expectedRevision = _state.Revision;
-                var loadResult = await _persistence.LoadAsync(
-                    _state.CurrentVersion,
-                    cancellationToken).ConfigureAwait(false);
+                PersistenceLoadResult<T> loadResult = await _persistence.LoadAsync(cancellationToken)
+                    .ConfigureAwait(false);
 
                 if (loadResult.IsMissing)
                 {
@@ -148,24 +129,13 @@ namespace CycloneGames.Settings.Persistence
 
                 cancellationToken.ThrowIfCancellationRequested();
                 var candidate = loadResult.Value;
-                var migrationResult = _migrations.Migrate(
-                    loadResult.ContentVersion,
-                    ref candidate,
-                    cancellationToken);
-                if (!migrationResult.Succeeded)
-                {
-                    return PersistentSettingsLoadResult.MigrationFailure(in migrationResult);
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
-                var commitResult = _state.TryApplyLoaded(in candidate, expectedRevision);
+                SettingsUpdateResult commitResult = _state.TryApplyLoaded(in candidate, expectedRevision);
                 if (!commitResult.Succeeded)
                 {
                     return PersistentSettingsLoadResult.StateCommitFailure(in commitResult);
                 }
 
                 return PersistentSettingsLoadResult.Loaded(
-                    migrationResult.MigrationApplied,
                     commitResult.ObserverFailureCount,
                     commitResult.FirstObserverException);
             }
@@ -188,10 +158,8 @@ namespace CycloneGames.Settings.Persistence
         {
             try
             {
-                return await _persistence.SaveAsync(
-                    in snapshot,
-                    _state.CurrentVersion,
-                    cancellationToken).ConfigureAwait(false);
+                return await _persistence.SaveAsync(in snapshot, cancellationToken)
+                    .ConfigureAwait(false);
             }
             finally
             {
@@ -212,6 +180,7 @@ namespace CycloneGames.Settings.Persistence
             }
         }
 
+        // The guard covers this integration instance. Its dependencies keep their own guards.
         private void BeginOperation()
         {
             if (Interlocked.CompareExchange(ref _operationState, 1, 0) != 0)

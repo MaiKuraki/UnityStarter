@@ -2,245 +2,533 @@
 
 [English](README.md) | 简体中文
 
-CycloneGames.Persistence 是 serializer-neutral、无 Unity 依赖的单条有界 versioned record 底座。它将 codec 与 storage adapter 配对，强制执行严格字节格式，在反序列化前检测损坏，并以结构化结果返回运行时失败。
+`CycloneGames.Persistence` 负责读写一条有上界的 record。Codec 定义 wire format，storage adapter 持有字节，store 负责编排两者。Store 把每个 payload 包装进 ASCII header 与 xxHash64 checksum；framing、声明长度、checksum 或格式身份不匹配的 record 会在反序列化之前被拒绝。
+
+Core assembly 只引用 `CycloneGames.Hash.Core`，并声明 `noEngineReferences: true`。它可以运行在 Unity、纯 C# host 和 headless 测试进程中。
 
 ## 目录
 
 - [概述](#概述)
-- [架构](#架构)
-- [快速开始](#快速开始)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [高级主题](#高级主题)
+- [包结构](#包结构)
+- [快速上手](#快速上手)
+- [公共 API](#公共-api)
+- [保存与加载流程](#保存与加载流程)
+- [Record 格式](#record-格式)
+- [结果与错误码](#结果与错误码)
+- [取消、并发与异常](#取消并发与异常)
+- [限制与诊断](#限制与诊断)
+- [格式探测](#格式探测)
+- [实现 provider](#实现-provider)
+- [测试](#测试)
 - [问题排查](#问题排查)
 
 ## 概述
 
-Persistence 将两个外部 adapter——serializer codec 与文件/数据库 storage provider——协调为安全的单条 Record pipeline。它把每条 Payload 用 versioned header、稳定 codec identifier 和 xxHash64 checksum 包装起来，并在反序列化前拒绝 header、长度或 integrity probe 不匹配的 Record。
+| 关注点 | 所有者 | 职责 |
+| --- | --- | --- |
+| 包装、校验、编排 | `PersistenceStore<T>` | 生成和解析一条 record、分类失败、限制一个 active operation |
+| 序列化 | `IPersistenceCodec<T>` | 在一个 `T` 与 payload bytes 之间转换 |
+| 字节存储 | `IPersistenceStorage` | 在一个 location 上读取、原子写入和删除一条 record |
+| 分配上界 | `PersistenceLimits` | 限制 payload 与 record 大小 |
+| 组装 | `PersistenceProfile<T>` | 把一个 codec 与一个 limits 实例绑定 |
 
-运行时失败通过带显式 `PersistenceErrorCode` 值的结果类型返回。无效参数和并发 overlap 会立即抛异常。致命运行时异常（`OutOfMemoryException`）直接传播。
+Store 不保存应用状态、不维护缓存、也不知道路径。它不创建 worker thread，也不调用 `Task.Run`。一次操作搬移整条 record，这是冷路径 API。
 
-Core assembly 的唯一依赖是 `CycloneGames.Hash.Core`。
+Codec 声明一个 `PersistenceCodecId`。这个 token 标识一种 wire format，按 ordinal 相等比较。运行时只读取绑定到 profile 的格式；由其他格式写出的 record 一律拒绝。详见 [Record 格式](Documentation~/RecordFormat.SCH.md)。
 
-### 关键特性
-
-- **Record V1 格式**——规范 LF-only ASCII header、codec identity、content version、固定 `identity/1`、xxHash64 覆盖 dispatch metadata 与 payload
-- **结构化结果**——`PersistenceLoadResult<T>` 区分 Loaded、Missing、Failed；`PersistenceOperationResult` 以 error code 报告 Succeeded 或 Failed
-- **每次一个操作**——overlap 或 callback reentrancy 抛出 `InvalidOperationException`
-- **取消支持**——每个边界都会观察 cancellation token；commit 结果决定最终状态
-- **Payload 限制**——硬上限 1 MiB；profile 级别可降至 256 KiB
-- **无分配泄漏**——Buffer 用完即清；codec 写入借用 `IBufferWriter<byte>`
-
-## 架构
+## 包结构
 
 | Assembly | Package | 引用 |
 | --- | --- | --- |
 | `CycloneGames.Persistence.Core` | `com.cyclone-games.persistence` | `CycloneGames.Hash.Core` |
 
-Package 声明依赖 `com.cyclone-games.hash`（1.0.0）。不引用 `UnityEngine`（`noEngineReferences: true`），仅需 Unity 2022.3。
+`package.json` 声明依赖 `com.cyclone-games.hash` `1.0.0`，Unity 基线为 `2022.3`。Assembly 设置 `autoReferenced: false` 和 `noEngineReferences: true`。
 
-Storage 和 codec provider 为独立 package。Persistence Core 可以脱离它们编译和测试。应用按需添加 composition root 所需的 provider：
+| Provider package | Assembly | 作用 |
+| --- | --- | --- |
+| `com.cyclone-games.persistence.systemio` | `CycloneGames.Persistence.SystemIO`、`CycloneGames.Persistence.Unity` | 文件存储与 persistent-data-path 路径组合 |
+| `com.cyclone-games.persistence.vyaml` | `CycloneGames.Persistence.VYaml` | UTF-8 YAML codec |
+| `com.cyclone-games.persistence.messagepack` | `CycloneGames.Persistence.MessagePack` | 二进制 codec，由 capability symbol 门控 |
 
-- `com.cyclone-games.persistence.systemio`——文件系统存储
-- `com.cyclone-games.persistence.vyaml`——人类可读 YAML codec
-- `com.cyclone-games.persistence.messagepack`——紧凑二进制 codec（可选，默认 inactive）
+```mermaid
+flowchart LR
+    App["应用 composition root"] --> Core["CycloneGames.Persistence.Core"]
+    App --> VYaml["CycloneGames.Persistence.VYaml"]
+    App --> MsgPack["CycloneGames.Persistence.MessagePack"]
+    App --> SysIO["CycloneGames.Persistence.SystemIO"]
+    Core --> Hash["CycloneGames.Hash.Core"]
+    VYaml --> Core
+    MsgPack --> Core
+    SysIO --> Core
+    SysIO --> IO["CycloneGames.IO.Core 与 IO.SystemIO"]
+```
 
-## 快速开始
+```text
+CycloneGames.Persistence/
+  Core/
+    Contracts/        格式 token、context、公共接口
+    Internal/         池化 writer、异常策略、record 编解码
+    PersistenceStore.cs、PersistenceProfile.cs、PersistenceLimits.cs、
+    PersistenceResults.cs、PersistenceStoreMemorySnapshot.cs、
+    PersistenceRecordHeader.cs、PersistenceFormatRegistry.cs
+    Properties/AssemblyInfo.cs
+  Tests/Core/         EditMode 测试与 golden byte fixture
+  Documentation~/     Record 字节契约
+  package.json、README.md、README.SCH.md
+```
 
-Composition root 安装实际需要的 package：
+## 快速上手
 
-- `com.cyclone-games.persistence`
-- 一个 storage provider：`com.cyclone-games.persistence.systemio`
-- 一个 codec provider：如 `com.cyclone-games.persistence.vyaml`
+### 第 1 步：安装 package
 
-应用拥有 DTO 和 schema version。VYaml 需要 generated resolver；IL2CPP build 不接受 reflection fallback。
+添加 `com.cyclone-games.persistence`、一个 storage provider 和一个 codec provider。下面的示例使用 `com.cyclone-games.persistence.systemio` 与 `com.cyclone-games.persistence.vyaml`。两个 provider 都设置 `autoReferenced: false`，因此需要在 consumer asmdef 中显式添加对应 assembly 名称。
+
+### 第 2 步：定义 DTO
 
 ```csharp
-using System.Threading;
-using System.Threading.Tasks;
-using CycloneGames.Persistence;
-using CycloneGames.Persistence.Unity;
-using CycloneGames.Persistence.VYaml;
+using VYaml.Annotations;
 
-public static class LocalProfileComposition
+namespace MyGame.Contracts
 {
-    public static async Task SaveAsync(
-        LocalProfile profile,
-        CancellationToken cancellationToken)
+    [YamlObject]
+    public sealed partial class AudioSettings
     {
-        IPersistenceStorage storage = UnityPersistentStorage.Create("profiles/local.yaml");
-        var codec = new VYamlPersistenceCodec<LocalProfile>(GeneratedResolver.Instance);
-        var limits = new PersistenceLimits(maximumPayloadBytes: 256 * 1024);
-        var store = new PersistenceStore<LocalProfile>(
-            storage,
-            new PersistenceProfile<LocalProfile>(codec, limits));
-
-        PersistenceOperationResult result = await store.SaveAsync(
-            in profile,
-            contentVersion: 2,
-            cancellationToken);
-        if (!result.IsSuccess)
-        {
-            // 根据 ErrorCode 执行产品恢复策略；Exception 进入遥测前必须脱敏。
-        }
+        public float MasterVolume { get; set; } = 1f;
+        public bool Muted { get; set; }
     }
 }
 ```
 
-Load 需要声明调用方能理解的最新 content version：
+VYaml source generator 会生成 `MyGame.Contracts.GeneratedResolver`。修改 DTO 后需重新构建。DTO 所在的 namespace 不要引入项目内的 `VYaml` namespace：生成的 formatter 代码引用 `VYaml.*` 时没有 global 前缀。详见 [VYaml provider README](../CycloneGames.Persistence.VYaml/README.SCH.md)。
+
+`T` 必须是纯数据，不能持有 `IDisposable` 资源、unmanaged handle、Unity object 生命周期或线程亲和状态；失败和取消的候选值会被直接丢弃，不执行 disposal。
+
+### 第 3 步：组装 store
 
 ```csharp
-PersistenceLoadResult<LocalProfile> result = await store.LoadAsync(
-    maximumSupportedContentVersion: 2,
+using CycloneGames.Persistence;
+using CycloneGames.Persistence.Unity;
+using CycloneGames.Persistence.VYaml;
+using MyGame.Contracts;
+
+IPersistenceStorage storage =
+    UnityPersistentStorage.Create("Settings/audio.cgp");
+
+IPersistenceCodec<AudioSettings> codec =
+    new VYamlPersistenceCodec<AudioSettings>(GeneratedResolver.Instance);
+
+var profile = new PersistenceProfile<AudioSettings>(
+    codec,
+    new PersistenceLimits(256 * 1024));
+
+var store = new PersistenceStore<AudioSettings>(storage, profile);
+```
+
+这四个对象都由 composition root 持有。一个 store 绑定一个 location 和一个 codec；每条独立 record 使用独立的 store 和独立的可信路径。
+
+### 第 4 步：保存
+
+```csharp
+var settings = new AudioSettings { MasterVolume = 0.8f, Muted = false };
+
+PersistenceOperationResult saved = await store.SaveAsync(
+    in settings,
     cancellationToken);
 
-switch (result.Status)
+if (!saved.IsSuccess)
+{
+    // Dispatch saved.ErrorCode to the product recovery policy.
+    // Sanitize saved.Exception before logging or telemetry.
+}
+```
+
+### 第 5 步：加载
+
+```csharp
+PersistenceLoadResult<AudioSettings> loaded = await store.LoadAsync(cancellationToken);
+
+switch (loaded.Status)
 {
     case PersistenceLoadStatus.Loaded:
-        LocalProfile profile = result.Value;
+        ApplySettings(loaded.Value);
         break;
     case PersistenceLoadStatus.Missing:
-        // 创建产品默认值；Missing 不是错误。
+        ApplyDefaults();
         break;
     case PersistenceLoadStatus.Failed:
-        // 保留原有权威状态，并执行恢复策略。
+        Recover(loaded.ErrorCode, loaded.Exception);
         break;
     default:
         throw new InvalidOperationException("The load result was not initialized.");
 }
 ```
 
-## 核心概念
+`Missing` 表示该 location 下没有 record，不是失败。格式 token 与绑定的 codec 不一致时返回 `RecordFormatMismatch`。
 
-| 类型 | 职责 |
-| --- | --- |
-| `IPersistenceCodec<T>` | 使用稳定 `PersistenceCodecId` 同步编码/解码一份借用 payload。 |
-| `IPersistenceStorage` | 拥有一个 location，执行有界读取、原子写入和幂等删除。 |
-| `PersistenceProfile<T>` | 绑定一个 codec 与不可变 allocation limits。 |
-| `PersistenceStore<T>` | Serialize、编码 Record V1、verify、deserialize、分类失败，并限制一个 active operation。 |
-| `PersistenceLimits` | 限制 plaintext payload、record read 和 pooled writer 增长。 |
-| `PersistenceLoadResult<T>` | 明确区分 `Loaded`、`Missing`、`Failed` 和默认 struct 的未初始化状态。 |
-| `PersistenceOperationResult` | 报告 `Succeeded` 或 `Failed`；不能只用 `ErrorCode.None` 判断成功。 |
-
-### Codec 契约
-
-Codec 写入 Store 提供的有界 `IBufferWriter<byte>`。它不能分配 result array、保留借用输入、通过 runtime reflection 发现类型，或写出 `context.Limits`。Context 会暴露调用方 token，让同步 codec 可以在有界工作阶段检查取消。`T` 必须是纯 DTO，不能拥有 `IDisposable` 资源、unmanaged handle、Unity object 生命周期或线程亲和状态——失败和取消的候选值会被丢弃而不执行 disposal。
+### 第 6 步：删除
 
 ```csharp
-public sealed class ExampleCodec<T> : IPersistenceCodec<T>
-{
-    public PersistenceCodecId CodecId { get; } = new PersistenceCodecId("example/1");
+PersistenceOperationResult deleted = await store.DeleteAsync(cancellationToken);
+```
 
-    public void Serialize(
+SystemIO provider 把「目标已不存在」视为成功。
+
+## 公共 API
+
+### `PersistenceStore<T>`
+
+| 成员 | 说明 |
+| --- | --- |
+| `PersistenceStore(IPersistenceStorage, PersistenceProfile<T>)` | 把一个 location 与一个 profile 绑定；null 参数抛 `ArgumentNullException`。 |
+| `Location` | `IPersistenceStorage.Location`，用于诊断。 |
+| `Profile` | 绑定的 `PersistenceProfile<T>`。 |
+| `SaveAsync(in T value, CancellationToken = default)` | 序列化、编码并写入一条 record。 |
+| `LoadAsync(CancellationToken = default)` | 读取并校验一条 record。 |
+| `DeleteAsync(CancellationToken = default)` | 删除绑定的 record。 |
+| `GetMemorySnapshot()` | 返回计数器与 limits 的 `PersistenceStoreMemorySnapshot`。 |
+
+### `PersistenceCodecId`
+
+| 成员 | 说明 |
+| --- | --- |
+| `PersistenceCodecId(string)` | 校验格式 token 语法。 |
+| `Value` | token 字符串；`default` 时为空。 |
+| `Equals`、`==`、`!=`、`GetHashCode`、`ToString` | Ordinal 值语义。 |
+
+语法：1 至 64 个 ASCII 字符，首尾为 `[a-z0-9]`，其余字符限定为 `[a-z0-9._-]`。不含斜杠，不含数字后缀，没有顺序语义。Token 命名一种字节格式，例如 `vyaml-utf8-lf`、`messagepack-nocompress`、`test-yaml`。
+
+### `PersistenceProfile<T>` 与 `PersistenceLimits`
+
+| 类型 | 成员 | 说明 |
+| --- | --- | --- |
+| `PersistenceProfile<T>` | `PersistenceProfile(IPersistenceCodec<T>, PersistenceLimits = null)` | 省略 limits 时新建一个默认 limits 实例。 |
+| | `Codec`、`CodecId`、`Limits` | 不可变绑定。 |
+| `PersistenceLimits` | `PersistenceLimits()` | 硬上限与默认初始缓冲。 |
+| | `PersistenceLimits(int maximumPayloadBytes)` | 自定义上限，使用默认初始缓冲。 |
+| | `PersistenceLimits(int maximumPayloadBytes, int initialBufferBytes)` | 两个值都显式指定。 |
+| | `static HardMaximumPayloadBytes` | 1048576 bytes。 |
+| | `static DefaultInitialBufferBytes` | 256 bytes。 |
+| | `MaximumPayloadBytes`、`InitialBufferBytes` | 配置值。 |
+| | `MaximumRecordBytes` | Payload 上限加 256 bytes 的 header 预算。 |
+
+这两个 static 成员是无状态计算属性，不是共享可变状态；没有共享的默认实例。
+
+### Context
+
+`PersistenceWriteContext` 与 `PersistenceReadContext` 都是 readonly struct，通过 `in` 传入。各暴露 `Limits` 与 `CancellationToken`。同步 codec 可以在有界工作阶段检查 token。
+
+### `IPersistenceCodec<T>`
+
+```csharp
+public interface IPersistenceCodec<T>
+{
+    PersistenceCodecId CodecId { get; }
+
+    void Serialize(
         in T value,
         IBufferWriter<byte> destination,
-        in PersistenceWriteContext context)
-    {
-        // 向 destination 写入有界、确定的表示。
-    }
+        in PersistenceWriteContext context);
 
-    public T Deserialize(
+    T Deserialize(
         ReadOnlyMemory<byte> payload,
-        in PersistenceReadContext context)
+        in PersistenceReadContext context);
+}
+```
+
+实现是同步的，所有输入都是借用。返回后不得保留 value、destination、payload 或 context；不能分配 exact result array，也不能写出 `context.Limits` 的范围。`destination` 是有预算上限的 writer，payload 超出上限时抛出 `PersistencePayloadBudgetExceededException`。
+
+### `IPersistenceStorage`
+
+```csharp
+public interface IPersistenceStorage
+{
+    string Location { get; }
+
+    Task<PersistenceStorageReadResult> ReadAsync(
+        int maxByteCount,
+        CancellationToken cancellationToken = default);
+
+    Task WriteAtomicallyAsync(
+        byte[] content,
+        CancellationToken cancellationToken = default);
+
+    Task DeleteAsync(CancellationToken cancellationToken = default);
+}
+```
+
+`Found` 把 `byte[]` 的所有权移交给 Store。`WriteAtomicallyAsync` 借用 `content` 直到 task 完成。`Location` 是诊断 metadata。
+
+### 结果类型
+
+| 类型 | 成员 |
+| --- | --- |
+| `PersistenceStorageReadResult` | `IsMissing`、`Content`、静态 `Missing()`、`Found(byte[])` |
+| `PersistenceOperationResult` | `Status`、`IsSuccess`、`ErrorCode`、`Exception`、静态 `Success()`、`Failure(...)` |
+| `PersistenceLoadResult<T>` | `Status`、`IsSuccess`、`IsMissing`、`Value`、`ErrorCode`、`Exception`、静态 `Loaded(T)`、`Missing()`、`Failure(...)` |
+| `PersistenceLoadStatus` | `Uninitialized`、`Failed`、`Missing`、`Loaded` |
+| `PersistenceOperationStatus` | `Uninitialized`、`Succeeded`、`Failed` |
+| `PersistencePayloadBudgetExceededException` | `MaximumPayloadBytes` |
+
+默认构造的结果 struct 是 `Uninitialized`，`ErrorCode` 为 `None`。判断成功要用 `IsSuccess` 或 `Status`；`ErrorCode.None` 本身不代表成功。`Exception` 仅用于诊断，进入遥测前需脱敏。
+
+## 保存与加载流程
+
+```mermaid
+flowchart TD
+    Save["SaveAsync"] --> Reset["Reset 池化 writer"]
+    Reset --> Ser["Codec.Serialize"]
+    Ser --> Enc["生成 header 与 xxHash64"]
+    Enc --> Release["归还 writer buffer"]
+    Release --> Write["Storage.WriteAtomicallyAsync"]
+    Write --> SaveClear["清零 record array；释放 gate"]
+
+    Load["LoadAsync"] --> Read["Storage.ReadAsync"]
+    Read --> Missing{"Record 不存在？"}
+    Missing -->|是| MissResult["PersistenceLoadResult.Missing"]
+    Missing -->|否| Parse["解析 header、长度、checksum、token"]
+    Parse --> Valid{"全部校验通过？"}
+    Valid -->|否| FailResult["带 PersistenceErrorCode 的失败结果"]
+    Valid -->|是| Deser["Codec.Deserialize 读取借用 memory"]
+    Deser --> LoadedResult["PersistenceLoadResult.Loaded"]
+    FailResult --> LoadClear["清零 record array；释放 gate"]
+    LoadedResult --> LoadClear
+```
+
+Store 在多次 save 之间复用同一个池化 writer。`Reset` 从 `ArrayPool<byte>.Shared` 取数组，`Release` 清零后归还。序列化在调用方线程同步执行，框架侧 save 路径唯一的分配是 record array。
+
+| Buffer | 产生方 | 移交后的所有者 | 清零方 |
+| --- | --- | --- | --- |
+| 池化 writer buffer | `BoundedByteBufferWriter` | Store | 所有退出路径上的 `Release` |
+| 保存时的 record array | `PersistenceRecord.Encode` | Store | `SaveCoreAsync` 的 finally |
+| 读取时的 record array | `IPersistenceStorage` | Store | `LoadCoreAsync` 的 finally |
+| Payload slice | Store | Store，借给 codec | Codec 不得保留 |
+
+## Record 格式
+
+下面是一条完整 record，payload 为 10 bytes 的 YAML。四行 header 与 delimiter 行各以一个 LF 字节（0x0A）结尾：
+
+```text
+# cgp-record
+# codec-id: test-yaml
+# payload-bytes: 10
+# xxh64: 4708293BF9A62D22
+---
+value: 42
+```
+
+Header 是不带 BOM 的 ASCII。`payload-bytes` 必须等于 delimiter 行之后的全部字节。Checksum 覆盖 domain separator、带长度前缀的格式 token、带长度前缀的 payload 长度以及 payload bytes，因此替换 token 会使 digest 失效。完整契约见 [Record 格式](Documentation~/RecordFormat.SCH.md)。
+
+xxHash64 只检测偶发损坏，既不是真实性校验也不是加密。本地 record 不能作为支付、entitlement 或 secret 的可信权威来源。
+
+## 结果与错误码
+
+运行时失败通过结果返回，不抛出；无效参数与重叠操作立即抛出。
+
+| `PersistenceErrorCode` | 条件 |
+| --- | --- |
+| `None` | 默认值；不代表成功。 |
+| `ReadFailed` | Storage 读取抛异常，或返回 `Found` 却没有移交 buffer。 |
+| `PayloadTooLarge` | Codec 超出 writer 预算，或声明的 payload 超出配置上限。 |
+| `RecordFormatMismatch` | Magic 行不匹配，或格式 token 与 profile 不一致。 |
+| `MalformedRecord` | Header 语法、字段顺序、十进制形式、token 语法、delimiter、长度或十六进制形式非法。 |
+| `IntegrityCheckFailed` | xxHash64 不匹配；不调用 codec。 |
+| `DeserializeFailed` | Codec 的 `Deserialize` 抛异常。 |
+| `SerializationFailed` | Codec 的 `Serialize` 抛异常，或编码失败。 |
+| `WriteFailed` | `WriteAtomicallyAsync` 抛异常。 |
+| `DeleteFailed` | `DeleteAsync` 抛异常。 |
+| `Cancelled` | 调用方 token 已取消。 |
+
+Parser 精确匹配 magic 行与 token。其他字节在这两处检查之一被拒绝。
+
+## 取消、并发与异常
+
+- `CancellationToken` 在入口、序列化后、编码前、storage 读取后、解析后和反序列化后都会被检查。异步 continuation 使用 `ConfigureAwait(false)`。
+- 只有在调用方 token 已取消时抛出的 `OperationCanceledException` 才会归类为 `Cancelled`。Codec 或 provider 主动抛出的取消属于该阶段失败。
+- Storage 写入是 commit boundary。替换已经完成就报告成功，即使 token 随后取消。
+- 一个 store 同时只接受一个 operation。Overlap 或 callback reentrancy 会同步抛 `InvalidOperationException`。Gate 只作用于该实例；共享 codec 或 storage 的多个 store 不会自动串行化。
+- 参数错误从 public method 直接抛出，不包装成结果。
+- 致命异常在释放 gate 后直接传播：`OutOfMemoryException`、`StackOverflowException`、`AccessViolationException`、`AppDomainUnloadedException`、`CannotUnloadAppDomainException`、`ThreadAbortException`、`BadImageFormatException`、`InvalidProgramException`。
+
+### Composition root 串行化
+
+Store 对重叠操作是拒绝而不是排队。在 composition root 串行化重叠保存：
+
+```csharp
+var saveGate = new SemaphoreSlim(1, 1);
+
+public async Task<PersistenceOperationResult> SaveSerializedAsync(
+    AudioSettings value, CancellationToken ct)
+{
+    await saveGate.WaitAsync(ct).ConfigureAwait(false);
+    try
     {
-        // 不得保留 payload。旧 wire shape 仍可读取时可使用 context.ContentVersion。
-        throw new NotImplementedException();
+        return await store.SaveAsync(in value, ct).ConfigureAwait(false);
+    }
+    finally
+    {
+        saveGate.Release();
     }
 }
 ```
 
-`ReadOnlyMemory<byte>` 是有意设计：当前 VYaml 和 MessagePack API 可以直接读取 memory，避免 adapter 复制整段 payload。所有权契约仍禁止在调用结束后保留 memory。
+`GetMemorySnapshot().ConcurrentOperationRejectionCount` 报告 gate 拒绝重叠的次数。可选的 `CycloneGames.Persistence.Resilience` decorator 包装任意 `IPersistenceStorage`，用法见该模块 README。
 
-## 使用指南
+## 限制与诊断
 
-### Save 流程
-
-1. Codec 写入 clear-on-return pooled buffer。
-2. Store 以 Record V1 header 和 xxHash64 包装 payload。
-3. 创建 exact record array 并交给 storage adapter。
-4. write task 完成后清零数组。
-
-### Load 流程
-
-1. Storage 移交 exact record array。
-2. Store 原地解析，校验 header、codec ID、content version 和 checksum。
-3. 将 `ReadOnlyMemory<byte>` slice 借给 codec。
-4. 反序列化后清零数组。
-
-### Error Code
-
-| ErrorCode | 说明 |
+| 上界 | 值 |
 | --- | --- |
-| `None` | 默认值；不代表成功。 |
-| `ReadFailed` | Storage 读取异常。 |
-| `PayloadTooLarge` | Codec 或 Record 超出配置上限。 |
-| `RecordFormatMismatch` | 未知 magic 或非 Record V1 格式。 |
-| `UnsupportedRecordVersion` | Record version 超出 Store 理解范围。 |
-| `MalformedRecord` | Header 结构错误。 |
-| `IntegrityCheckFailed` | xxHash64 不匹配。 |
-| `CodecMismatch` | Record 中 codec ID 与 profile codec 不一致。 |
-| `TransformMismatch` | Transform identity 不匹配（保留）。 |
-| `FutureContentVersion` | Content version 超出最大支持值。 |
-| `DeserializeFailed` | Codec 反序列化异常。 |
-| `SerializationFailed` | Codec 序列化异常。 |
-| `WriteFailed` | Storage 写入异常。 |
-| `DeleteFailed` | Storage 删除异常。 |
-| `Cancelled` | 调用方 token 已取消。 |
+| Payload 上限 | 1048576 bytes |
+| Header 预算 | 256 bytes |
+| 传给 `ReadAsync` 的最大 record | payload 上限加 256 bytes |
+| 时间复杂度 | 对 record 做一次线性扫描；没有针对 payload bytes 的嵌套循环 |
+| 临时内存 | 受 record 大小约束 |
 
-### 并发与内存
+1048576 bytes 上限是 `PersistenceLimits` 在构造时强制的单记录预算。
 
-- Payload hard limit 为 1 MiB；profile 可降低上限；settings 通常使用 256 KiB。
-- 时间复杂度 O(n)，temporary memory 为有界 O(n)。
-- 一个 Store 同时只接受一个 operation。Overlap 抛 `InvalidOperationException`。
-- Guard 只覆盖当前 Store 实例。多个 Store 共享 codec、resolver 或 storage instance 时不会自动串行化。
-- Store 不创建 worker thread、不使用 `Task.Run`，内部使用 `ConfigureAwait(false)`。
-- 只有调用方 token 已取消时，关联的 `OperationCanceledException` 才分类为 `Cancelled`。Codec 或 provider 主动抛出的非请求取消属于对应阶段失败。
-- Storage commit boundary 决定 cancellation 语义。Commit 成功后，即使 token 随后取消，也应报告成功。
+`GetMemorySnapshot()` 只读取计数器，不检查应用值、storage path 或序列化内容。它报告 `IsOperationActive`、配置的 limits、单调递增的 load/save/delete 计数、overlap 拒绝次数，以及最近与峰值 record bytes。
 
-Persistence 是冷路径能力。不要每帧调用，也不要用作逐实体更新机制。
+## 格式探测
 
-## 高级主题
+`PersistenceRecordHeader` 读取 record framing，不解码 payload。`PersistenceFormatRegistry<TEntry>` 把格式 token 映射到调用方提供的条目。两者都不要求先创建 `PersistenceStore<T>`。
 
-### Record 格式
+### 读取 header
 
-Record V1 使用规范 LF-only ASCII header、exact payload、稳定 codec ID、固定 `identity/1`，并对 dispatch metadata 与 payload 计算 xxHash64。字节契约和 parser 优先级见 [PersistenceRecordV1.SCH.md](Documentation~/PersistenceRecordV1.SCH.md)。
+```csharp
+byte[] record = await ReadRecordBytesAsync(ct);
 
-xxHash64 只检测偶发损坏，不能验证攻击者控制的文件。不要把本地值作为支付、entitlement 或服务器权威，也不要直接保存 secret。
+if (PersistenceRecordHeader.TryRead(
+        record,
+        out ReadOnlySpan<byte> token,
+        out ReadOnlySpan<byte> payload))
+{
+    UseToken(token, payload);
+}
+```
 
-### 平台矩阵
+`TryRead` 校验 magic 行、字段顺序、十进制形式、token 语法、delimiter、声明长度和十六进制形式。它不计算 checksum，也不与 profile 比较 token。它不分配内存，返回的 span 指向调用方的数组。`TryReadFormatToken` 只返回 token。
 
-| 层 | Editor/桌面/移动/Server | WebGL | 主机 |
-| --- | --- | --- | --- |
-| Persistence Core | 静态兼容；纯 managed code | 静态兼容 | 静态兼容 |
-| SystemIO provider | 面向已验证文件系统目标 | Fail closed | 通过资格验证前 fail closed |
-| Unity SystemIO path adapter | 组合 `Application.persistentDataPath` | Fail closed | 通过资格验证前 fail closed |
-| 自定义 provider | 可选 | 需要 IndexedDB/JavaScript async provider | 需要平台 SDK save-data provider |
+### 按 token 查表
 
-本矩阵描述静态边界。IL2CPP、stripping、移动端、WebGL、主机、文件系统持久性和长期运行稳定性都需要独立、可复现的 Player 证据。
+```csharp
+var registry = new PersistenceFormatRegistry<string>(
+    new PersistenceFormatRegistration<string>(
+        new PersistenceCodecId("vyaml-utf8-lf"), "yaml"),
+    new PersistenceFormatRegistration<string>(
+        new PersistenceCodecId("messagepack-nocompress"), "binary"));
 
-### Storage 行为
+if (registry.TryGet(token, out string entry))
+{
+    SelectFormat(entry);
+}
+```
 
-Core 自身不写文件，也不知道 path。`IPersistenceStorage` 实现拥有 location、lifecycle、atomicity、delete、quota 和 recovery。SystemIO provider 在消费方指定 root 下写一份显式文件，使用同目录 temporary file 和 atomic replace。该文件是产品 runtime data；是否删除由产品恢复策略决定。
+`TryGet` 在连续数组上逐字节比较，不分配内存。构造时重复 token 会抛 `ArgumentException`，未知 token 返回 `false`。Registry 不读文件，也不写 record。
 
-### 迁移
+```mermaid
+flowchart LR
+    Bytes["Record bytes"] --> Try["TryRead"]
+    Try -->|有效| Spans["Token 与 payload span"]
+    Try -->|无效| False["false"]
+    Spans --> Lookup["Registry TryGet"]
+    Lookup -->|命中| Entry["已注册条目"]
+    Lookup -->|未知| NoEntry["false"]
+```
 
-Store 不猜测旧格式。Prototype record、raw YAML 和未知 magic 返回 `RecordFormatMismatch`。产品如需导入，必须在采用 Record V1 前执行显式迁移。Package 边界、所有权和从已退役设置/持久化组合包进行破坏性迁移的说明见 [ADR-001](Documentation~/ADR-001-Settings-Persistence-Boundaries.SCH.md)。
+| 类型 | 成员 |
+| --- | --- |
+| `PersistenceRecordHeader` | `TryRead(...)`、`TryReadFormatToken(...)` |
+| `PersistenceFormatRegistration<TEntry>` | `Format`、`Entry` |
+| `PersistenceFormatRegistry<TEntry>` | `Count`、`TryGet(ReadOnlySpan<byte>, ...)`、`TryGet(PersistenceCodecId, ...)` |
+
+## 实现 provider
+
+Codec 是带一个格式 token 的同步 adapter：
+
+```csharp
+public sealed class Int32Codec : IPersistenceCodec<int>
+{
+    public PersistenceCodecId CodecId { get; } =
+        new PersistenceCodecId("binary-int");
+
+    public void Serialize(
+        in int value,
+        IBufferWriter<byte> destination,
+        in PersistenceWriteContext context)
+    {
+        Span<byte> span = destination.GetSpan(sizeof(int));
+        BinaryPrimitives.WriteInt32LittleEndian(span, value);
+        destination.Advance(sizeof(int));
+    }
+
+    public int Deserialize(
+        ReadOnlyMemory<byte> payload,
+        in PersistenceReadContext context)
+    {
+        return BinaryPrimitives.ReadInt32LittleEndian(payload.Span);
+    }
+}
+```
+
+Storage adapter 拥有一个 location：
+
+```csharp
+public sealed class MemoryStorage : IPersistenceStorage
+{
+    private byte[] _content;
+
+    public string Location => "memory://record";
+
+    public Task<PersistenceStorageReadResult> ReadAsync(
+        int maxByteCount,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_content == null)
+        {
+            return Task.FromResult(PersistenceStorageReadResult.Missing());
+        }
+
+        if (_content.Length > maxByteCount)
+        {
+            throw new InvalidOperationException("Record exceeds the read budget.");
+        }
+
+        return Task.FromResult(
+            PersistenceStorageReadResult.Found((byte[])_content.Clone()));
+    }
+
+    public Task WriteAtomicallyAsync(
+        byte[] content,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _content = (byte[])content.Clone();
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _content = null;
+        return Task.CompletedTask;
+    }
+}
+```
+
+不保留借用输入、遵守 `maxByteCount` 与 `context.Limits`、让异常向上传播以便 Store 分类。
+
+## 测试
+
+`CycloneGames.Persistence.Tests.Core` 是由 `UNITY_INCLUDE_TESTS` 门控的 EditMode assembly。`PersistenceStoreTests.cs` 覆盖 round trip、错误分类、取消、overlap 拒绝、buffer 清零与 record 解析。`Tests/Core/Fixtures/Record.yaml.bytes` 是 golden byte fixture。
 
 ## 问题排查
 
-| 现象 | 原因 | 解决方案 |
+| 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| Load 返回 `RecordFormatMismatch` | 文件未经 Record V1 包装 | 在采用 Store 前运行产品迁移。 |
-| Load 返回 `CodecMismatch` | Record 使用不同 codec 写入 | 验证 codec ID 匹配；孤儿 record 需迁移。 |
-| Load 返回 `FutureContentVersion` | Record content version 超出 `maximumSupportedContentVersion` | 提高最大值，或为新版本增加迁移步骤。 |
-| Load 返回 `IntegrityCheckFailed` | 文件被手动修改或损坏 | 从已知良好备份恢复；永远不要绕过 checksum。 |
-| Save 返回 `PayloadTooLarge` | DTO 超出配置上限 | 提高 `PersistenceLimits.MaximumPayloadBytes`，或拆分 record。 |
-| 并发调用抛 `InvalidOperationException` | 同一 Store 的重叠操作 | 串行化调用；一个 Store = 一个 active operation。 |
-| 未捕获到 `OperationCanceledException` | Composition root 中仅 catch `Exception` | Catch 或检查 `result.ErrorCode == PersistenceErrorCode.Cancelled`。 |
-| IL2CPP Player 测试失败 | 使用 reflection fallback 而非 generated resolver | 将所有 reflection-based formatter 替换为 source-generated 或显式注册。 |
-
-## 内存诊断与存储边界
-
-`PersistenceStore<T>.GetMemorySnapshot()` 在不检查 application value、storage path 或 serialized content 的前提下，报告 operation activity、配置的 payload/record limit、已启动 load/save/delete 次数、overlap rejection，以及最近/峰值 record bytes。这些计数不会改变 Persistence Record V1。
-
-`PersistenceStore.GetMemorySnapshot()` 暴露 owner-local operation、rejection 与 retained-record counter，但不拥有外部 telemetry 或 report storage。Codec 与 storage adapter 仍负责 input bound、transient buffer、atomic write、quota 和 failure isolation。
+| Load 返回 `RecordFormatMismatch` | Magic 行不匹配，或 token 与绑定的 codec 不一致 | 绑定写入该 record 的 codec，或用当前 profile 重新写入。 |
+| Load 返回 `IntegrityCheckFailed` | 文件被修改或损坏 | 从已知良好的副本恢复；不要绕过 checksum。 |
+| Load 返回 `MalformedRecord` | Header 字节、行尾或声明长度有误 | 用字节查看器检查 header；确认没有 CRLF。 |
+| Save 返回 `PayloadTooLarge` | DTO 超过 `MaximumPayloadBytes` | 在 1048576 内提高 profile 上限，或拆分 record。 |
+| 并发调用抛 `InvalidOperationException` | 同一 store 上重叠的 Save/Load/Delete | 串行化调用；一个 store 只允许一个 active operation。 |
+| `OperationCanceledException` 到达 composition root | 只 catch 了 `Exception`，或致命异常传播 | 显式 catch，或检查 `result.ErrorCode == PersistenceErrorCode.Cancelled`。 |
+| IL2CPP Player 抛 `MissingFormatterException` | 使用 reflection fallback 而非 generated resolver | 为每个持久化 DTO 注册或生成 formatter。 |

@@ -21,7 +21,7 @@
 
 | Assembly | 作用 | 使用方引用方式 |
 | --- | --- | --- |
-| `CycloneGames.BehaviorTree.Runtime.Integrations.Perception` | 读取传感器并写入黑板。 | 显式引用 |
+| `CycloneGames.BehaviorTree.Integrations.Perception` | 读取传感器并写入黑板。 | 显式引用 |
 | `CycloneGames.BehaviorTree.Integrations.Perception.Tests.Editor` | 契约、随机、分配与长稳测试。 | 仅 Test Runner |
 
 程序集引用 `CycloneGames.BehaviorTree.Core` 与 `CycloneGames.AIPerception`，且 `autoReferenced: false`：不读感知的项目不会编译到它。

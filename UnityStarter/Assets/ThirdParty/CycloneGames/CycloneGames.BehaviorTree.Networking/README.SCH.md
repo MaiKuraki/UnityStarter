@@ -28,7 +28,7 @@ Bridge 通过网络同步 `RuntimeBlackboard` 状态。Full snapshot 携带 mana
 | `CycloneGames.BehaviorTree.Networking.Runtime` | `false` | `false` | Capture 或应用 managed behavior tree 状态，authority/observer 辅助类型 |
 | `CycloneGames.BehaviorTree.Networking.Tests.Editor` | N/A | N/A | 运行 EditMode tests |
 
-Runtime assembly 引用 `CycloneGames.BehaviorTree.Runtime`、`CycloneGames.BehaviorTree.Networking.Core` 和 `CycloneGames.Networking.Core`。
+Runtime assembly 引用 `CycloneGames.BehaviorTree.Core`、`CycloneGames.BehaviorTree.Networking.Core` 和 `CycloneGames.Networking.Core`。
 
 ```mermaid
 flowchart LR

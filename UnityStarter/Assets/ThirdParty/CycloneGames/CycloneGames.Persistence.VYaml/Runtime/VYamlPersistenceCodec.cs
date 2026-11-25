@@ -6,12 +6,13 @@ using VYaml.Serialization;
 namespace CycloneGames.Persistence.VYaml
 {
     /// <summary>
-    /// Serializes one explicitly generated VYaml contract without changing Persistence Record V1.
+    /// VYaml codec for one UTF-8 LF wire format. Resolves formatters from the caller's generated
+    /// resolver, then from VYaml standard and Unity formatters.
     /// </summary>
     public sealed class VYamlPersistenceCodec<T> : IPersistenceCodec<T>
     {
         private static readonly PersistenceCodecId StableCodecId =
-            new PersistenceCodecId("vyaml/1");
+            new PersistenceCodecId("vyaml-utf8-lf");
 
         private readonly YamlSerializerOptions _serializerOptions;
 
@@ -58,6 +59,8 @@ namespace CycloneGames.Persistence.VYaml
             return YamlSerializer.Deserialize<T>(payload, _serializerOptions);
         }
 
+        // Resolution order is fixed: generated DTO formatters, VYaml primitives, then Unity types.
+        // Built-in fallbacks must never shadow a formatter supplied by the caller.
         private sealed class PersistenceYamlResolver : IYamlFormatterResolver
         {
             private readonly IYamlFormatterResolver _primaryResolver;

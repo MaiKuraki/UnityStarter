@@ -2,245 +2,533 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Persistence provides serializer-neutral, Unity-free primitives for one bounded versioned record. It pairs a codec with a storage adapter, enforces a strict byte format, detects corruption before deserialization, and returns structured results.
+`CycloneGames.Persistence` reads and writes one bounded record. A codec owns the wire format, a storage adapter owns the bytes, and the store coordinates them. The store wraps every payload in an ASCII header and an xxHash64 checksum, and rejects a record before deserialization when its framing, declared length, checksum, or format identity does not match.
 
-## Table of Contents
+The core assembly references `CycloneGames.Hash.Core` only and declares `noEngineReferences: true`. It runs in Unity, in a plain C# host, and in headless tests.
+
+## Contents
 
 - [Overview](#overview)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
+- [Package layout](#package-layout)
+- [Getting started](#getting-started)
+- [Public API](#public-api)
+- [Save and load pipeline](#save-and-load-pipeline)
+- [Record format](#record-format)
+- [Results and error codes](#results-and-error-codes)
+- [Cancellation, concurrency, and exceptions](#cancellation-concurrency-and-exceptions)
+- [Limits and diagnostics](#limits-and-diagnostics)
+- [Format inspection](#format-inspection)
+- [Implementing providers](#implementing-providers)
+- [Tests](#tests)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
 
-Persistence coordinates two external adapters — a serializer codec and a file/database storage provider — into a safe single-record pipeline. It wraps every payload with a versioned header, a stable codec identifier, and an xxHash64 checksum, then rejects records whose header, length, or integrity probe does not match before deserialization.
+| Concern | Owner | Responsibility |
+| --- | --- | --- |
+| Framing, validation, orchestration | `PersistenceStore<T>` | Encodes and parses one record, classifies failures, enforces one active operation |
+| Serialization | `IPersistenceCodec<T>` | Converts one `T` to and from payload bytes |
+| Byte storage | `IPersistenceStorage` | Reads, atomically writes, and deletes one record at one location |
+| Allocation bounds | `PersistenceLimits` | Caps payload and record size |
+| Composition | `PersistenceProfile<T>` | Pairs one codec with one limits instance |
 
-Runtime failures are returned as structured result types with explicit `PersistenceErrorCode` values. Invalid arguments and concurrent overlap throw immediately. Fatal runtime exceptions (`OutOfMemoryException`) propagate.
+The store holds no application state, no cache, and no path. It creates no worker thread and does not call `Task.Run`. One operation moves a whole record; this is a cold-path API.
 
-The core assembly's only dependency is `CycloneGames.Hash.Core`.
+A codec declares a `PersistenceCodecId`. This token identifies one wire format and is compared by ordinal equality. The runtime reads only the format bound to the profile. A record written by a different format is rejected. See [Record format](Documentation~/RecordFormat.md).
 
-### Key Features
-
-- **Record V1 format** — canonical LF-only ASCII header, codec identity, content version, fixed `identity/1`, xxHash64 over dispatch metadata and payload
-- **Structured results** — `PersistenceLoadResult<T>` distinguishes Loaded, Missing, and Failed; `PersistenceOperationResult` reports Succeeded or Failed with error codes
-- **One operation at a time** — overlap or callback reentrancy throws `InvalidOperationException`
-- **Cancellation support** — cancellation token observed at every boundary; commit outcome determines final result
-- **Payload limits** — hard cap of 1 MiB; profile-level reduction to 256 KiB for settings use
-- **No allocation leakage** — buffers are cleared after use; codecs write into borrowed `IBufferWriter<byte>`
-
-## Architecture
+## Package layout
 
 | Assembly | Package | References |
 | --- | --- | --- |
 | `CycloneGames.Persistence.Core` | `com.cyclone-games.persistence` | `CycloneGames.Hash.Core` |
 
-The package declares a dependency on `com.cyclone-games.hash` (1.0.0). It ships no `UnityEngine` reference (`noEngineReferences: true`) and requires only Unity 2022.3.
+`package.json` declares `com.cyclone-games.hash` `1.0.0` and Unity `2022.3`. The assembly sets `autoReferenced: false` and `noEngineReferences: true`.
 
-Storage and codec providers are separate packages. Persistence Core compiles and tests without them. Applications add the providers their composition root needs:
+| Provider package | Assembly | Role |
+| --- | --- | --- |
+| `com.cyclone-games.persistence.systemio` | `CycloneGames.Persistence.SystemIO`, `CycloneGames.Persistence.Unity` | File storage and persistent-data-path composition |
+| `com.cyclone-games.persistence.vyaml` | `CycloneGames.Persistence.VYaml` | UTF-8 YAML codec |
+| `com.cyclone-games.persistence.messagepack` | `CycloneGames.Persistence.MessagePack` | Binary codec, gated by a capability symbol |
 
-- `com.cyclone-games.persistence.systemio` — file-system storage
-- `com.cyclone-games.persistence.vyaml` — human-readable YAML codec
-- `com.cyclone-games.persistence.messagepack` — compact binary codec (optional, inactive by default)
+```mermaid
+flowchart LR
+    App["Application composition root"] --> Core["CycloneGames.Persistence.Core"]
+    App --> VYaml["CycloneGames.Persistence.VYaml"]
+    App --> MsgPack["CycloneGames.Persistence.MessagePack"]
+    App --> SysIO["CycloneGames.Persistence.SystemIO"]
+    Core --> Hash["CycloneGames.Hash.Core"]
+    VYaml --> Core
+    MsgPack --> Core
+    SysIO --> Core
+    SysIO --> IO["CycloneGames.IO.Core and IO.SystemIO"]
+```
 
-## Quick Start
+```text
+CycloneGames.Persistence/
+  Core/
+    Contracts/        format token, contexts, public interfaces
+    Internal/         pooled writer, exception policy, record encoder and parser
+    PersistenceStore.cs, PersistenceProfile.cs, PersistenceLimits.cs,
+    PersistenceResults.cs, PersistenceStoreMemorySnapshot.cs,
+    PersistenceRecordHeader.cs, PersistenceFormatRegistry.cs
+    Properties/AssemblyInfo.cs
+  Tests/Core/         EditMode tests and the golden byte fixture
+  Documentation~/     Record byte contract
+  package.json, README.md, README.SCH.md
+```
 
-Install the packages needed by the composition root:
+## Getting started
 
-- `com.cyclone-games.persistence`
-- one storage provider: `com.cyclone-games.persistence.systemio`
-- one codec provider: e.g. `com.cyclone-games.persistence.vyaml`
+### Step 1: install packages
 
-The application owns the DTO and schema version. VYaml requires a generated resolver; reflection fallback is not accepted for IL2CPP builds.
+Add `com.cyclone-games.persistence`, one storage provider, and one codec provider. The example below uses `com.cyclone-games.persistence.systemio` and `com.cyclone-games.persistence.vyaml`. Add the corresponding assembly names to the consumer asmdef, because both providers set `autoReferenced: false`.
+
+### Step 2: define the DTO
 
 ```csharp
-using System.Threading;
-using System.Threading.Tasks;
-using CycloneGames.Persistence;
-using CycloneGames.Persistence.Unity;
-using CycloneGames.Persistence.VYaml;
+using VYaml.Annotations;
 
-public static class LocalProfileComposition
+namespace MyGame.Contracts
 {
-    public static async Task SaveAsync(
-        LocalProfile profile,
-        CancellationToken cancellationToken)
+    [YamlObject]
+    public sealed partial class AudioSettings
     {
-        IPersistenceStorage storage = UnityPersistentStorage.Create("profiles/local.yaml");
-        var codec = new VYamlPersistenceCodec<LocalProfile>(GeneratedResolver.Instance);
-        var limits = new PersistenceLimits(maximumPayloadBytes: 256 * 1024);
-        var store = new PersistenceStore<LocalProfile>(
-            storage,
-            new PersistenceProfile<LocalProfile>(codec, limits));
-
-        PersistenceOperationResult result = await store.SaveAsync(
-            in profile,
-            contentVersion: 2,
-            cancellationToken);
-        if (!result.IsSuccess)
-        {
-            // Route ErrorCode to product recovery policy. Sanitize Exception before telemetry.
-        }
+        public float MasterVolume { get; set; } = 1f;
+        public bool Muted { get; set; }
     }
 }
 ```
 
-Loading requires the newest content version the caller understands:
+The VYaml source generator emits `MyGame.Contracts.GeneratedResolver`. Rebuild after changing the DTO. Keep DTOs out of a namespace that introduces a local `VYaml` namespace; generated formatter code references `VYaml.*` without a global prefix. See the [VYaml provider README](../CycloneGames.Persistence.VYaml/README.md).
+
+`T` is plain persisted data. It cannot own `IDisposable` resources, unmanaged handles, Unity object lifetimes, or thread-affine state, because failed and cancelled candidates are discarded without disposal.
+
+### Step 3: compose the store
 
 ```csharp
-PersistenceLoadResult<LocalProfile> result = await store.LoadAsync(
-    maximumSupportedContentVersion: 2,
+using CycloneGames.Persistence;
+using CycloneGames.Persistence.Unity;
+using CycloneGames.Persistence.VYaml;
+using MyGame.Contracts;
+
+IPersistenceStorage storage =
+    UnityPersistentStorage.Create("Settings/audio.cgp");
+
+IPersistenceCodec<AudioSettings> codec =
+    new VYamlPersistenceCodec<AudioSettings>(GeneratedResolver.Instance);
+
+var profile = new PersistenceProfile<AudioSettings>(
+    codec,
+    new PersistenceLimits(256 * 1024));
+
+var store = new PersistenceStore<AudioSettings>(storage, profile);
+```
+
+The composition root owns all four objects. One store is bound to one location and one codec. Use a separate store and a separate trusted path for each independent record.
+
+### Step 4: save
+
+```csharp
+var settings = new AudioSettings { MasterVolume = 0.8f, Muted = false };
+
+PersistenceOperationResult saved = await store.SaveAsync(
+    in settings,
     cancellationToken);
 
-switch (result.Status)
+if (!saved.IsSuccess)
+{
+    // Dispatch saved.ErrorCode to the product recovery policy.
+    // Sanitize saved.Exception before logging or telemetry.
+}
+```
+
+### Step 5: load
+
+```csharp
+PersistenceLoadResult<AudioSettings> loaded = await store.LoadAsync(cancellationToken);
+
+switch (loaded.Status)
 {
     case PersistenceLoadStatus.Loaded:
-        LocalProfile profile = result.Value;
+        ApplySettings(loaded.Value);
         break;
     case PersistenceLoadStatus.Missing:
-        // Create product defaults; Missing is not an error.
+        ApplyDefaults();
         break;
     case PersistenceLoadStatus.Failed:
-        // Keep the previous authoritative state and apply recovery policy.
+        Recover(loaded.ErrorCode, loaded.Exception);
         break;
     default:
         throw new InvalidOperationException("The load result was not initialized.");
 }
 ```
 
-## Core Concepts
+`Missing` means the location has no record. It is not a failure. A record whose format token differs from the bound codec returns `RecordFormatMismatch`.
 
-| Type | Responsibility |
-| --- | --- |
-| `IPersistenceCodec<T>` | Synchronously encode/decode one borrowed payload using a stable `PersistenceCodecId`. |
-| `IPersistenceStorage` | Own one location; perform bounded read, atomic write, and idempotent delete. |
-| `PersistenceProfile<T>` | Bind one codec and immutable allocation limits. |
-| `PersistenceStore<T>` | Serialize, encode Record V1, verify, deserialize, classify failures, and enforce one active operation. |
-| `PersistenceLimits` | Bound plaintext payload, record read, and pooled writer growth. |
-| `PersistenceLoadResult<T>` | Separate `Loaded`, `Missing`, `Failed`, and an uninitialized default struct. |
-| `PersistenceOperationResult` | Report `Succeeded` or `Failed`. `ErrorCode.None` alone is not a success test. |
-
-### Codec contract
-
-Codecs write into a bounded `IBufferWriter<byte>` supplied by the Store. They must not allocate a result array, retain borrowed inputs, discover types through runtime reflection, or write beyond `context.Limits`. Contexts expose the caller token so a synchronous codec can check cancellation at bounded work boundaries. `T` is a pure DTO; it must not own `IDisposable` resources, unmanaged handles, Unity object lifetimes, or thread-affine state — failed and cancelled candidates are discarded without disposal.
+### Step 6: delete
 
 ```csharp
-public sealed class ExampleCodec<T> : IPersistenceCodec<T>
-{
-    public PersistenceCodecId CodecId { get; } = new PersistenceCodecId("example/1");
+PersistenceOperationResult deleted = await store.DeleteAsync(cancellationToken);
+```
 
-    public void Serialize(
+The SystemIO provider treats an already absent entry as success.
+
+## Public API
+
+### `PersistenceStore<T>`
+
+| Member | Description |
+| --- | --- |
+| `PersistenceStore(IPersistenceStorage, PersistenceProfile<T>)` | Binds one location to one profile. Null arguments throw `ArgumentNullException`. |
+| `Location` | `IPersistenceStorage.Location`, for diagnostics. |
+| `Profile` | The bound `PersistenceProfile<T>`. |
+| `SaveAsync(in T value, CancellationToken = default)` | Serializes, encodes, and writes one record. |
+| `LoadAsync(CancellationToken = default)` | Reads and validates one record. |
+| `DeleteAsync(CancellationToken = default)` | Deletes the bound record. |
+| `GetMemorySnapshot()` | Counters and limits as a `PersistenceStoreMemorySnapshot`. |
+
+### `PersistenceCodecId`
+
+| Member | Description |
+| --- | --- |
+| `PersistenceCodecId(string)` | Validates the format token grammar. |
+| `Value` | The token string, empty for `default`. |
+| `Equals`, `==`, `!=`, `GetHashCode`, `ToString` | Ordinal value semantics. |
+
+Grammar: 1 to 64 ASCII characters, starting and ending with `[a-z0-9]`, with `[a-z0-9._-]` elsewhere. No slash, no numeric suffix, no ordering. A token names one byte format. Examples: `vyaml-utf8-lf`, `messagepack-nocompress`, `test-yaml`.
+
+### `PersistenceProfile<T>` and `PersistenceLimits`
+
+| Type | Member | Description |
+| --- | --- | --- |
+| `PersistenceProfile<T>` | `PersistenceProfile(IPersistenceCodec<T>, PersistenceLimits = null)` | Uses a fresh default limits instance when limits are omitted. |
+| | `Codec`, `CodecId`, `Limits` | Immutable binding. |
+| `PersistenceLimits` | `PersistenceLimits()` | Hard payload ceiling and default initial buffer. |
+| | `PersistenceLimits(int maximumPayloadBytes)` | Custom ceiling with the default initial buffer. |
+| | `PersistenceLimits(int maximumPayloadBytes, int initialBufferBytes)` | Both values explicit. |
+| | `static HardMaximumPayloadBytes` | 1048576, in bytes. |
+| | `static DefaultInitialBufferBytes` | 256, in bytes. |
+| | `MaximumPayloadBytes`, `InitialBufferBytes` | Configured values. |
+| | `MaximumRecordBytes` | Payload limit plus the 256-byte header budget. |
+
+These two static members are stateless computed properties, not shared mutable state. There is no shared default instance.
+
+### Contexts
+
+Both contexts are readonly structs passed by `in`. Each exposes `Limits` and `CancellationToken`. A synchronous codec can inspect the token at bounded work boundaries.
+
+### `IPersistenceCodec<T>`
+
+```csharp
+public interface IPersistenceCodec<T>
+{
+    PersistenceCodecId CodecId { get; }
+
+    void Serialize(
         in T value,
         IBufferWriter<byte> destination,
-        in PersistenceWriteContext context)
-    {
-        // Write a bounded, deterministic representation to destination.
-    }
+        in PersistenceWriteContext context);
 
-    public T Deserialize(
+    T Deserialize(
         ReadOnlyMemory<byte> payload,
-        in PersistenceReadContext context)
+        in PersistenceReadContext context);
+}
+```
+
+Implementations are synchronous and borrow every input. They must not retain the value, destination, payload, or contexts after returning, allocate an exact result array, or write beyond `context.Limits`. `destination` is a budget-capped writer that throws `PersistencePayloadBudgetExceededException` when the payload grows past the limit.
+
+### `IPersistenceStorage`
+
+```csharp
+public interface IPersistenceStorage
+{
+    string Location { get; }
+
+    Task<PersistenceStorageReadResult> ReadAsync(
+        int maxByteCount,
+        CancellationToken cancellationToken = default);
+
+    Task WriteAtomicallyAsync(
+        byte[] content,
+        CancellationToken cancellationToken = default);
+
+    Task DeleteAsync(CancellationToken cancellationToken = default);
+}
+```
+
+`Found` transfers ownership of its `byte[]` to the store. `WriteAtomicallyAsync` borrows `content` until its task completes. `Location` is diagnostic metadata.
+
+### Result types
+
+| Type | Members |
+| --- | --- |
+| `PersistenceStorageReadResult` | `IsMissing`, `Content`, static `Missing()`, `Found(byte[])` |
+| `PersistenceOperationResult` | `Status`, `IsSuccess`, `ErrorCode`, `Exception`, static `Success()`, `Failure(...)` |
+| `PersistenceLoadResult<T>` | `Status`, `IsSuccess`, `IsMissing`, `Value`, `ErrorCode`, `Exception`, static `Loaded(T)`, `Missing()`, `Failure(...)` |
+| `PersistenceLoadStatus` | `Uninitialized`, `Failed`, `Missing`, `Loaded` |
+| `PersistenceOperationStatus` | `Uninitialized`, `Succeeded`, `Failed` |
+| `PersistencePayloadBudgetExceededException` | `MaximumPayloadBytes` |
+
+A default result struct is `Uninitialized` with `ErrorCode.None`. Test `IsSuccess` or `Status`; `ErrorCode.None` alone is not success. `Exception` is diagnostic and needs redaction before telemetry.
+
+## Save and load pipeline
+
+```mermaid
+flowchart TD
+    Save["SaveAsync"] --> Reset["Reset pooled writer"]
+    Reset --> Ser["Codec.Serialize"]
+    Ser --> Enc["Encode header and xxHash64"]
+    Enc --> Release["Release writer buffer"]
+    Release --> Write["Storage.WriteAtomicallyAsync"]
+    Write --> SaveClear["Clear record array; release gate"]
+
+    Load["LoadAsync"] --> Read["Storage.ReadAsync"]
+    Read --> Missing{"Record missing?"}
+    Missing -->|yes| MissResult["PersistenceLoadResult.Missing"]
+    Missing -->|no| Parse["Parse header, length, checksum, token"]
+    Parse --> Valid{"All checks passed?"}
+    Valid -->|no| FailResult["Failure with PersistenceErrorCode"]
+    Valid -->|yes| Deser["Codec.Deserialize on borrowed memory"]
+    Deser --> LoadedResult["PersistenceLoadResult.Loaded"]
+    FailResult --> LoadClear["Clear record array; release gate"]
+    LoadedResult --> LoadClear
+```
+
+The store reuses one pooled writer across saves. `Reset` acquires an array from `ArrayPool<byte>.Shared`; `Release` clears and returns it. Serialization is synchronous on the caller thread, and the record array is the framework's only allocation on the save path.
+
+| Buffer | Producer | Owner after transfer | Cleared by |
+| --- | --- | --- | --- |
+| Pooled writer buffer | `BoundedByteBufferWriter` | Store | `Release` on every exit path |
+| Record array on save | `PersistenceRecord.Encode` | Store | `SaveCoreAsync` finally block |
+| Record array on read | `IPersistenceStorage` | Store | `LoadCoreAsync` finally block |
+| Payload slice | Store | Store, lent to the codec | Codec must not retain it |
+
+## Record format
+
+This is a complete record with a ten-byte YAML payload. Each header line and the delimiter line ends with one LF byte, 0x0A:
+
+```text
+# cgp-record
+# codec-id: test-yaml
+# payload-bytes: 10
+# xxh64: 4708293BF9A62D22
+---
+value: 42
+```
+
+The header is ASCII without a BOM. `payload-bytes` must equal every byte after the delimiter line. The checksum covers the domain separator, a length-prefixed format token, a length-prefixed payload length, and the payload bytes, so the token cannot be substituted without invalidating the digest. The full contract is in [Record format](Documentation~/RecordFormat.md).
+
+xxHash64 detects accidental corruption. It is neither authentication nor encryption; a local record is not a trusted authority for payments, entitlements, or secrets.
+
+## Results and error codes
+
+Runtime failures are returned, not thrown. Invalid arguments and overlapping operations throw immediately.
+
+| `PersistenceErrorCode` | Condition |
+| --- | --- |
+| `None` | Default value; never a success indicator. |
+| `ReadFailed` | Storage read threw, or returned `Found` without a buffer. |
+| `PayloadTooLarge` | Codec exceeded the writer budget, or the declared payload exceeds the configured limit. |
+| `RecordFormatMismatch` | The magic line does not match, or the format token differs from the profile. |
+| `MalformedRecord` | Header syntax, field order, decimal form, token grammar, delimiter, length, or hex form is invalid. |
+| `IntegrityCheckFailed` | xxHash64 mismatch; the codec is not called. |
+| `DeserializeFailed` | The codec's `Deserialize` threw. |
+| `SerializationFailed` | The codec's `Serialize` threw, or encoding failed. |
+| `WriteFailed` | `WriteAtomicallyAsync` threw. |
+| `DeleteFailed` | `DeleteAsync` threw. |
+| `Cancelled` | The caller token was cancelled. |
+
+The parser matches the magic line and the token exactly. Any other bytes are rejected at one of those two checks.
+
+## Cancellation, concurrency, and exceptions
+
+- `CancellationToken` is observed on entry, after serialization, before encoding, after the storage read, after parsing, and after deserialization. Async continuations use `ConfigureAwait(false)`.
+- Only an `OperationCanceledException` raised while the caller token is cancelled becomes `Cancelled`. An unsolicited cancellation from a codec or provider is classified as that stage's failure.
+- The storage write is the commit boundary. A replacement that completed reports success even if the token is cancelled afterwards.
+- One store accepts one operation at a time. Overlap or callback reentrancy throws `InvalidOperationException` synchronously. The gate is scoped to that instance; stores sharing a codec or storage are not serialized automatically.
+- Argument errors throw from the public method rather than being wrapped in a result.
+- Fatal exceptions propagate after the gate is released: `OutOfMemoryException`, `StackOverflowException`, `AccessViolationException`, `AppDomainUnloadedException`, `CannotUnloadAppDomainException`, `ThreadAbortException`, `BadImageFormatException`, and `InvalidProgramException`.
+
+### Composition-root serialization
+
+The store rejects overlap instead of queueing it. Serialize overlapping saves at the composition root:
+
+```csharp
+var saveGate = new SemaphoreSlim(1, 1);
+
+public async Task<PersistenceOperationResult> SaveSerializedAsync(
+    AudioSettings value, CancellationToken ct)
+{
+    await saveGate.WaitAsync(ct).ConfigureAwait(false);
+    try
     {
-        // Do not retain payload. Use context.ContentVersion when old wire shapes remain readable.
-        throw new NotImplementedException();
+        return await store.SaveAsync(in value, ct).ConfigureAwait(false);
+    }
+    finally
+    {
+        saveGate.Release();
     }
 }
 ```
 
-`ReadOnlyMemory<byte>` lets VYaml and MessagePack consume memory directly, avoiding a whole-payload adapter copy. The ownership contract still prohibits retention after return.
+`GetMemorySnapshot().ConcurrentOperationRejectionCount` reports how often the gate rejected overlap. The optional `CycloneGames.Persistence.Resilience` decorator wraps any `IPersistenceStorage`. Its usage is documented in the module README.
 
-## Usage Guide
+## Limits and diagnostics
 
-### Save flow
-
-1. Codec writes to a clear-on-return pooled buffer.
-2. Store wraps the payload with Record V1 header and xxHash64.
-3. An exact record array is created and handed to the storage adapter.
-4. The array is cleared when the write task completes.
-
-### Load flow
-
-1. Storage transfers one exact record array.
-2. Store parses in place: validates header, codec ID, content version, and checksum.
-3. A `ReadOnlyMemory<byte>` slice is lent to the codec.
-4. The array is cleared after deserialization.
-
-### Error codes
-
-| ErrorCode | Condition |
+| Bound | Value |
 | --- | --- |
-| `None` | Default; never indicates success. |
-| `ReadFailed` | Storage read exception. |
-| `PayloadTooLarge` | Codec or record exceeds configured limit. |
-| `RecordFormatMismatch` | Unknown magic or non-Record-V1 format. |
-| `UnsupportedRecordVersion` | Record version beyond what the Store knows. |
-| `MalformedRecord` | Structural header error. |
-| `IntegrityCheckFailed` | xxHash64 mismatch. |
-| `CodecMismatch` | Codec ID in record does not match profile codec. |
-| `TransformMismatch` | Transform identity mismatch (reserved). |
-| `FutureContentVersion` | Content version exceeds maximum supported. |
-| `DeserializeFailed` | Codec deserialization exception. |
-| `SerializationFailed` | Codec serialization exception. |
-| `WriteFailed` | Storage write exception. |
-| `DeleteFailed` | Storage delete exception. |
-| `Cancelled` | Caller token cancelled. |
+| Payload ceiling | 1048576 bytes |
+| Header budget | 256 bytes |
+| Maximum record passed to `ReadAsync` | payload limit plus 256 bytes |
+| Time complexity | One linear pass over the record; no nested loops over payload bytes |
+| Temporary memory | Bounded by the record size |
 
-### Concurrency and memory
+The 1048576-byte ceiling is a single-record budget enforced by `PersistenceLimits` at construction.
 
-- Payload hard limit: 1 MiB; profiles may lower it; settings use 256 KiB.
-- Complexity: O(n) time, bounded O(n) temporary memory.
-- One Store accepts one operation at a time. Overlap throws `InvalidOperationException`.
-- The guard is scoped to that Store instance. Multiple Stores sharing a codec, resolver, or storage instance are not serialized automatically.
-- Store creates no worker threads, does not use `Task.Run`, and uses `ConfigureAwait(false)` internally.
-- Only an `OperationCanceledException` associated with a cancelled caller token is classified as `Cancelled`. Unsolicited codec or provider cancellation is a stage failure.
-- The storage commit boundary decides cancellation semantics. A successful commit reports success even if the token is cancelled afterward.
+`GetMemorySnapshot()` reads counters without inspecting application values, storage paths, or serialized content. It reports `IsOperationActive`, configured limits, monotonic load/save/delete counts, overlap rejections, and last/peak record bytes.
 
-Persistence is a cold-path facility. Do not call it every frame or use it as a per-entity update mechanism.
+## Format inspection
 
-## Advanced Topics
+`PersistenceRecordHeader` reads record framing without decoding the payload. `PersistenceFormatRegistry<TEntry>` maps a format token to an entry supplied by the caller. Both types work without a `PersistenceStore<T>` instance.
 
-### Record format
+### Read the header
 
-Record V1 uses a canonical LF-only ASCII header, exact payload bytes, a stable codec ID, fixed `identity/1`, and xxHash64 over dispatch metadata plus payload. See [PersistenceRecordV1.md](Documentation~/PersistenceRecordV1.md) for the byte contract and parser precedence.
+```csharp
+byte[] record = await ReadRecordBytesAsync(ct);
 
-xxHash64 detects accidental corruption only. It does not authenticate an attacker-controlled file. Do not store secrets or trust local values as payment, entitlement, or server authority.
+if (PersistenceRecordHeader.TryRead(
+        record,
+        out ReadOnlySpan<byte> token,
+        out ReadOnlySpan<byte> payload))
+{
+    UseToken(token, payload);
+}
+```
 
-### Platform matrix
+`TryRead` validates the magic line, field order, decimal form, token grammar, delimiter, declared length, and hex form. It does not compute the checksum and does not compare the token against a profile. It allocates nothing and returns spans into the caller's array. `TryReadFormatToken` returns the token only.
 
-| Layer | Editor/desktop/mobile/server | WebGL | Console |
-| --- | --- | --- | --- |
-| Persistence Core | Static compatibility; pure managed code | Static compatibility | Static compatibility |
-| SystemIO provider | Validated file-system targets | Fail closed | Fail closed until qualified |
-| Unity SystemIO path adapter | `Application.persistentDataPath` composition | Fail closed | Fail closed until qualified |
-| Custom provider | Optional | IndexedDB/JavaScript async provider required | Platform SDK save-data provider required |
+### Look up a token
 
-The matrix records static boundaries. IL2CPP, stripping, mobile, WebGL, console, filesystem durability, and long-running stability require separate reproducible Player evidence.
+```csharp
+var registry = new PersistenceFormatRegistry<string>(
+    new PersistenceFormatRegistration<string>(
+        new PersistenceCodecId("vyaml-utf8-lf"), "yaml"),
+    new PersistenceFormatRegistration<string>(
+        new PersistenceCodecId("messagepack-nocompress"), "binary"));
 
-### Storage behavior
+if (registry.TryGet(token, out string entry))
+{
+    SelectFormat(entry);
+}
+```
 
-Core writes no file and knows no path. The `IPersistenceStorage` implementation owns location, lifecycle, atomicity, deletion, quota, and recovery. The SystemIO provider writes one explicit file below a consumer-selected root, using a same-directory temporary file and atomic replace. That file is product runtime data and may be deleted only according to product recovery policy.
+`TryGet` compares bytes over a contiguous array and allocates nothing. Duplicate tokens throw `ArgumentException` at construction. An unknown token returns `false`. The registry reads no files and writes no records.
 
-### Migration
+```mermaid
+flowchart LR
+    Bytes["Record bytes"] --> Try["TryRead"]
+    Try -->|valid| Spans["Token and payload spans"]
+    Try -->|invalid| False["false"]
+    Spans --> Lookup["Registry TryGet"]
+    Lookup -->|found| Entry["Registered entry"]
+    Lookup -->|unknown| NoEntry["false"]
+```
 
-The Store never guesses old formats. Prototype records, raw YAML, and unknown magic return `RecordFormatMismatch`. Product-owned migration must run before adopting Record V1. See [ADR-001](Documentation~/ADR-001-Settings-Persistence-Boundaries.md) for package boundaries, ownership, and the breaking migration from the retired combined settings/persistence package.
+| Type | Members |
+| --- | --- |
+| `PersistenceRecordHeader` | `TryRead(...)`, `TryReadFormatToken(...)` |
+| `PersistenceFormatRegistration<TEntry>` | `Format`, `Entry` |
+| `PersistenceFormatRegistry<TEntry>` | `Count`, `TryGet(ReadOnlySpan<byte>, ...)`, `TryGet(PersistenceCodecId, ...)` |
+
+## Implementing providers
+
+A codec is a synchronous adapter with one format token:
+
+```csharp
+public sealed class Int32Codec : IPersistenceCodec<int>
+{
+    public PersistenceCodecId CodecId { get; } =
+        new PersistenceCodecId("binary-int");
+
+    public void Serialize(
+        in int value,
+        IBufferWriter<byte> destination,
+        in PersistenceWriteContext context)
+    {
+        Span<byte> span = destination.GetSpan(sizeof(int));
+        BinaryPrimitives.WriteInt32LittleEndian(span, value);
+        destination.Advance(sizeof(int));
+    }
+
+    public int Deserialize(
+        ReadOnlyMemory<byte> payload,
+        in PersistenceReadContext context)
+    {
+        return BinaryPrimitives.ReadInt32LittleEndian(payload.Span);
+    }
+}
+```
+
+A storage adapter owns one location:
+
+```csharp
+public sealed class MemoryStorage : IPersistenceStorage
+{
+    private byte[] _content;
+
+    public string Location => "memory://record";
+
+    public Task<PersistenceStorageReadResult> ReadAsync(
+        int maxByteCount,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_content == null)
+        {
+            return Task.FromResult(PersistenceStorageReadResult.Missing());
+        }
+
+        if (_content.Length > maxByteCount)
+        {
+            throw new InvalidOperationException("Record exceeds the read budget.");
+        }
+
+        return Task.FromResult(
+            PersistenceStorageReadResult.Found((byte[])_content.Clone()));
+    }
+
+    public Task WriteAtomicallyAsync(
+        byte[] content,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _content = (byte[])content.Clone();
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _content = null;
+        return Task.CompletedTask;
+    }
+}
+```
+
+Never retain borrowed inputs, honour `maxByteCount` and `context.Limits`, and let exceptions propagate so the store can classify them.
+
+## Tests
+
+`CycloneGames.Persistence.Tests.Core` is an EditMode assembly gated by `UNITY_INCLUDE_TESTS`. `PersistenceStoreTests.cs` covers round trips, error classification, cancellation, overlap rejection, buffer clearing, and record parsing. `Tests/Core/Fixtures/Record.yaml.bytes` is the golden byte fixture.
 
 ## Troubleshooting
 
-| Symptom | Cause | Solution |
+| Symptom | Cause | Action |
 | --- | --- | --- |
-| `RecordFormatMismatch` on load | File was written without Record V1 wrapper | Run product migration before adopting the Store. |
-| `CodecMismatch` on load | Record was written with a different codec | Verify codec ID matches; orphaned records need migration. |
-| `FutureContentVersion` on load | Record content version exceeds `maximumSupportedContentVersion` | Bump the maximum or add a migration step for the newer version. |
-| `IntegrityCheckFailed` on load | File was manually edited or corrupted | Restore from a known-good backup; never bypass checksums. |
-| `PayloadTooLarge` on save | DTO exceeds configured limit | Increase `PersistenceLimits.MaximumPayloadBytes` or split the record. |
-| `InvalidOperationException` on concurrent calls | Overlapping Save/Load/Delete on one Store | Serialize calls; one Store = one active operation. |
-| `OperationCanceledException` not caught | Catching only `Exception` in the composition root | Catch or check `result.ErrorCode == PersistenceErrorCode.Cancelled`. |
-| Tests fail on IL2CPP Player | Reflection fallback used instead of generated resolver | Replace all reflection-based formatters with source-generated or registered ones. |
-
-## Memory Diagnostics and Storage Boundaries
-
-`PersistenceStore<T>.GetMemorySnapshot()` reports operation activity, configured payload/record limits, started load/save/delete counts, overlap rejections, and last/peak record bytes without inspecting application values, storage paths, or serialized content. These counters do not change Persistence Record V1.
-
-`PersistenceStore.GetMemorySnapshot()` exposes owner-local operation, rejection, and retained-record counters without owning external telemetry or report storage. Codecs and storage adapters remain responsible for their input bounds, transient buffers, atomic writes, quotas, and failure isolation.
+| `RecordFormatMismatch` on load | The magic line does not match, or the token differs from the bound codec | Bind the codec that wrote the record, or write the record again with the current profile. |
+| `IntegrityCheckFailed` on load | The file was edited or damaged | Restore from a known-good copy; do not bypass the checksum. |
+| `MalformedRecord` on load | Header bytes, line endings, or the declared length are wrong | Inspect the header with a byte viewer; check for CRLF. |
+| `PayloadTooLarge` on save | The DTO exceeds `MaximumPayloadBytes` | Raise the profile limit up to 1048576, or split the record. |
+| `InvalidOperationException` on concurrent calls | Overlapping Save/Load/Delete on one store | Serialize calls; one store allows one active operation. |
+| `OperationCanceledException` reaches the composition root | Only `Exception` is caught, or a fatal exception propagated | Catch it explicitly, or check `result.ErrorCode == PersistenceErrorCode.Cancelled`. |
+| `MissingFormatterException` in an IL2CPP Player | Reflection fallback used instead of a generated resolver | Register or generate a formatter for every persisted DTO. |

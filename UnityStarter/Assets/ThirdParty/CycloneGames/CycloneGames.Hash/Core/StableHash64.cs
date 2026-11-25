@@ -46,9 +46,6 @@ namespace CycloneGames.Hash.Core
             return Fnv1a64.CombineUInt64LittleEndian(hash, value);
         }
 
-        /// <summary>
-        /// Maps 0 to <see cref="NonZeroFallback"/>. Call this on a final digest, not every intermediate state.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ulong EnsureNonZero(ulong value)
         {

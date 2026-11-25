@@ -36,7 +36,7 @@ namespace CycloneGames.Persistence.Tests.MessagePack
                 writer.WrittenMemory,
                 in readContext);
 
-            Assert.That(codec.CodecId.Value, Is.EqualTo("messagepack/1"));
+            Assert.That(codec.CodecId.Value, Is.EqualTo("messagepack-nocompress"));
             Assert.That(actual.Revision, Is.EqualTo(expected.Revision));
             Assert.That(actual.Name, Is.EqualTo(expected.Name));
         }

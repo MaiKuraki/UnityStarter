@@ -3,11 +3,11 @@ using System;
 namespace CycloneGames.Persistence
 {
     /// <summary>
-    /// Stable, versioned ASCII identifier stored in Persistence Record V1.
+    /// Wire format identity stored in a persistence record, compared by ordinal equality.
     /// </summary>
     public readonly struct PersistenceCodecId : IEquatable<PersistenceCodecId>
     {
-        public const int MaximumLength = 64;
+        internal const int MaximumTokenLength = 64;
 
         private readonly string _value;
 
@@ -49,55 +49,36 @@ namespace CycloneGames.Persistence
             return !left.Equals(right);
         }
 
+        // Mirrored by PersistenceRecord.IsValidIdentifier. Both define the same grammar so a
+        // token accepted here can always be parsed back from a record.
         internal static void Validate(string value, string parameterName)
         {
-            if (string.IsNullOrEmpty(value) || value.Length > MaximumLength)
+            if (string.IsNullOrEmpty(value) || value.Length > MaximumTokenLength)
             {
                 throw new ArgumentException(
-                    $"A codec identifier must contain 1 to {MaximumLength} ASCII characters.",
+                    $"A format token must contain 1 to {MaximumTokenLength} ASCII characters.",
                     parameterName);
             }
 
             if (!IsAlphaNumeric(value[0]) || !IsAlphaNumeric(value[value.Length - 1]))
             {
                 throw new ArgumentException(
-                    "A codec identifier must begin and end with a lowercase ASCII letter or digit.",
+                    "A format token must begin and end with a lowercase ASCII letter or digit.",
                     parameterName);
             }
 
-            bool hasVersionSeparator = false;
             for (int index = 0; index < value.Length; index++)
             {
                 char character = value[index];
-                if (character == '/')
-                {
-                    if (hasVersionSeparator)
-                    {
-                        throw new ArgumentException(
-                            "A codec identifier must contain exactly one version separator.",
-                            parameterName);
-                    }
-
-                    hasVersionSeparator = true;
-                    continue;
-                }
-
                 if (!IsAlphaNumeric(character)
                     && character != '-'
                     && character != '_'
                     && character != '.')
                 {
                     throw new ArgumentException(
-                        "A codec identifier contains an unsupported character.",
+                        "A format token contains an unsupported character.",
                         parameterName);
                 }
-            }
-
-            if (!hasVersionSeparator)
-            {
-                throw new ArgumentException(
-                    "A codec identifier must include a version separator, for example 'yaml/1'.",
-                    parameterName);
             }
         }
 

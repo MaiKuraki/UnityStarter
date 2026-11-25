@@ -1,9 +1,11 @@
 {
-    "name": "CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery",
-    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery",
+    "name": "CycloneGames.BehaviorTree.Integrations.Perception",
+    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.Integrations.Perception",
     "references": [
         "CycloneGames.BehaviorTree.Core",
-        "CycloneGames.AIEnvQuery.Core"
+        "CycloneGames.AIPerception",
+        "Unity.Collections",
+        "Unity.Mathematics"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -13,5 +15,5 @@
     "autoReferenced": false,
     "defineConstraints": [],
     "versionDefines": [],
-    "noEngineReferences": true
+    "noEngineReferences": false
 }

@@ -1,11 +1,9 @@
 {
-    "name": "CycloneGames.BehaviorTree.Runtime.Integrations.Perception",
-    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.Integrations.Perception",
+    "name": "CycloneGames.BehaviorTree.Integrations.Spatial",
+    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.Integrations.Spatial",
     "references": [
         "CycloneGames.BehaviorTree.Core",
-        "CycloneGames.AIPerception",
-        "Unity.Collections",
-        "Unity.Mathematics"
+        "CycloneGames.Spatial.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -15,5 +13,5 @@
     "autoReferenced": false,
     "defineConstraints": [],
     "versionDefines": [],
-    "noEngineReferences": false
+    "noEngineReferences": true
 }

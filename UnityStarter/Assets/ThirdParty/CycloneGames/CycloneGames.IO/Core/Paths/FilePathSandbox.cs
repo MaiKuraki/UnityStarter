@@ -24,7 +24,8 @@ namespace CycloneGames.IO
                 throw new ArgumentException("Root path cannot be null, empty, or whitespace.", nameof(rootPath));
             }
 
-            if (!Enum.IsDefined(typeof(FileLinkPolicy), linkPolicy))
+            if (linkPolicy != FileLinkPolicy.AllowLinks
+                && linkPolicy != FileLinkPolicy.RejectExistingLinks)
             {
                 throw new ArgumentOutOfRangeException(nameof(linkPolicy));
             }

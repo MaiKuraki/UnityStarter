@@ -2,7 +2,6 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.IO;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
@@ -13,6 +12,8 @@ namespace CycloneGames.Persistence.Tests
 {
     public sealed class PersistenceStoreTests
     {
+        private static readonly PersistenceCodecId FormatToken = new PersistenceCodecId("binary-int");
+
         [Test]
         public void DefaultOperationResult_IsNotSuccess()
         {
@@ -23,33 +24,31 @@ namespace CycloneGames.Persistence.Tests
         }
 
         [Test]
-        public async Task SaveAndLoad_RoundTripValueAndVersion()
+        public async Task SaveAndLoad_RoundTripValueAndClearsBuffers()
         {
             var storage = new MemoryStorage();
-            var codec = new Int32Codec("binary-int/1");
+            var codec = new Int32Codec(FormatToken);
             var store = CreateStore(storage, codec);
             int value = 42;
 
-            PersistenceOperationResult save = await store.SaveAsync(in value, 3);
-            PersistenceLoadResult<int> load = await store.LoadAsync(3);
+            PersistenceOperationResult save = await store.SaveAsync(in value);
+            PersistenceLoadResult<int> load = await store.LoadAsync();
 
             Assert.That(save.IsSuccess, Is.True);
             Assert.That(load.IsSuccess, Is.True);
             Assert.That(load.Value, Is.EqualTo(42));
-            Assert.That(load.ContentVersion, Is.EqualTo(3));
-            Assert.That(codec.LastReadVersion, Is.EqualTo(3));
-            Assert.That(storage.LastBorrowedWrite.All(item => item == 0), Is.True,
+            Assert.That(AllZero(storage.LastBorrowedWrite), Is.True,
                 "The store must clear its exact write array after the storage task completes.");
-            Assert.That(storage.LastReturnedRead.All(item => item == 0), Is.True,
+            Assert.That(AllZero(storage.LastReturnedRead), Is.True,
                 "The store must clear the storage-owned read array after decoding completes.");
         }
 
         [Test]
         public async Task Missing_IsNotReportedAsFailure()
         {
-            var store = CreateStore(new MemoryStorage(), new Int32Codec("binary-int/1"));
+            var store = CreateStore(new MemoryStorage(), new Int32Codec(FormatToken));
 
-            PersistenceLoadResult<int> result = await store.LoadAsync(0);
+            PersistenceLoadResult<int> result = await store.LoadAsync();
 
             Assert.That(result.IsMissing, Is.True);
             Assert.That(result.ErrorCode, Is.EqualTo(PersistenceErrorCode.None));
@@ -59,46 +58,30 @@ namespace CycloneGames.Persistence.Tests
         public async Task CorruptedPayload_NeverInvokesCodec()
         {
             var storage = new MemoryStorage();
-            var writerCodec = new Int32Codec("binary-int/1");
-            var writer = CreateStore(storage, writerCodec);
             int value = 17;
-            Assert.That((await writer.SaveAsync(in value, 1)).IsSuccess, Is.True);
+            Assert.That((await CreateStore(storage, new Int32Codec(FormatToken))
+                .SaveAsync(in value)).IsSuccess, Is.True);
             storage.MutateLastByte();
 
-            var readerCodec = new Int32Codec("binary-int/1");
-            PersistenceLoadResult<int> result = await CreateStore(storage, readerCodec).LoadAsync(1);
+            var readerCodec = new Int32Codec(FormatToken);
+            PersistenceLoadResult<int> result = await CreateStore(storage, readerCodec).LoadAsync();
 
             Assert.That(result.ErrorCode, Is.EqualTo(PersistenceErrorCode.IntegrityCheckFailed));
             Assert.That(readerCodec.DeserializeCount, Is.Zero);
         }
 
         [Test]
-        public async Task CodecMismatch_IsRejectedBeforeDeserialize()
+        public async Task UnknownFormatToken_IsRejectedBeforeDeserialize()
         {
             var storage = new MemoryStorage();
             int value = 9;
-            Assert.That((await CreateStore(storage, new Int32Codec("binary-int/1"))
-                .SaveAsync(in value, 1)).IsSuccess, Is.True);
-            var readerCodec = new Int32Codec("other-int/1");
+            Assert.That((await CreateStore(storage, new Int32Codec(FormatToken))
+                .SaveAsync(in value)).IsSuccess, Is.True);
+            var readerCodec = new Int32Codec(new PersistenceCodecId("other-int"));
 
-            PersistenceLoadResult<int> result = await CreateStore(storage, readerCodec).LoadAsync(1);
+            PersistenceLoadResult<int> result = await CreateStore(storage, readerCodec).LoadAsync();
 
-            Assert.That(result.ErrorCode, Is.EqualTo(PersistenceErrorCode.CodecMismatch));
-            Assert.That(readerCodec.DeserializeCount, Is.Zero);
-        }
-
-        [Test]
-        public async Task FutureVersion_IsRejectedWithoutDeserialize()
-        {
-            var storage = new MemoryStorage();
-            int value = 9;
-            Assert.That((await CreateStore(storage, new Int32Codec("binary-int/1"))
-                .SaveAsync(in value, 2)).IsSuccess, Is.True);
-            var readerCodec = new Int32Codec("binary-int/1");
-
-            PersistenceLoadResult<int> result = await CreateStore(storage, readerCodec).LoadAsync(1);
-
-            Assert.That(result.ErrorCode, Is.EqualTo(PersistenceErrorCode.FutureContentVersion));
+            Assert.That(result.ErrorCode, Is.EqualTo(PersistenceErrorCode.RecordFormatMismatch));
             Assert.That(readerCodec.DeserializeCount, Is.Zero);
         }
 
@@ -111,7 +94,7 @@ namespace CycloneGames.Persistence.Tests
             var store = new PersistenceStore<int>(storage, profile);
             int value = 1;
 
-            PersistenceOperationResult result = await store.SaveAsync(in value, 0);
+            PersistenceOperationResult result = await store.SaveAsync(in value);
 
             Assert.That(result.ErrorCode, Is.EqualTo(PersistenceErrorCode.PayloadTooLarge));
             Assert.That(storage.WriteCount, Is.Zero);
@@ -121,13 +104,13 @@ namespace CycloneGames.Persistence.Tests
         public async Task CodecExceptions_AreMappedWithoutPoisoningStore()
         {
             var storage = new MemoryStorage();
-            var codec = new Int32Codec("binary-int/1") { ThrowOnSerialize = true };
+            var codec = new Int32Codec(FormatToken) { ThrowOnSerialize = true };
             var store = CreateStore(storage, codec);
             int value = 1;
 
-            PersistenceOperationResult failed = await store.SaveAsync(in value, 0);
+            PersistenceOperationResult failed = await store.SaveAsync(in value);
             codec.ThrowOnSerialize = false;
-            PersistenceOperationResult recovered = await store.SaveAsync(in value, 0);
+            PersistenceOperationResult recovered = await store.SaveAsync(in value);
 
             Assert.That(failed.ErrorCode, Is.EqualTo(PersistenceErrorCode.SerializationFailed));
             Assert.That(recovered.IsSuccess, Is.True);
@@ -138,38 +121,38 @@ namespace CycloneGames.Persistence.Tests
         {
             var storage = new MemoryStorage();
             int value = 1;
-            Assert.That((await CreateStore(storage, new Int32Codec("binary-int/1"))
-                .SaveAsync(in value, 0)).IsSuccess, Is.True);
-            var codec = new Int32Codec("binary-int/1") { ThrowOnDeserialize = true };
+            Assert.That((await CreateStore(storage, new Int32Codec(FormatToken))
+                .SaveAsync(in value)).IsSuccess, Is.True);
+            var codec = new Int32Codec(FormatToken) { ThrowOnDeserialize = true };
 
-            PersistenceLoadResult<int> result = await CreateStore(storage, codec).LoadAsync(0);
+            PersistenceLoadResult<int> result = await CreateStore(storage, codec).LoadAsync();
 
             Assert.That(result.ErrorCode, Is.EqualTo(PersistenceErrorCode.DeserializeFailed));
-            Assert.That(storage.LastReturnedRead.All(item => item == 0), Is.True);
+            Assert.That(AllZero(storage.LastReturnedRead), Is.True);
         }
 
         [Test]
         public async Task CodecCancellationWithoutCancelledCallerToken_IsCodecFailure()
         {
             var storage = new MemoryStorage();
-            var saveCodec = new Int32Codec("binary-int/1")
+            var saveCodec = new Int32Codec(FormatToken)
             {
                 SerializeException = new OperationCanceledException("codec")
             };
             int value = 1;
 
             PersistenceOperationResult save = await CreateStore(storage, saveCodec)
-                .SaveAsync(in value, 0);
+                .SaveAsync(in value);
 
             Assert.That(save.ErrorCode, Is.EqualTo(PersistenceErrorCode.SerializationFailed));
 
-            Assert.That((await CreateStore(storage, new Int32Codec("binary-int/1"))
-                .SaveAsync(in value, 0)).IsSuccess, Is.True);
-            var loadCodec = new Int32Codec("binary-int/1")
+            Assert.That((await CreateStore(storage, new Int32Codec(FormatToken))
+                .SaveAsync(in value)).IsSuccess, Is.True);
+            var loadCodec = new Int32Codec(FormatToken)
             {
                 DeserializeException = new OperationCanceledException("codec")
             };
-            PersistenceLoadResult<int> load = await CreateStore(storage, loadCodec).LoadAsync(0);
+            PersistenceLoadResult<int> load = await CreateStore(storage, loadCodec).LoadAsync();
 
             Assert.That(load.ErrorCode, Is.EqualTo(PersistenceErrorCode.DeserializeFailed));
         }
@@ -178,8 +161,8 @@ namespace CycloneGames.Persistence.Tests
         public void OverlappingOperation_ThrowsSynchronously()
         {
             var storage = new MemoryStorage { BlockReads = true };
-            var store = CreateStore(storage, new Int32Codec("binary-int/1"));
-            Task<PersistenceLoadResult<int>> pending = store.LoadAsync(0);
+            var store = CreateStore(storage, new Int32Codec(FormatToken));
+            Task<PersistenceLoadResult<int>> pending = store.LoadAsync();
 
             Assert.Throws<InvalidOperationException>(() => store.DeleteAsync());
 
@@ -191,47 +174,47 @@ namespace CycloneGames.Persistence.Tests
         public async Task PendingWrite_BorrowsRecordAndRejectsOverlapUntilCompletion()
         {
             var storage = new MemoryStorage { BlockWrites = true };
-            var store = CreateStore(storage, new Int32Codec("binary-int/1"));
+            var store = CreateStore(storage, new Int32Codec(FormatToken));
             int value = 12;
 
-            Task<PersistenceOperationResult> pending = store.SaveAsync(in value, 0);
-            Assert.Throws<InvalidOperationException>(() => store.LoadAsync(0));
-            Assert.That(storage.LastBorrowedWrite.Any(item => item != 0), Is.True);
+            Task<PersistenceOperationResult> pending = store.SaveAsync(in value);
+            Assert.Throws<InvalidOperationException>(() => store.LoadAsync());
+            Assert.That(HasNonZero(storage.LastBorrowedWrite), Is.True);
 
             storage.ReleaseWrite();
             Assert.That((await pending).IsSuccess, Is.True);
-            Assert.That(storage.LastBorrowedWrite.All(item => item == 0), Is.True);
+            Assert.That(AllZero(storage.LastBorrowedWrite), Is.True);
         }
 
         [Test]
         public async Task FatalCodecException_ReleasesGateAndPropagates()
         {
             var storage = new MemoryStorage();
-            var codec = new Int32Codec("binary-int/1")
+            var codec = new Int32Codec(FormatToken)
             {
                 SerializeException = new AccessViolationException("fatal")
             };
             var store = CreateStore(storage, codec);
             int value = 5;
 
-            Assert.Throws<AccessViolationException>(() => store.SaveAsync(in value, 0));
+            Assert.Throws<AccessViolationException>(() => store.SaveAsync(in value));
             codec.SerializeException = null;
 
-            Assert.That((await store.SaveAsync(in value, 0)).IsSuccess, Is.True);
+            Assert.That((await store.SaveAsync(in value)).IsSuccess, Is.True);
         }
 
         [Test]
         public async Task PreCancelledOperations_ReturnCancelledWithoutStorageMutation()
         {
             var storage = new MemoryStorage();
-            var store = CreateStore(storage, new Int32Codec("binary-int/1"));
+            var store = CreateStore(storage, new Int32Codec(FormatToken));
             using (var cancellation = new CancellationTokenSource())
             {
                 cancellation.Cancel();
                 int value = 1;
 
-                PersistenceOperationResult save = await store.SaveAsync(in value, 0, cancellation.Token);
-                PersistenceLoadResult<int> load = await store.LoadAsync(0, cancellation.Token);
+                PersistenceOperationResult save = await store.SaveAsync(in value, cancellation.Token);
+                PersistenceLoadResult<int> load = await store.LoadAsync(cancellation.Token);
                 PersistenceOperationResult delete = await store.DeleteAsync(cancellation.Token);
 
                 Assert.That(save.ErrorCode, Is.EqualTo(PersistenceErrorCode.Cancelled));
@@ -251,12 +234,10 @@ namespace CycloneGames.Persistence.Tests
                 BlockReads = true,
                 IgnoreReadCancellation = true
             };
-            var store = CreateStore(storage, new Int32Codec("binary-int/1"));
+            var store = CreateStore(storage, new Int32Codec(FormatToken));
             using (var cancellation = new CancellationTokenSource())
             {
-                Task<PersistenceLoadResult<int>> pending = store.LoadAsync(
-                    0,
-                    cancellation.Token);
+                Task<PersistenceLoadResult<int>> pending = store.LoadAsync(cancellation.Token);
                 cancellation.Cancel();
                 storage.ReleaseRead();
 
@@ -271,12 +252,12 @@ namespace CycloneGames.Persistence.Tests
         public async Task StorageFailures_AreClassifiedAndStoreRecovers()
         {
             var storage = new MemoryStorage { WriteException = new InvalidOperationException("write") };
-            var store = CreateStore(storage, new Int32Codec("binary-int/1"));
+            var store = CreateStore(storage, new Int32Codec(FormatToken));
             int value = 5;
 
-            PersistenceOperationResult failed = await store.SaveAsync(in value, 0);
+            PersistenceOperationResult failed = await store.SaveAsync(in value);
             storage.WriteException = null;
-            PersistenceOperationResult recovered = await store.SaveAsync(in value, 0);
+            PersistenceOperationResult recovered = await store.SaveAsync(in value);
 
             Assert.That(failed.ErrorCode, Is.EqualTo(PersistenceErrorCode.WriteFailed));
             Assert.That(recovered.IsSuccess, Is.True);
@@ -285,7 +266,7 @@ namespace CycloneGames.Persistence.Tests
         [Test]
         public async Task Delete_DoesNotRequireEntryToExist()
         {
-            var store = CreateStore(new MemoryStorage(), new Int32Codec("binary-int/1"));
+            var store = CreateStore(new MemoryStorage(), new Int32Codec(FormatToken));
 
             PersistenceOperationResult result = await store.DeleteAsync();
 
@@ -295,13 +276,37 @@ namespace CycloneGames.Persistence.Tests
         [Test]
         public void ParameterAndIdentifierErrors_Throw()
         {
-            Assert.Throws<ArgumentException>(() => new PersistenceCodecId("Binary/1"));
-            Assert.Throws<ArgumentException>(() => new PersistenceCodecId("binary"));
+            Assert.Throws<ArgumentException>(() => new PersistenceCodecId("Binary"));
+            Assert.Throws<ArgumentException>(() => new PersistenceCodecId("binary/1"));
+            Assert.Throws<ArgumentException>(() => new PersistenceCodecId("binary-"));
             Assert.Throws<ArgumentOutOfRangeException>(() => new PersistenceLimits(0));
-            var store = CreateStore(new MemoryStorage(), new Int32Codec("binary-int/1"));
-            int value = 0;
-            Assert.Throws<ArgumentOutOfRangeException>(() => store.SaveAsync(in value, -1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => store.LoadAsync(-1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new PersistenceLimits(1, 2));
+        }
+
+        private static bool AllZero(byte[] buffer)
+        {
+            for (int index = 0; index < buffer.Length; index++)
+            {
+                if (buffer[index] != 0)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool HasNonZero(byte[] buffer)
+        {
+            for (int index = 0; index < buffer.Length; index++)
+            {
+                if (buffer[index] != 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static PersistenceStore<int> CreateStore(
@@ -312,63 +317,45 @@ namespace CycloneGames.Persistence.Tests
         }
     }
 
-    public sealed class PersistenceRecordV1Tests
+    public sealed class PersistenceRecordTests
     {
+        private static readonly PersistenceCodecId FormatToken = new PersistenceCodecId("test-yaml");
+
         [Test]
         public void Encode_MatchesCommittedGoldenBytes()
         {
-            byte[] encoded = PersistenceRecordV1.Encode(
+            byte[] encoded = PersistenceRecord.Encode(
                 Encoding.UTF8.GetBytes("value: 42\n"),
-                3,
-                new PersistenceCodecId("test-yaml/1"),
-                PersistenceLimits.Default);
+                FormatToken,
+                new PersistenceLimits());
 
             byte[] fixture = ReadGoldenFixture();
 
             Assert.That(encoded, Is.EqualTo(fixture));
-            Assert.That(
-                Encoding.UTF8.GetString(fixture),
-                Is.EqualTo(
-                    "# cgp-record: 1\n" +
-                    "# content-version: 3\n" +
-                    "# codec-id: test-yaml/1\n" +
-                    "# transform-id: identity/1\n" +
-                    "# payload-bytes: 10\n" +
-                    "# xxh64: 8C3CEB0DE230D196\n" +
-                    "---\n" +
-                    "value: 42\n"));
         }
 
         [Test]
         public void Encode_ProducesCanonicalHeaderAndParseRoundTrips()
         {
             byte[] payload = Encoding.UTF8.GetBytes("value: 42\n");
-            byte[] record = PersistenceRecordV1.Encode(
-                payload,
-                3,
-                new PersistenceCodecId("test-yaml/1"),
-                PersistenceLimits.Default);
+            byte[] record = PersistenceRecord.Encode(payload, FormatToken, new PersistenceLimits());
 
             string text = Encoding.UTF8.GetString(record);
             StringAssert.StartsWith(
-                "# cgp-record: 1\n" +
-                "# content-version: 3\n" +
-                "# codec-id: test-yaml/1\n" +
-                "# transform-id: identity/1\n" +
+                "# cgp-record\n" +
+                "# codec-id: test-yaml\n" +
                 "# payload-bytes: 10\n" +
                 "# xxh64: ",
                 text);
             StringAssert.EndsWith("\n---\nvalue: 42\n", text);
-            Assert.That(record.Contains((byte)'\r'), Is.False);
+            Assert.That(HasByte(record, (byte)'\r'), Is.False);
 
-            PersistenceRecordParseResult parsed = PersistenceRecordV1.Parse(
+            PersistenceRecordParseResult parsed = PersistenceRecord.Parse(
                 record,
-                new PersistenceCodecId("test-yaml/1"),
-                3,
-                PersistenceLimits.Default);
+                FormatToken,
+                new PersistenceLimits());
 
             Assert.That(parsed.IsSuccess, Is.True);
-            Assert.That(parsed.ContentVersion, Is.EqualTo(3));
             Assert.That(new ReadOnlySpan<byte>(record, parsed.PayloadOffset, parsed.PayloadLength)
                 .SequenceEqual(payload), Is.True);
         }
@@ -383,16 +370,18 @@ namespace CycloneGames.Persistence.Tests
         }
 
         [Test]
-        public void UnknownRecordVersion_IsUnsupported()
+        public void UnknownFormatToken_IsFormatMismatch()
         {
-            byte[] record = ReplaceAscii(ValidRecord(), "# cgp-record: 1", "# cgp-record: 2");
+            byte[] record = ValidRecord();
+            PersistenceRecordParseResult result = PersistenceRecord.Parse(
+                record,
+                new PersistenceCodecId("other-yaml"),
+                new PersistenceLimits());
 
-            AssertError(record, PersistenceErrorCode.UnsupportedRecordVersion);
+            Assert.That(result.ErrorCode, Is.EqualTo(PersistenceErrorCode.RecordFormatMismatch));
         }
 
-        [TestCase("# content-version: 3\n")]
-        [TestCase("# codec-id: test-yaml/1\n")]
-        [TestCase("# transform-id: identity/1\n")]
+        [TestCase("# codec-id: test-yaml\n")]
         [TestCase("# payload-bytes: 10\n")]
         [TestCase("# xxh64: ")]
         public void MissingOrReorderedFields_AreMalformed(string field)
@@ -407,10 +396,20 @@ namespace CycloneGames.Persistence.Tests
         }
 
         [Test]
-        public void CrLfHeader_IsRejected()
+        public void CrLfMagicLine_IsFormatMismatch()
         {
             byte[] record = Encoding.UTF8.GetBytes(
                 Encoding.UTF8.GetString(ValidRecord()).Replace("\n", "\r\n"));
+
+            AssertError(record, PersistenceErrorCode.RecordFormatMismatch);
+        }
+
+        [Test]
+        public void CrLfHeaderLine_IsMalformed()
+        {
+            string text = Encoding.UTF8.GetString(ValidRecord());
+            byte[] record = Encoding.UTF8.GetBytes(
+                text.Replace("# codec-id: test-yaml\n", "# codec-id: test-yaml\r\n"));
 
             AssertError(record, PersistenceErrorCode.MalformedRecord);
         }
@@ -419,10 +418,10 @@ namespace CycloneGames.Persistence.Tests
         public void LeadingZeroAndWhitespace_AreRejected()
         {
             AssertError(
-                ReplaceAscii(ValidRecord(), "# content-version: 3", "# content-version: 03"),
+                ReplaceAscii(ValidRecord(), "# payload-bytes: 10", "# payload-bytes: 010"),
                 PersistenceErrorCode.MalformedRecord);
             AssertError(
-                ReplaceAscii(ValidRecord(), "# content-version: 3", "# content-version: 3 "),
+                ReplaceAscii(ValidRecord(), "# payload-bytes: 10", "# payload-bytes: 10 "),
                 PersistenceErrorCode.MalformedRecord);
         }
 
@@ -430,16 +429,13 @@ namespace CycloneGames.Persistence.Tests
         public void NegativeOverflowAndIllegalIdentifiers_AreRejected()
         {
             AssertError(
-                ReplaceAscii(ValidRecord(), "# content-version: 3", "# content-version: -1"),
+                ReplaceAscii(ValidRecord(), "# payload-bytes: 10", "# payload-bytes: -1"),
                 PersistenceErrorCode.MalformedRecord);
             AssertError(
-                ReplaceAscii(
-                    ValidRecord(),
-                    "# content-version: 3",
-                    "# content-version: 2147483648"),
+                ReplaceAscii(ValidRecord(), "# payload-bytes: 10", "# payload-bytes: 2147483648"),
                 PersistenceErrorCode.MalformedRecord);
             AssertError(
-                ReplaceAscii(ValidRecord(), "test-yaml/1", "Test-yaml/1"),
+                ReplaceAscii(ValidRecord(), "test-yaml", "Test-yaml"),
                 PersistenceErrorCode.MalformedRecord);
         }
 
@@ -447,7 +443,7 @@ namespace CycloneGames.Persistence.Tests
         public void HeaderWithoutLineFeed_IsRejectedWithinFixedBudget()
         {
             byte[] record = new byte[PersistenceLimits.HardMaximumPayloadBytes];
-            byte[] prefix = Encoding.ASCII.GetBytes("# cgp-record: ");
+            byte[] prefix = Encoding.ASCII.GetBytes("# cgp-record\n");
             Buffer.BlockCopy(prefix, 0, record, 0, prefix.Length);
             for (int index = prefix.Length; index < record.Length; index++)
             {
@@ -474,10 +470,9 @@ namespace CycloneGames.Persistence.Tests
         public void PayloadAboveConfiguredLimit_IsRejectedBeforeChecksumDispatch()
         {
             byte[] record = ValidRecord();
-            PersistenceRecordParseResult result = PersistenceRecordV1.Parse(
+            PersistenceRecordParseResult result = PersistenceRecord.Parse(
                 record,
-                new PersistenceCodecId("test-yaml/1"),
-                10,
+                FormatToken,
                 new PersistenceLimits(9, 9));
 
             Assert.That(result.ErrorCode, Is.EqualTo(PersistenceErrorCode.PayloadTooLarge));
@@ -486,17 +481,15 @@ namespace CycloneGames.Persistence.Tests
         [Test]
         public void EmptyPayload_IsCanonicalAndRoundTrips()
         {
-            byte[] record = PersistenceRecordV1.Encode(
+            byte[] record = PersistenceRecord.Encode(
                 ReadOnlySpan<byte>.Empty,
-                0,
-                new PersistenceCodecId("empty/1"),
-                PersistenceLimits.Default);
+                new PersistenceCodecId("empty"),
+                new PersistenceLimits());
 
-            PersistenceRecordParseResult result = PersistenceRecordV1.Parse(
+            PersistenceRecordParseResult result = PersistenceRecord.Parse(
                 record,
-                new PersistenceCodecId("empty/1"),
-                0,
-                PersistenceLimits.Default);
+                new PersistenceCodecId("empty"),
+                new PersistenceLimits());
 
             Assert.That(result.IsSuccess, Is.True);
             Assert.That(result.PayloadLength, Is.Zero);
@@ -507,8 +500,8 @@ namespace CycloneGames.Persistence.Tests
         {
             byte[] record = ReplaceAscii(
                 ValidRecord(),
-                "# content-version: 3",
-                "# content-version: 4");
+                "# codec-id: test-yaml",
+                "# codec-id: test-yamz");
 
             AssertError(record, PersistenceErrorCode.IntegrityCheckFailed);
         }
@@ -520,28 +513,32 @@ namespace CycloneGames.Persistence.Tests
             const string prefix = "# xxh64: ";
             int checksum = text.IndexOf(prefix, StringComparison.Ordinal) + prefix.Length;
             char[] characters = text.ToCharArray();
-            for (int index = checksum; index < checksum + 16; index++)
+            characters[checksum] = 'a';
+
+            AssertError(
+                Encoding.UTF8.GetBytes(new string(characters)),
+                PersistenceErrorCode.MalformedRecord);
+        }
+
+        private static bool HasByte(byte[] buffer, byte value)
+        {
+            for (int index = 0; index < buffer.Length; index++)
             {
-                if (characters[index] >= 'A' && characters[index] <= 'F')
+                if (buffer[index] == value)
                 {
-                    characters[index] = char.ToLowerInvariant(characters[index]);
-                    AssertError(
-                        Encoding.UTF8.GetBytes(new string(characters)),
-                        PersistenceErrorCode.MalformedRecord);
-                    return;
+                    return true;
                 }
             }
 
-            Assert.Fail("Fixture checksum unexpectedly contained no alphabetic hex digit.");
+            return false;
         }
 
         private static byte[] ValidRecord()
         {
-            return PersistenceRecordV1.Encode(
+            return PersistenceRecord.Encode(
                 Encoding.UTF8.GetBytes("value: 42\n"),
-                3,
-                new PersistenceCodecId("test-yaml/1"),
-                PersistenceLimits.Default);
+                FormatToken,
+                new PersistenceLimits());
         }
 
         private static byte[] ReadGoldenFixture([CallerFilePath] string sourcePath = null)
@@ -550,16 +547,15 @@ namespace CycloneGames.Persistence.Tests
             return File.ReadAllBytes(Path.Combine(
                 directory,
                 "Fixtures",
-                "PersistenceRecordV1.yaml.bytes"));
+                "Record.yaml.bytes"));
         }
 
         private static void AssertError(byte[] record, PersistenceErrorCode expected)
         {
-            PersistenceRecordParseResult result = PersistenceRecordV1.Parse(
+            PersistenceRecordParseResult result = PersistenceRecord.Parse(
                 record,
-                new PersistenceCodecId("test-yaml/1"),
-                10,
-                PersistenceLimits.Default);
+                FormatToken,
+                new PersistenceLimits());
             Assert.That(result.ErrorCode, Is.EqualTo(expected));
         }
 
@@ -579,6 +575,7 @@ namespace CycloneGames.Persistence.Tests
         {
             using (var writer = new BoundedByteBufferWriter(8, 32))
             {
+                writer.Reset();
                 Assert.Throws<ArgumentOutOfRangeException>(() => writer.Advance(1));
                 Assert.That(writer.WrittenCount, Is.Zero);
             }
@@ -589,6 +586,7 @@ namespace CycloneGames.Persistence.Tests
         {
             using (var writer = new BoundedByteBufferWriter(8, 32))
             {
+                writer.Reset();
                 int grantedLength = writer.GetSpan(1).Length;
                 Assert.Throws<ArgumentOutOfRangeException>(() => writer.Advance(grantedLength + 1));
                 Assert.That(writer.WrittenCount, Is.Zero);
@@ -596,11 +594,171 @@ namespace CycloneGames.Persistence.Tests
         }
     }
 
+    public sealed class PersistenceRecordHeaderTests
+    {
+        private static readonly PersistenceCodecId Token = new PersistenceCodecId("test-yaml");
+
+        [Test]
+        public void TryRead_ReturnsTokenAndPayload()
+        {
+            byte[] payload = Encoding.UTF8.GetBytes("value: 42\n");
+            byte[] record = PersistenceRecord.Encode(payload, Token, new PersistenceLimits());
+
+            Assert.That(
+                PersistenceRecordHeader.TryRead(
+                    record,
+                    out ReadOnlySpan<byte> token,
+                    out ReadOnlySpan<byte> body),
+                Is.True);
+            Assert.That(Encoding.UTF8.GetString(token.ToArray()), Is.EqualTo("test-yaml"));
+            Assert.That(body.SequenceEqual(payload), Is.True);
+        }
+
+        [Test]
+        public void TryRead_DoesNotVerifyChecksum()
+        {
+            byte[] record = PersistenceRecord.Encode(
+                Encoding.UTF8.GetBytes("value: 42\n"),
+                Token,
+                new PersistenceLimits());
+            record[record.Length - 1] ^= 0x01;
+
+            Assert.That(
+                PersistenceRecordHeader.TryReadFormatToken(record, out ReadOnlySpan<byte> token),
+                Is.True);
+            Assert.That(Encoding.UTF8.GetString(token.ToArray()), Is.EqualTo("test-yaml"));
+            Assert.That(
+                PersistenceRecord.Parse(record, Token, new PersistenceLimits()).ErrorCode,
+                Is.EqualTo(PersistenceErrorCode.IntegrityCheckFailed));
+        }
+
+        [Test]
+        public void TryRead_RejectsMalformedRecords()
+        {
+            Assert.That(PersistenceRecordHeader.TryReadFormatToken(new byte[0], out _), Is.False);
+
+            byte[] valid = PersistenceRecord.Encode(
+                Encoding.UTF8.GetBytes("x"),
+                Token,
+                new PersistenceLimits());
+            byte[] crlf = Encoding.UTF8.GetBytes(
+                Encoding.UTF8.GetString(valid).Replace("\n", "\r\n"));
+            Assert.That(PersistenceRecordHeader.TryReadFormatToken(crlf, out _), Is.False);
+        }
+
+        [Test]
+        public void PeekAndParse_ShareOneGrammar()
+        {
+            for (int size = 0; size < 64; size++)
+            {
+                byte[] payload = new byte[size];
+                for (int index = 0; index < size; index++)
+                {
+                    payload[index] = (byte)(index * 7 + 1);
+                }
+
+                byte[] record = PersistenceRecord.Encode(payload, Token, new PersistenceLimits());
+                bool peek = PersistenceRecordHeader.TryRead(
+                    record,
+                    out _,
+                    out ReadOnlySpan<byte> body);
+                PersistenceRecordParseResult parsed = PersistenceRecord.Parse(
+                    record,
+                    Token,
+                    new PersistenceLimits());
+
+                Assert.That(peek, Is.EqualTo(parsed.IsSuccess));
+                if (peek)
+                {
+                    Assert.That(body.Length, Is.EqualTo(parsed.PayloadLength));
+                }
+            }
+        }
+    }
+
+    public sealed class PersistenceFormatRegistryTests
+    {
+        [Test]
+        public void TryGet_MatchesBySpanAndByTypedFormat()
+        {
+            var first = new Entry("first");
+            var second = new Entry("second");
+            var registry = new PersistenceFormatRegistry<Entry>(
+                new PersistenceFormatRegistration<Entry>(
+                    new PersistenceCodecId("game-settings-a"), first),
+                new PersistenceFormatRegistration<Entry>(
+                    new PersistenceCodecId("game-settings-b"), second));
+
+            byte[] record = PersistenceRecord.Encode(
+                new byte[1],
+                new PersistenceCodecId("game-settings-a"),
+                new PersistenceLimits());
+            Assert.That(
+                PersistenceRecordHeader.TryReadFormatToken(record, out ReadOnlySpan<byte> token),
+                Is.True);
+            Assert.That(registry.TryGet(token, out Entry bySpan), Is.True);
+            Assert.That(bySpan, Is.SameAs(first));
+            Assert.That(
+                registry.TryGet(new PersistenceCodecId("game-settings-b"), out Entry byFormat),
+                Is.True);
+            Assert.That(byFormat, Is.SameAs(second));
+            Assert.That(registry.Count, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void TryGet_UnknownTokenReturnsFalse()
+        {
+            var registry = new PersistenceFormatRegistry<Entry>(
+                new PersistenceFormatRegistration<Entry>(
+                    new PersistenceCodecId("game-settings-a"), new Entry("a")));
+
+            Assert.That(registry.TryGet(new PersistenceCodecId("other"), out Entry entry), Is.False);
+            Assert.That(entry, Is.Null);
+        }
+
+        [Test]
+        public void Constructor_RejectsDuplicateTokens()
+        {
+            Assert.Throws<ArgumentException>(() => new PersistenceFormatRegistry<Entry>(
+                new PersistenceFormatRegistration<Entry>(
+                    new PersistenceCodecId("same"), new Entry("a")),
+                new PersistenceFormatRegistration<Entry>(
+                    new PersistenceCodecId("same"), new Entry("b"))));
+        }
+
+        [Test]
+        public void Constructor_SnapshotsRegistrations()
+        {
+            var source = new[]
+            {
+                new PersistenceFormatRegistration<Entry>(
+                    new PersistenceCodecId("game-settings-a"), new Entry("a"))
+            };
+            var registry = new PersistenceFormatRegistry<Entry>(source);
+            source[0] = new PersistenceFormatRegistration<Entry>(
+                new PersistenceCodecId("other"), new Entry("b"));
+
+            Assert.That(
+                registry.TryGet(new PersistenceCodecId("game-settings-a"), out _),
+                Is.True);
+        }
+
+        private sealed class Entry
+        {
+            internal Entry(string name)
+            {
+                Name = name;
+            }
+
+            internal string Name { get; }
+        }
+    }
+
     internal sealed class Int32Codec : IPersistenceCodec<int>
     {
-        internal Int32Codec(string id)
+        internal Int32Codec(PersistenceCodecId id)
         {
-            CodecId = new PersistenceCodecId(id);
+            CodecId = id;
         }
 
         public PersistenceCodecId CodecId { get; }
@@ -614,8 +772,6 @@ namespace CycloneGames.Persistence.Tests
         internal Exception DeserializeException { get; set; }
 
         internal int DeserializeCount { get; private set; }
-
-        internal int LastReadVersion { get; private set; } = -1;
 
         public void Serialize(
             in int value,
@@ -642,7 +798,6 @@ namespace CycloneGames.Persistence.Tests
             in PersistenceReadContext context)
         {
             DeserializeCount++;
-            LastReadVersion = context.ContentVersion;
             if (ThrowOnDeserialize)
             {
                 throw new InvalidOperationException("deserialize");
@@ -664,7 +819,7 @@ namespace CycloneGames.Persistence.Tests
 
     internal sealed class OversizedCodec : IPersistenceCodec<int>
     {
-        public PersistenceCodecId CodecId { get; } = new PersistenceCodecId("oversized/1");
+        public PersistenceCodecId CodecId { get; } = new PersistenceCodecId("oversized");
 
         public void Serialize(
             in int value,
@@ -688,7 +843,7 @@ namespace CycloneGames.Persistence.Tests
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         private byte[] _content;
 
-        public string Location => "memory://settings";
+        public string Location => "memory://record";
 
         internal bool BlockReads { get; set; }
 

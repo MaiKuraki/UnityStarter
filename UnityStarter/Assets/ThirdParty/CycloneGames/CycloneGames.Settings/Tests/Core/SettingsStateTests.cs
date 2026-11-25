@@ -306,8 +306,6 @@ namespace CycloneGames.Settings.Tests
 
             public int CloneCount { get; private set; }
 
-            public int CurrentVersion => 2;
-
             public MutableSettings CreateDefault()
             {
                 return new MutableSettings(new[] { DefaultValue });
@@ -349,8 +347,6 @@ namespace CycloneGames.Settings.Tests
 
         private sealed class ValueSchema : ISettingsSchema<ValueSettings>
         {
-            public int CurrentVersion => 1;
-
             public ValueSettings CreateDefault()
             {
                 return new ValueSettings { Volume = 10 };

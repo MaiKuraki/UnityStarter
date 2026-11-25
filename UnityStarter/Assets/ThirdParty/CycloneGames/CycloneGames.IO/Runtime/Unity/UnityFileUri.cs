@@ -4,9 +4,6 @@ using UnityEngine;
 
 namespace CycloneGames.IO.Unity
 {
-    /// <summary>
-    /// Creates platform-correct UnityWebRequest URIs from explicit Unity file locations.
-    /// </summary>
     public static class UnityFileUri
     {
         public static string Create(string path, UnityFileLocation location)

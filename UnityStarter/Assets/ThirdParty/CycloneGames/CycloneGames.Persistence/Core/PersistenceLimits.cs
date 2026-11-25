@@ -2,21 +2,21 @@ using System;
 
 namespace CycloneGames.Persistence
 {
-    /// <summary>
-    /// Immutable allocation limits for the buffered Persistence Record V1 pipeline.
-    /// </summary>
     public sealed class PersistenceLimits
     {
-        public const int HardMaximumPayloadBytes = 1024 * 1024;
-        public const int DefaultMaximumPayloadBytes = HardMaximumPayloadBytes;
-        public const int DefaultInitialBufferBytes = 256;
-        public const int MaximumRecordHeaderBytes = 256;
+        internal const int MaximumRecordHeaderBytes = 256;
 
-        public static readonly PersistenceLimits Default = new PersistenceLimits();
+        public PersistenceLimits()
+            : this(HardMaximumPayloadBytes, DefaultInitialBufferBytes)
+        {
+        }
 
-        public PersistenceLimits(
-            int maximumPayloadBytes = DefaultMaximumPayloadBytes,
-            int initialBufferBytes = DefaultInitialBufferBytes)
+        public PersistenceLimits(int maximumPayloadBytes)
+            : this(maximumPayloadBytes, DefaultInitialBufferBytes)
+        {
+        }
+
+        public PersistenceLimits(int maximumPayloadBytes, int initialBufferBytes)
         {
             if (maximumPayloadBytes <= 0 || maximumPayloadBytes > HardMaximumPayloadBytes)
             {
@@ -35,6 +35,10 @@ namespace CycloneGames.Persistence
             MaximumPayloadBytes = maximumPayloadBytes;
             InitialBufferBytes = initialBufferBytes;
         }
+
+        public static int HardMaximumPayloadBytes => 1024 * 1024;
+
+        public static int DefaultInitialBufferBytes => 256;
 
         public int MaximumPayloadBytes { get; }
 
