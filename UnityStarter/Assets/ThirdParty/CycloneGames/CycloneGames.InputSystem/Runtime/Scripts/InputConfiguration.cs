@@ -131,11 +131,10 @@ namespace CycloneGames.InputSystem.Runtime
         public int Priority { get; set; }
 
         /// <summary>
-        /// Stops lower-priority contexts from receiving input while this context is active.
-        /// The default is an exclusive context.
+        /// Stops lower-priority contexts from receiving input while this context is active. Off by default.
         /// </summary>
         [YamlMember("blocksLowerPriority")]
-        public bool BlocksLowerPriority { get; set; } = true;
+        public bool BlocksLowerPriority { get; set; }
     }
 
     [YamlObject]

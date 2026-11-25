@@ -148,18 +148,14 @@ namespace CycloneGames.InputSystem.Runtime
         internal InputConfigurationValidationResult(
             InputConfiguration configuration,
             RuntimeInputConfiguration runtimeConfiguration,
-            bool wasMigrated,
             List<InputConfigurationIssue> issues)
         {
             Configuration = configuration;
             RuntimeConfiguration = runtimeConfiguration;
-            WasMigrated = wasMigrated;
             Issues = issues.AsReadOnly();
         }
 
         public bool IsValid => Issues.Count == 0 && RuntimeConfiguration != null;
-        public bool WasMigrated { get; }
-
         /// <summary>
         /// Deep-cloned, normalized DTO suitable for persistence. It is never the caller-owned instance.
         /// </summary>
@@ -396,30 +392,17 @@ namespace CycloneGames.InputSystem.Runtime
                     InputConfigurationIssueCode.NullConfiguration,
                     string.Empty,
                     "Configuration is null."));
-                return new InputConfigurationValidationResult(null, null, false, issues);
+                return new InputConfigurationValidationResult(null, null, issues);
             }
 
             if (!TryPreflightShape(source, limits, out InputConfigurationIssue shapeIssue))
             {
                 issues.Add(shapeIssue);
-                return new InputConfigurationValidationResult(null, null, false, issues);
+                return new InputConfigurationValidationResult(null, null, issues);
             }
 
             InputConfiguration clone = InputConfigurationCloner.DeepClone(source);
-            bool wasMigrated = false;
-            if (clone.SchemaVersion == 0)
-            {
-                MigrateLegacyInlineComposites(clone, limits);
-                clone.SchemaVersion = InputConfiguration.CurrentSchemaVersion;
-                wasMigrated = true;
-
-                if (!TryPreflightShape(clone, limits, out InputConfigurationIssue migratedShapeIssue))
-                {
-                    issues.Add(migratedShapeIssue);
-                    return new InputConfigurationValidationResult(clone, null, true, issues);
-                }
-            }
-            else if (clone.SchemaVersion < 0 || clone.SchemaVersion > InputConfiguration.CurrentSchemaVersion)
+            if (clone.SchemaVersion != InputConfiguration.CurrentSchemaVersion)
             {
                 Add(issues, InputConfigurationIssueCode.UnsupportedSchemaVersion, "schemaVersion",
                     $"Schema version {clone.SchemaVersion} is not supported. Current version is {InputConfiguration.CurrentSchemaVersion}.");
@@ -427,155 +410,7 @@ namespace CycloneGames.InputSystem.Runtime
 
             ValidateConfiguration(clone, limits, issues);
             RuntimeInputConfiguration runtime = issues.Count == 0 ? new RuntimeInputConfiguration(clone) : null;
-            return new InputConfigurationValidationResult(clone, runtime, wasMigrated, issues);
-        }
-
-        private static void MigrateLegacyInlineComposites(
-            InputConfiguration configuration,
-            InputConfigurationLimits limits)
-        {
-            MigrateLegacyInlineComposites(configuration.JoinAction, limits);
-            List<PlayerSlotConfig> players = configuration.PlayerSlots;
-            if (players == null) return;
-            for (int playerIndex = 0; playerIndex < players.Count; playerIndex++)
-            {
-                PlayerSlotConfig player = players[playerIndex];
-                if (player == null) continue;
-                MigrateLegacyInlineComposites(player.JoinAction, limits);
-                List<ContextDefinitionConfig> contexts = player.Contexts;
-                if (contexts == null) continue;
-                for (int contextIndex = 0; contextIndex < contexts.Count; contextIndex++)
-                {
-                    List<ActionBindingConfig> actions = contexts[contextIndex]?.Bindings;
-                    if (actions == null) continue;
-                    for (int actionIndex = 0; actionIndex < actions.Count; actionIndex++)
-                    {
-                        MigrateLegacyInlineComposites(actions[actionIndex], limits);
-                    }
-                }
-            }
-        }
-
-        private static void MigrateLegacyInlineComposites(
-            ActionBindingConfig action,
-            InputConfigurationLimits limits)
-        {
-            List<string> bindings = action?.DeviceBindings;
-            if (bindings == null || bindings.Count == 0) return;
-
-            List<string> retainedBindings = null;
-            for (int bindingIndex = 0; bindingIndex < bindings.Count; bindingIndex++)
-            {
-                string binding = bindings[bindingIndex];
-                if (!TryParseLegacyInline2DVector(binding, limits.MaxStringLength, out CompositeBindingConfig composite))
-                {
-                    retainedBindings?.Add(binding);
-                    continue;
-                }
-
-                if (retainedBindings == null)
-                {
-                    retainedBindings = new List<string>(bindings.Count - 1);
-                    for (int previousIndex = 0; previousIndex < bindingIndex; previousIndex++)
-                    {
-                        retainedBindings.Add(bindings[previousIndex]);
-                    }
-                }
-
-                action.CompositeBindings ??= new List<CompositeBindingConfig>();
-                action.CompositeBindings.Add(composite);
-            }
-
-            if (retainedBindings != null) action.DeviceBindings = retainedBindings;
-        }
-
-        private static bool TryParseLegacyInline2DVector(
-            string binding,
-            int maxStringLength,
-            out CompositeBindingConfig composite)
-        {
-            composite = null;
-            const string prefix = "2DVector(";
-            if (string.IsNullOrEmpty(binding) || binding.Length > maxStringLength ||
-                !binding.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
-                !binding.EndsWith(")", StringComparison.Ordinal))
-                return false;
-
-            string mode = null;
-            var parts = new List<CompositePartBindingConfig>(4);
-            int seenNames = 0;
-            int cursor = prefix.Length;
-            int contentEnd = binding.Length - 1;
-            int segmentCount = 0;
-            while (cursor < contentEnd)
-            {
-                if (++segmentCount > 5) return false;
-                int commaIndex = binding.IndexOf(',', cursor, contentEnd - cursor);
-                int segmentEnd = commaIndex < 0 ? contentEnd : commaIndex;
-                int segmentStart = cursor;
-                TrimRange(binding, ref segmentStart, ref segmentEnd);
-                if (segmentStart >= segmentEnd) return false;
-
-                int equalsIndex = binding.IndexOf('=', segmentStart, segmentEnd - segmentStart);
-                if (equalsIndex <= segmentStart || equalsIndex >= segmentEnd - 1 ||
-                    binding.IndexOf('=', equalsIndex + 1, segmentEnd - equalsIndex - 1) >= 0)
-                    return false;
-
-                int nameStart = segmentStart;
-                int nameEnd = equalsIndex;
-                int valueStart = equalsIndex + 1;
-                int valueEnd = segmentEnd;
-                TrimRange(binding, ref nameStart, ref nameEnd);
-                TrimRange(binding, ref valueStart, ref valueEnd);
-                if (nameStart >= nameEnd || valueStart >= valueEnd) return false;
-
-                int nameFlag;
-                string normalizedName = null;
-                if (RangeEquals(binding, nameStart, nameEnd, "mode")) nameFlag = 1;
-                else if (RangeEquals(binding, nameStart, nameEnd, "up")) { nameFlag = 2; normalizedName = "up"; }
-                else if (RangeEquals(binding, nameStart, nameEnd, "down")) { nameFlag = 4; normalizedName = "down"; }
-                else if (RangeEquals(binding, nameStart, nameEnd, "left")) { nameFlag = 8; normalizedName = "left"; }
-                else if (RangeEquals(binding, nameStart, nameEnd, "right")) { nameFlag = 16; normalizedName = "right"; }
-                else return false;
-                if ((seenNames & nameFlag) != 0) return false;
-                seenNames |= nameFlag;
-
-                string value = binding.Substring(valueStart, valueEnd - valueStart);
-                if (nameFlag == 1)
-                {
-                    mode = value;
-                }
-                else
-                {
-                    parts.Add(new CompositePartBindingConfig { Name = normalizedName, Path = value });
-                }
-
-                if (commaIndex < 0) break;
-                cursor = commaIndex + 1;
-                if (cursor >= contentEnd) return false;
-            }
-
-            if (parts.Count == 0) return false;
-            composite = new CompositeBindingConfig
-            {
-                Name = "2DVector",
-                Parameters = mode == null ? null : "mode=" + mode,
-                Parts = parts
-            };
-            return true;
-        }
-
-        private static void TrimRange(string value, ref int start, ref int end)
-        {
-            while (start < end && char.IsWhiteSpace(value[start])) start++;
-            while (end > start && char.IsWhiteSpace(value[end - 1])) end--;
-        }
-
-        private static bool RangeEquals(string value, int start, int end, string expected)
-        {
-            int length = end - start;
-            return length == expected.Length &&
-                   string.Compare(value, start, expected, 0, length, StringComparison.OrdinalIgnoreCase) == 0;
+            return new InputConfigurationValidationResult(clone, runtime, issues);
         }
 
         private static bool TryPreflightShape(

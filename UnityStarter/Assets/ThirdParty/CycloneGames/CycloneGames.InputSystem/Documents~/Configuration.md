@@ -84,8 +84,8 @@ Contexts group actions by product state: `Gameplay` for character control, `Vehi
 | --- | --- | --- |
 | `name` | Yes | Context identity used by runtime lookup and generated constants. |
 | `actionMap` | Yes | Unity Input System action-map name built for this context. |
-| `priority` | Yes | Higher values win when active contexts compete. |
-| `blocksLowerPriority` | Yes | Prevents lower-priority contexts from dispatching while this context is active. |
+| `priority` | No | Higher values are evaluated first. Defaults to `0`. Equal priorities keep stack order. |
+| `blocksLowerPriority` | No | Stops activation below this context. Defaults to `false`. |
 | `bindings` | Yes | Action definitions available in the context. |
 
 Runtime `InputContext` instances refer to configured context/action-map identities and own command subscriptions. Configuration defines available actions; runtime code decides which contexts are active.

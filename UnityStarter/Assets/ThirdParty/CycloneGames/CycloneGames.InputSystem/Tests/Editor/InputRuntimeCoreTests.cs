@@ -198,128 +198,34 @@ namespace CycloneGames.InputSystem.Runtime.Tests
         }
 
         [Test]
-        public void ValidateAndPrepare_MigratesSchemaZeroAndDeepClones()
+        public void ValidateAndPrepare_DeepClonesWithoutMutatingSource()
         {
             InputConfiguration source = CreateValidConfiguration();
-            source.SchemaVersion = 0;
 
             InputConfigurationValidationResult result = InputConfigurationValidator.ValidateAndPrepare(source);
 
             Assert.That(result.IsValid, Is.True);
-            Assert.That(result.WasMigrated, Is.True);
             Assert.That(result.Configuration.SchemaVersion, Is.EqualTo(InputConfiguration.CurrentSchemaVersion));
             source.PlayerSlots[0].Contexts[0].Name = "Mutated";
             Assert.That(result.Configuration.PlayerSlots[0].Contexts[0].Name, Is.EqualTo("Gameplay"));
         }
 
-        [TestCase("2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)")]
-        [TestCase("2dvector( MODE = 2, UP = <Keyboard>/upArrow, DOWN = <Keyboard>/downArrow, LEFT = <Keyboard>/leftArrow, RIGHT = <Keyboard>/rightArrow )")]
-        public void ValidateAndPrepare_MigratesBoundedLegacyInline2DVectorWithoutMutatingSource(
-            string inlineBinding)
+        [TestCase(0)]
+        [TestCase(-1)]
+        [TestCase(2)]
+        public void ValidateAndPrepare_RejectsUnsupportedSchemaVersion(int schemaVersion)
         {
-            InputConfiguration source = CreateLegacyVectorConfiguration(inlineBinding);
-            ActionBindingConfig sourceAction = source.PlayerSlots[0].Contexts[0].Bindings[0];
+            InputConfiguration source = CreateValidConfiguration();
+            source.SchemaVersion = schemaVersion;
 
-            InputConfigurationValidationResult result =
-                InputConfigurationValidator.ValidateAndPrepare(source);
-
-            Assert.That(result.IsValid, Is.True, result.Issues.FirstOrDefault().ToString());
-            Assert.That(result.WasMigrated, Is.True);
-            ActionBindingConfig migrated = result.Configuration.PlayerSlots[0].Contexts[0].Bindings[0];
-            Assert.That(migrated.DeviceBindings, Is.Empty);
-            Assert.That(migrated.CompositeBindings, Has.Count.EqualTo(1));
-            Assert.That(migrated.CompositeBindings[0].Name, Is.EqualTo("2DVector"));
-            Assert.That(migrated.CompositeBindings[0].Parameters, Is.EqualTo("mode=2"));
-            Assert.That(
-                migrated.CompositeBindings[0].Parts.Select(part => part.Name),
-                Is.EqualTo(new[] { "up", "down", "left", "right" }));
-
-            Assert.That(source.SchemaVersion, Is.Zero);
-            Assert.That(sourceAction.DeviceBindings, Is.EqualTo(new[] { inlineBinding }));
-            Assert.That(sourceAction.CompositeBindings, Is.Null);
-        }
-
-        [TestCase("2DVector(mode=2,up=<Keyboard>/w,up=<Keyboard>/upArrow,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)")]
-        [TestCase("2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,forward=<Keyboard>/d)")]
-        [TestCase("2DVector(mode=2)")]
-        [TestCase("2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d),")]
-        public void ValidateAndPrepare_RejectsMalformedLegacyInline2DVectorWithoutMutatingSource(
-            string inlineBinding)
-        {
-            InputConfiguration source = CreateLegacyVectorConfiguration(inlineBinding);
-
-            InputConfigurationValidationResult result =
-                InputConfigurationValidator.ValidateAndPrepare(source);
+            InputConfigurationValidationResult result = InputConfigurationValidator.ValidateAndPrepare(source);
 
             Assert.That(result.IsValid, Is.False);
-            Assert.That(result.WasMigrated, Is.True);
+            Assert.That(result.RuntimeConfiguration, Is.Null);
             Assert.That(
-                result.Issues.Any(issue => issue.Code == InputConfigurationIssueCode.InvalidValue),
+                result.Issues.Any(issue => issue.Code == InputConfigurationIssueCode.UnsupportedSchemaVersion),
                 Is.True);
-            Assert.That(source.SchemaVersion, Is.Zero);
-            Assert.That(
-                source.PlayerSlots[0].Contexts[0].Bindings[0].DeviceBindings,
-                Is.EqualTo(new[] { inlineBinding }));
-            Assert.That(source.PlayerSlots[0].Contexts[0].Bindings[0].CompositeBindings, Is.Null);
-        }
-
-        [Test]
-        public void ValidateAndPrepare_RejectsOversizedLegacyInline2DVectorBeforeMigration()
-        {
-            string inlineBinding = "2DVector(up=<Keyboard>/" + new string('x', 300) + ")";
-            InputConfiguration source = CreateLegacyVectorConfiguration(inlineBinding);
-
-            InputConfigurationValidationResult result =
-                InputConfigurationValidator.ValidateAndPrepare(source);
-
-            Assert.That(result.IsValid, Is.False);
-            Assert.That(result.WasMigrated, Is.True);
-            Assert.That(
-                result.Issues.Any(issue => issue.Code == InputConfigurationIssueCode.LimitExceeded),
-                Is.True);
-            Assert.That(
-                source.PlayerSlots[0].Contexts[0].Bindings[0].DeviceBindings,
-                Is.EqualTo(new[] { inlineBinding }));
-            Assert.That(source.PlayerSlots[0].Contexts[0].Bindings[0].CompositeBindings, Is.Null);
-        }
-
-        [Test]
-        public void ValidateAndPrepare_RejectsLegacyMigrationThatExhaustsBindingCapacity()
-        {
-            const string InlineBinding =
-                "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)";
-            InputConfiguration source = CreateLegacyVectorConfiguration(InlineBinding);
-            ActionBindingConfig action = source.PlayerSlots[0].Contexts[0].Bindings[0];
-            action.CompositeBindings = new List<CompositeBindingConfig>
-            {
-                new CompositeBindingConfig
-                {
-                    Name = "LegacyAxis",
-                    Parts = new List<CompositePartBindingConfig>
-                    {
-                        new CompositePartBindingConfig { Name = "first", Path = "<Keyboard>/q" },
-                        new CompositePartBindingConfig { Name = "second", Path = "<Keyboard>/e" },
-                        new CompositePartBindingConfig { Name = "third", Path = "<Keyboard>/r" }
-                    }
-                }
-            };
-            var limits = new InputConfigurationLimits(
-                maxBindingsPerAction: 4,
-                maxCompositesPerAction: 2);
-
-            InputConfigurationValidationResult result =
-                InputConfigurationValidator.ValidateAndPrepare(source, limits);
-
-            Assert.That(result.IsValid, Is.False);
-            Assert.That(result.WasMigrated, Is.True);
-            Assert.That(result.Configuration, Is.Not.Null);
-            Assert.That(
-                result.Issues.Any(issue =>
-                    issue.Code == InputConfigurationIssueCode.LimitExceeded &&
-                    issue.Message.Contains("Total direct and composite-part binding count", StringComparison.Ordinal)),
-                Is.True);
-            Assert.That(action.DeviceBindings, Is.EqualTo(new[] { InlineBinding }));
-            Assert.That(action.CompositeBindings, Has.Count.EqualTo(1));
+            Assert.That(source.SchemaVersion, Is.EqualTo(schemaVersion));
         }
 
         [Test]
@@ -1585,35 +1491,6 @@ namespace CycloneGames.InputSystem.Runtime.Tests
         }
 
         [Test]
-        public async Task Loader_PersistsPreparedSchemaOneWhenCreatingUserConfigFromLegacyDefault()
-        {
-            const string InlineBinding =
-                "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)";
-            InputConfiguration legacyDefault = CreateLegacyVectorConfiguration(InlineBinding);
-            var defaultSource = new MemoryConfigurationSource(Serialize(legacyDefault));
-            var userStore = new MissingConfigurationStore();
-            using var manager = new InputManager();
-
-            InputSystemLoadResult result = await InputSystemLoader.LoadAndInitializeAsync(
-                defaultSource,
-                "default",
-                userStore,
-                "user",
-                manager);
-
-            Assert.That(result.Status, Is.EqualTo(InputSystemLoadStatus.SuccessFromDefaultConfiguration));
-            Assert.That(userStore.SaveCount, Is.EqualTo(1));
-            Assert.That(userStore.Content, Is.Not.Null.And.Not.Empty);
-            Assert.That(userStore.Content, Does.Not.Contain("2DVector("));
-            InputConfiguration persisted =
-                YamlSerializer.Deserialize<InputConfiguration>(Encoding.UTF8.GetBytes(userStore.Content));
-            Assert.That(persisted.SchemaVersion, Is.EqualTo(InputConfiguration.CurrentSchemaVersion));
-            Assert.That(
-                persisted.PlayerSlots[0].Contexts[0].Bindings[0].CompositeBindings,
-                Has.Count.EqualTo(1));
-        }
-
-        [Test]
         public async Task Loader_CancellationAfterRuntimeCommitDoesNotReportCanceledState()
         {
             var cancellation = new CancellationTokenSource();
@@ -1933,20 +1810,6 @@ namespace CycloneGames.InputSystem.Runtime.Tests
                     }
                 }
             };
-        }
-
-        private static InputConfiguration CreateLegacyVectorConfiguration(string inlineBinding)
-        {
-            InputConfiguration configuration = CreateValidConfiguration();
-            configuration.SchemaVersion = 0;
-            configuration.PlayerSlots[0].Contexts[0].Bindings[0] = new ActionBindingConfig
-            {
-                Type = ActionValueType.Vector2,
-                ActionName = "Move",
-                ExpectedControlType = "Vector2",
-                DeviceBindings = new List<string> { inlineBinding }
-            };
-            return configuration;
         }
 
         private static InputActionAsset GetPlayerActionAsset(InputPlayer player)

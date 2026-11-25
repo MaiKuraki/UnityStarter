@@ -151,6 +151,18 @@ Dispose 或 pop menu context 后恢复 gameplay dispatch：
 menu.Dispose();
 ```
 
+**修改激活中 context 的策略：**
+
+```csharp
+// 对话框保持打开，Gameplay 重新接收输入。
+player.SetContextPolicy(dialog, priority: 100, blocksLowerPriority: false);
+
+// 回到构造时的策略。
+player.ClearContextPolicy(dialog);
+```
+
+策略按玩家保存，所以两个玩家共享的同一个 context 可以各不相同。策略变化触发一次 context refresh。
+
 多个系统需要在 nested operation 后可靠恢复 context state 时，使用 capture scope 持有临时 modal ownership。
 
 ### Event-driven 与 polling input

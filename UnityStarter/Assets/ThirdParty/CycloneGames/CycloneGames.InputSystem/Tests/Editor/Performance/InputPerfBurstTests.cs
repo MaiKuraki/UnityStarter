@@ -215,7 +215,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
             {
                 string actionName = "A" + (i % scenario.ActionsPerContext);
                 long start = System.Diagnostics.Stopwatch.GetTimestamp();
-                bool result = player.RebindAction("Map0", actionName, "<Keyboard>/a", "<Keyboard>/z");
+                bool result = player.RebindAction("Ctx0", "Map0", actionName, "<Keyboard>/a", "<Keyboard>/z");
                 samples[i] = (System.Diagnostics.Stopwatch.GetTimestamp() - start) * PerfMeter.TicksToMicroseconds;
                 if (result) applied++;
                 else rejected++;
