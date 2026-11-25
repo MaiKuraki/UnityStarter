@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.md)
 
-CycloneGames.IO 为 Unity 项目与纯 C# 服务提供有上限的整文件读取、流式传输、严格原子提交、精确比较、文件哈希、可移植路径沙箱、确定性文本解码与显式重试。三个能力契约 —— `IFileStore`、`IAtomicFileStore`、`IStreamFileStore` —— 定义存储面；`SystemFileStore` 实现了全部三个契约。
+CycloneGames.IO 为 Unity 项目与纯 C# 服务提供有上限的整文件读取、流式传输、严格原子提交、精确比较、文件哈希、可移植路径沙箱、确定性文本解码与显式重试。三个能力契约：`IFileStore`、`IAtomicFileStore`、`IStreamFileStore` 定义存储面；`SystemFileStore` 实现了全部三个契约。
 
 ## 目录
 
@@ -18,7 +18,7 @@ CycloneGames.IO 为 Unity 项目与纯 C# 服务提供有上限的整文件读�
 
 ## 概述
 
-每次整文件读取都必须显式提供分配上限。每次原子提交都先写入同目录临时文件，再调用 `File.Move` 或 `File.Replace`——绝不先删除再移动。比较会精确校验长度和每个字节；hash 不作为相等证明。参数与契约错误抛出 `ArgumentException`、`ArgumentOutOfRangeException` 或 `ArgumentNullException`。文件系统和平台错误保持对应异常。取消抛出 `OperationCanceledException`。
+每次整文件读取都必须显式提供分配上限。每次原子提交都先写入同目录临时文件，再调用 `File.Move` 或 `File.Replace`。绝不先删除再移动。比较会精确校验长度和每个字节；hash 不作为相等证明。参数与契约错误抛出 `ArgumentException`、`ArgumentOutOfRangeException` 或 `ArgumentNullException`。文件系统和平台错误保持对应异常。取消抛出 `OperationCanceledException`。
 
 ### 主要特性
 
@@ -86,6 +86,23 @@ Core 与 SystemIO 的公共 API 使用 `CycloneGames.IO` namespace；Unity 专�
 using CycloneGames.IO;
 ```
 
+### 声明传输预算
+
+`SystemFileStoreOptions` 持有传输 buffer 大小、声明的下界与上界，以及池化 buffer 的清零模式。所有值都由构造函数注入。绝对分配上下界只用于拒绝可能导致无界分配的预算。
+
+```csharp
+// Low-memory device tier: smaller buffer and tighter bounds.
+var lowEnd = new SystemFileStoreOptions(
+    bufferSize: 16 * 1024,
+    pooledBufferClearMode: PooledBufferClearMode.UsedRegion,
+    minimumBufferSize: 4 * 1024,
+    maximumBufferSize: 64 * 1024);
+
+var store = new SystemFileStore(lowEnd);
+```
+
+`SystemFileStore.Default` 与 `SystemFileStoreOptions.Default` 是不可变的便利实例，使用 64 KiB buffer 与 4 KiB 至 1 MiB 边界，不持有可变状态。设备档位需要不同边界时，向任何接受 options 的方法传入显式实例。
+
 ### 原子写入设置文件
 
 ```csharp
@@ -147,7 +164,7 @@ await SystemFileStore.Default.WriteBytesAtomicallyAsync(
 2. 写入内容，平台支持时调用 `FileStream.Flush(true)`。
 3. 新目标通过 `File.Move` 提交。
 4. 已有目标通过 `File.Replace` 提交。
-5. 平台不支持替换时 fail closed——实现绝不会先删除目标再移动临时文件。
+5. 平台不支持替换时 fail closed。实现绝不会先删除目标再移动临时文件。
 6. 失败或取消后尝试清理临时文件，保留之前的目标。
 
 操作对单个目标是原子的。并发 writer 的每个成功结果都是完整文件，最后一次操作系统提交获胜。顺序重要时使用上层 revision 或 compare-and-swap 策略。
@@ -251,7 +268,7 @@ if (!UnityFileUri.TryCreate(
         out string userUri,
         out UnityFileUriError error))
 {
-    // 将强类型 error 转换为产品专属诊断信息。
+    // Convert the typed error into product-specific diagnostics.
 }
 ```
 
@@ -292,7 +309,7 @@ await FileRetry.ExecuteAsync(
 | `EntireBuffer` | 清空整个租用数组。 |
 | `None` | 适用于内容不敏感且吞吐优先的场景。 |
 
-文本便捷方法清零临时编码/解码 byte array。失败或取消的 bounded read 清零已部分填充的 allocation。直接写入方法可能留下部分目标——不能接受部分状态时使用原子方法。
+文本便捷方法清零临时编码/解码 byte array。失败或取消的 bounded read 清零已部分填充的 allocation。直接写入方法可能留下部分目标。不能接受部分状态时使用原子方法。
 
 ### Progress callback
 
@@ -411,7 +428,7 @@ Runtime 包在未被调用时不会创建文件。
 
 | 数据 | 位置 | Owner | 清理 |
 | --- | --- | --- | --- |
-| 调用方内容 | 调用方传入路径 | 调用产品/模块 | 调用方定义 schema、保留、备份、迁移与恢复 |
+| 调用方内容 | 调用方传入路径 | 调用产品/模块 | 调用方定义 schema、保留、备份、导入与恢复 |
 | 原子临时文件 | 目标目录 | 单次原子事务 | 失败/取消后尽力删除；无事务时可清理匹配 `.cyclone-*.tmp` 的陈旧文件 |
 | Benchmark 数据 | `Application.temporaryCachePath/CycloneGames.IO.Benchmark/<run-id>/` | Editor benchmark window | 每次运行后删除 |
 
@@ -447,7 +464,3 @@ Runtime 包在未被调用时不会创建文件。
 5. 在每个发布平台上验证 atomic replace、quota 行为与进程突然终止后的恢复。
 
 ## 内存所有权
-
-IO abstraction 有意不拥有 shared cache 或 process-global pressure responder。产品若需要有界 admission 或 operation metrics，必须在 composition boundary 添加显式 decorator，并保持底层 file-store ownership 不变。
-
-直接使用 legacy IO API 是产品 composition root 的职责。请在实际发布 filesystem implementation 上验证每个 decorated store 的 limit 与 failure path。

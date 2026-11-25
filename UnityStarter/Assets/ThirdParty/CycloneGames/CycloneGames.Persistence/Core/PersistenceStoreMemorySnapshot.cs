@@ -1,8 +1,5 @@
 namespace CycloneGames.Persistence
 {
-    /// <summary>
-    /// Allocation-free diagnostics for one persistence store. Counters are monotonic for the store lifetime.
-    /// </summary>
     public readonly struct PersistenceStoreMemorySnapshot
     {
         public PersistenceStoreMemorySnapshot(

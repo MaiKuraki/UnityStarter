@@ -1,0 +1,6 @@
+# cgp-record
+# codec-id: test-yaml
+# payload-bytes: 10
+# xxh64: 4708293BF9A62D22
+---
+value: 42

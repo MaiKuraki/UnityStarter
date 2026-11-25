@@ -18,7 +18,7 @@ namespace CycloneGames.Persistence.Tests.VYaml
             var codec = new VYamlPersistenceCodec<YamlClassContract>(
                 GeneratedResolver.Instance);
 
-            Assert.That(codec.CodecId.Value, Is.EqualTo("vyaml/1"));
+            Assert.That(codec.CodecId.Value, Is.EqualTo("vyaml-utf8-lf"));
         }
 
         [Test]
@@ -220,9 +220,8 @@ namespace CycloneGames.Persistence.Tests.VYaml
 
 }
 
-// VYaml's generated formatters use non-global VYaml.* references. Keeping generated
-// fixtures outside CycloneGames.Persistence prevents the provider namespace from
-// shadowing the dependency's root namespace.
+// Generated formatter code references VYaml.* without a global:: prefix. Fixture DTOs live
+// outside the provider namespace so no local VYaml namespace can shadow the dependency.
 namespace CycloneGames.Tests.Persistence.VYamlFixtures
 {
     [YamlObject]

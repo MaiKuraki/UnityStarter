@@ -5,9 +5,6 @@ using System.Threading.Tasks;
 
 namespace CycloneGames.IO
 {
-    /// <summary>
-    /// Capability contract for stores that can commit one destination atomically.
-    /// </summary>
     public interface IAtomicFileStore
     {
         void WriteBytesAtomically(string path, byte[] content);

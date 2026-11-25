@@ -2,9 +2,6 @@ using System;
 
 namespace CycloneGames.Persistence
 {
-    /// <summary>
-    /// Immutable composition of one codec and one bounded Record V1 policy.
-    /// </summary>
     public sealed class PersistenceProfile<T>
     {
         public PersistenceProfile(
@@ -12,12 +9,12 @@ namespace CycloneGames.Persistence
             PersistenceLimits limits = null)
         {
             Codec = codec ?? throw new ArgumentNullException(nameof(codec));
-            Limits = limits ?? PersistenceLimits.Default;
+            Limits = limits ?? new PersistenceLimits();
             CodecId = codec.CodecId;
             if (string.IsNullOrEmpty(CodecId.Value))
             {
                 throw new ArgumentException(
-                    "The codec must expose a valid, versioned identifier.",
+                    "The codec must expose a valid format token.",
                     nameof(codec));
             }
         }

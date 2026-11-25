@@ -45,6 +45,7 @@ namespace CycloneGames.Persistence.SystemIO
 
         public string Location { get; }
 
+        // Normalize before binding so the resolved Location cannot escape the trusted root.
         public static SystemFilePersistenceStorage CreateSandboxed(
             string trustedRootPath,
             string relativePath)
@@ -105,12 +106,15 @@ namespace CycloneGames.Persistence.SystemIO
             return Task.CompletedTask;
         }
 
+        // Only these two exception types mean the entry is absent; other I/O errors propagate.
         private static bool IsMissing(Exception exception)
         {
             return exception is FileNotFoundException
                 || exception is DirectoryNotFoundException;
         }
 
+        // Enabled only for players with a local file system. WebGL and console builds must bind
+        // a platform save-data adapter that implements IPersistenceStorage.
         internal static void EnsurePlatformSupported()
         {
 #if UNITY_5_3_OR_NEWER && !UNITY_EDITOR && !UNITY_STANDALONE && !UNITY_IOS && !UNITY_ANDROID && !UNITY_SERVER

@@ -2,213 +2,92 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Settings.Persistence coordinates validated settings state (`CycloneGames.Settings`) with bounded persistence records (`CycloneGames.Persistence`). `PersistentSettings<T>` handles load, migration, commit, save, and delete.
+`CycloneGames.Settings.Persistence` connects validated settings state to one persistence store. `PersistentSettings<T>` loads a record, validates the decoded value, and commits it through a revision check. Saving writes an isolated state snapshot. The integration owns neither dependency.
 
-## Table of Contents
+## Contents
 
 - [Overview](#overview)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
-- [Common Scenarios](#common-scenarios)
-- [Performance and Memory](#performance-and-memory)
+- [Assembly](#assembly)
+- [Getting started](#getting-started)
+- [Load workflow](#load-workflow)
+- [Public API](#public-api)
+- [Concurrency and cancellation](#concurrency-and-cancellation)
+- [Diagnostics](#diagnostics)
+- [Tests](#tests)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
 
-`PersistentSettings<T>` borrows three dependencies supplied at construction:
+`PersistentSettings<T>` takes two dependencies:
 
-- `SettingsState<T>` — the authoritative in-memory value.
-- `SettingsMigrationPipeline<T>` — forward migration from any supported version.
-- `PersistenceStore<T>` — versioned storage with byte budgets and atomic write behavior.
+- `SettingsState<T>` holds the authoritative in-memory value.
+- `PersistenceStore<T>` reads and writes one bounded record.
 
-The caller retains ownership of all three.
+The caller constructs and retains all three objects. A record written by another format token is rejected by the store with `RecordFormatMismatch`.
 
-### Key features
+## Assembly
 
-- **Explicit composition** — the caller creates and retains all dependencies; no implicit DI.
-- **Load with migration** — decode, migrate through every version step, validate, and commit.
-- **Compare-and-commit** — capture `Revision` before I/O; reject stale candidates with `RevisionConflict`.
-- **Missing record support** — validated defaults are already in state; requires explicit save.
-- **Migration-aware save** — `RequiresSave` signals that migration was applied without implicit write.
-- **One-request-at-a-time** — overlap throws `InvalidOperationException`.
+| Assembly | References | `autoReferenced` | `noEngineReferences` |
+| --- | --- | --- | --- |
+| `CycloneGames.Settings.Persistence` | `CycloneGames.Settings.Core`, `CycloneGames.Persistence.Core` | `false` | `true` |
+| `CycloneGames.Settings.Persistence.Tests.Core` | integration, Settings.Core, Persistence.Core | `false` | `true` |
 
-## Architecture
+Settings Core never references Persistence, and Persistence Core never references Settings. Codec and storage provider types do not appear in this integration's public API.
 
 ```mermaid
-flowchart TD
-    Integration["CycloneGames.Settings.Persistence"] --> Settings["CycloneGames.Settings.Core"]
-    Integration --> Persistence["CycloneGames.Persistence.Core"]
-    Provider["Selected codec/storage providers"] --> Persistence
-    Game["Game composition root"] --> Integration
-    Game --> Provider
+flowchart LR
+    App["Application composition root"] --> Bridge["Settings.Persistence"]
+    Bridge --> State["Settings.Core"]
+    Bridge --> Store["Persistence.Core"]
+    Store --> Providers["Selected codec and storage providers"]
+    App --> Providers
 ```
 
-| Assembly | Path | Purpose |
-| --- | --- | --- |
-| `CycloneGames.Settings.Persistence` | `Runtime/` | `PersistentSettings<T>` bridge. References `CycloneGames.Settings.Core` and `CycloneGames.Persistence.Core`. `autoReferenced: false`, `noEngineReferences: true`. |
-| `CycloneGames.Settings.Persistence.Tests.Core` | `Tests/Core/` | Integration tests. |
+## Getting started
 
-Settings Core never references Persistence. Persistence Core never references Settings. Codec and storage provider types do not appear in this integration's public API.
-
-## Quick Start
-
-Compose all dependencies at startup:
+### Step 1: compose the dependencies
 
 ```csharp
 var schema = new GameSettingsSchema();
-var migrations = new SettingsMigrationPipeline<GameSettings>(
-    schema,
-    1,
-    new GameSettingsV1ToV2());
+var state = new SettingsState<GameSettings>(schema);
 
-var codec = new VYamlPersistenceCodec<GameSettings>(GeneratedResolver.Instance);
+IPersistenceCodec<GameSettings> codec =
+    new VYamlPersistenceCodec<GameSettings>(GeneratedResolver.Instance);
+
 IPersistenceStorage storage =
     UnityPersistentStorage.Create("Settings/game-settings.cgp");
 
-var state = new SettingsState<GameSettings>(schema);
 var store = new PersistenceStore<GameSettings>(
     storage,
     new PersistenceProfile<GameSettings>(codec));
-var settings = new PersistentSettings<GameSettings>(state, migrations, store);
 
-// Load at startup.
-PersistentSettingsLoadResult load = await settings.LoadAsync(ct);
-
-if (load.IsMissing)
-{
-    await settings.SaveAsync(ct);
-}
-else if (load.RequiresSave)
-{
-    await settings.SaveAsync(ct);
-}
+var settings = new PersistentSettings<GameSettings>(state, store);
 ```
 
-Retain `state` for updates/snapshots and `settings` for storage operations. The VYaml resolver must explicitly support the settings model for IL2CPP/AOT. This integration does not perform resolver discovery.
+Retain `state` for updates and snapshots, and `settings` for storage operations. The VYaml resolver must explicitly support the settings model for IL2CPP; this integration performs no resolver discovery.
 
-## Core Concepts
-
-### Load workflow
-
-```mermaid
-flowchart TD
-    Revision["Capture SettingsState.Revision"] --> Read["PersistenceStore.LoadAsync"]
-    Read --> Missing{"Record missing?"}
-    Missing -->|Yes| Keep["Keep validated current/default state"]
-    Keep --> MissingResult["Missing + RequiresSave"]
-    Missing -->|No| Decode["Decoded value + content version"]
-    Decode --> Migrate["Forward migration pipeline"]
-    Migrate --> Validate["Final schema validation"]
-    Validate --> Compare{"Revision unchanged?"}
-    Compare -->|Yes| Commit["Clone and commit SettingsState"]
-    Compare -->|No| Conflict["RevisionConflict; keep newer state"]
-    Commit --> Notify["Changed notification"]
-```
-
-### Load result semantics
-
-| Status | State effect | `RequiresSave` | Notes |
-| --- | --- | --- | --- |
-| `Missing` | No change | `true` | Validated defaults already in state |
-| `Loaded` at current version | Validated clone committed | `false` | Observers run after commit |
-| `Loaded` after migration | Migrated value committed | `true` | Load never writes implicitly |
-| Persistence failure or cancellation | No change | `false` | Original `PersistenceErrorCode` preserved |
-| Migration or validation failure | No change | `false` | Existing state remains authoritative |
-| State changed while load pending | No change | `false` | `RevisionConflict`; newer state not overwritten |
-
-Observer failures are returned as `ObserverFailureCount` and `FirstObserverException` on a successful loaded result. They do not become persistence failures and do not roll back the commit.
-
-### Save and delete
-
-```csharp
-PersistenceOperationResult save = await settings.SaveAsync(ct);
-PersistenceOperationResult delete = await settings.DeleteStoredValueAsync(ct);
-```
-
-`SaveAsync` captures an isolated state snapshot and saves it with `SettingsState<T>.CurrentVersion`. `DeleteStoredValueAsync` deletes only the stored record; it does not reset in-memory state.
-
-## Usage Guide
-
-### One-request-at-a-time policy
-
-One `PersistentSettings<T>` instance permits one active load, save, or delete. Overlap throws `InvalidOperationException` synchronously; operations are not queued. Its dependencies have their own overlap guards.
-
-### State and schema consistency
-
-Constructor validates that `state` and `migrations` share the same schema instance and `CurrentVersion`. A mismatch throws `ArgumentException`.
-
-### Cancellation behavior
-
-Cancellation is checked before migration steps and before state compare-and-commit. Cancellation before commit leaves state unchanged. A completed state commit is never reclassified as cancelled.
-
-### Threading
-
-The integration uses `Task` and `CancellationToken`; internal awaits use `ConfigureAwait(false)`. Migration, state commit, and loaded-state notification may run on a worker continuation. Core observers must be safe on that thread. A Unity-bound observer must enqueue its snapshot to the main-thread dispatcher before touching Unity APIs.
-
-## Advanced Topics
-
-### Provider and platform selection
-
-Platform behavior is selected by the injected `IPersistenceStorage`:
-
-| Environment | Expected provider |
-| --- | --- |
-| Windows, Linux, macOS desktop | Sandboxed System.IO provider |
-| iOS and Android | Unity path adapter with verified platform backup/lifecycle policy |
-| Dedicated server or CLI | Direct System.IO provider with explicit trusted root |
-| WebGL | Separate asynchronous IndexedDB/JavaScript provider |
-| Console platforms | Platform SDK save-data provider with certification-specific lifecycle |
-
-For non-Unity: `SystemFilePersistenceStorage.CreateSandboxed(trustedRoot, relativePath)`. For Unity: `UnityPersistentStorage.Create(relativePath)`.
-
-### Codec swapping
-
-MessagePack support is source-present but inactive without its external dependency. When activated, replace only the codec:
-
-```csharp
-IPersistenceCodec<GameSettings> codec = messagePackCodec;
-```
-
-`PersistentSettings<T>`, schema, migrations, and storage contract remain unchanged.
-
-## Common Scenarios
-
-### Startup load pattern
+### Step 2: load at startup
 
 ```csharp
 PersistentSettingsLoadResult load = await settings.LoadAsync(ct);
 
 if (load.IsMissing)
 {
-    // State holds validated defaults. Save explicitly.
+    // State already holds validated defaults. Write them explicitly.
     await settings.SaveAsync(ct);
 }
 else if (!load.Completed)
 {
-    ReportLoadFailure(load.Error, load.PersistenceError, load.Message, load.Exception);
-}
-else if (load.RequiresSave)
-{
-    // Migration applied. Persist at a safe point.
-    await settings.SaveAsync(ct);
-}
-```
-
-### Handling RevisionConflict
-
-```csharp
-PersistentSettingsLoadResult load = await settings.LoadAsync(ct);
-
-if (!load.Completed && load.Error == PersistentSettingsLoadError.StateCommitFailed)
-{
-    // Another commit won during load. Keep the newer state.
+    ReportLoadFailure(
+        load.Error,
+        load.PersistenceError,
+        load.StateError,
+        load.Message,
+        load.Exception);
 }
 ```
 
-### Explicit save after user-triggered change
+### Step 3: save after a user-triggered change
 
 ```csharp
 SettingsUpdateResult update = state.Update(
@@ -216,44 +95,85 @@ SettingsUpdateResult update = state.Update(
 
 if (update.Succeeded)
 {
-    await settings.SaveAsync(ct);
+    PersistenceOperationResult saved = await settings.SaveAsync(ct);
 }
 ```
 
-## Performance and Memory
+## Load workflow
 
-Load and save are cold-path operations.
+```mermaid
+flowchart TD
+    Revision["Capture SettingsState.Revision"] --> Read["PersistenceStore.LoadAsync"]
+    Read --> Missing{"Record missing?"}
+    Missing -->|yes| Miss["Missing result; state unchanged"]
+    Missing -->|no| Failed{"Load failed or cancelled?"}
+    Failed -->|yes| PersistFail["Persistence failure with original error code"]
+    Failed -->|no| Compare["TryApplyLoaded with expected revision"]
+    Compare --> Conflict{"Revision unchanged?"}
+    Conflict -->|no| Stale["StateCommitFailed; newer state stays authoritative"]
+    Conflict -->|yes| Validate["Schema validation and clone"]
+    Validate --> Valid{"Validation passed?"}
+    Valid -->|no| Invalid["StateCommitFailed; state unchanged"]
+    Valid -->|yes| Commit["Commit and notify observers"]
+```
 
-- Load holds the decoded model, a migration clone, and a state commit clone at different orchestration stages.
-- Save captures one state snapshot before serialization.
-- `PersistenceStore<T>` enforces byte budgets; schema clone cost remains model-specific.
-- Migration execution is linear in the number of required version steps.
-- No reflection, service locator, global cache, polling, or per-frame callback is introduced.
+| Status | State effect | Notes |
+| --- | --- | --- |
+| `Missing` | No change | Validated defaults remain in state |
+| `Loaded` | Validated clone committed | Observers run after commit |
+| Persistence failure or cancellation | No change | Original `PersistenceErrorCode` is preserved |
+| Validation failure | No change | `StateError` reports `ValidationFailed` |
+| State changed while load was pending | No change | `StateCommitFailed` with `RevisionConflict` |
+
+Observer failures are returned as `ObserverFailureCount` and `FirstObserverException` on a successful loaded result. They do not become persistence failures and do not roll back the commit.
+
+## Public API
+
+| Member | Description |
+| --- | --- |
+| `PersistentSettings(SettingsState<T>, PersistenceStore<T>)` | Null arguments throw `ArgumentNullException`. |
+| `LoadAsync(CancellationToken = default)` | Reads, validates, and commits through a revision check. |
+| `SaveAsync(CancellationToken = default)` | Captures an isolated snapshot and writes one record. |
+| `DeleteStoredValueAsync(CancellationToken = default)` | Deletes the stored record only; in-memory state is unchanged. |
+| `GetMemorySnapshot()` | Owner-local operation counters and the underlying store's limits. |
+
+| Result member | Meaning |
+| --- | --- |
+| `Status` | `Uninitialized`, `Failed`, `Missing`, `Loaded` |
+| `Completed` | True for `Missing` and `Loaded` |
+| `IsLoaded`, `IsMissing` | Status shortcuts |
+| `Error` | `None`, `PersistenceFailed`, `StateCommitFailed` |
+| `PersistenceError` | Original `PersistenceErrorCode` from the store |
+| `StateError` | Original `SettingsUpdateError` from the state commit |
+| `Message`, `Exception` | Diagnostics from the failing stage |
+| `ObserverFailureCount`, `FirstObserverException`, `HasObserverWarnings` | Post-commit observer diagnostics |
+
+A default result struct is `Uninitialized` with an empty `Message`.
+
+## Concurrency and cancellation
+
+One `PersistentSettings<T>` instance permits one active load, save, or delete. Overlap throws `InvalidOperationException` synchronously; operations are not queued. `SettingsState<T>` and `PersistenceStore<T>` keep their own guards, so a shared instance is still protected by its own overlap policy.
+
+Cancellation is checked before the load, before the state compare-and-commit, and before a save snapshots the state. Cancellation before commit leaves state unchanged. A completed state commit is never reclassified as cancelled.
+
+The integration uses `Task` and `CancellationToken`; internal awaits use `ConfigureAwait(false)`. State commit and loaded-state notification may run on a worker continuation. An observer that touches Unity APIs must enqueue its snapshot to a main-thread dispatcher.
+
+## Diagnostics
+
+`GetMemorySnapshot()` returns a `PersistentSettingsMemorySnapshot` with `IsOperationActive`, `StateRevision`, `PersistenceOperationActive`, configured payload and record limits, monotonic load/save/delete counts, overlap rejections, and last/peak record bytes. The snapshot reads counters only; it does not clone or inspect the settings value and does not expose storage content.
+
+## Tests
+
+`CycloneGames.Settings.Persistence.Tests.Core` is an EditMode assembly gated by `UNITY_INCLUDE_TESTS`. `PersistentSettingsTests.cs` uses an in-memory storage and a test codec. It covers missing and loaded results, corrupted and unknown-format records, validation failure, revision conflicts, observer warnings, explicit save and delete, pre-cancelled operations, overlap rejection, and memory snapshots.
 
 ## Troubleshooting
 
-| Symptom | Check |
-| --- | --- |
-| Constructor rejects composition | State and migration pipeline must share the same schema instance and `CurrentVersion` |
-| Load returns `Missing` | Verify provider location and platform availability; state remains valid |
-| Load returns migration failure | Verify `MinimumSupportedVersion`, complete `v -> v + 1` chain, and final validation |
-| Load returns future-version error | Do not save defaults; update the application or provide an explicit compatible reader |
-| Observer warning appears | Fix the observer independently; committed state is already authoritative |
-| Load returns `RevisionConflict` | Another state commit won during I/O; keep that newer state |
-| Overlap throws | Serialize lifecycle operations in the composition owner |
-
-## Validation
-
-Run integration tests:
-
-```text
-<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Settings.Persistence.Tests.Core -testResults <result-path> -quit
-```
-
-Tests cover: missing/default behavior, current and migrated loads, explicit `RequiresSave` without implicit write, future-version rejection, pre/mid-load cancellation, validation failure preservation, stale revision protection, post-commit observer warnings, save with current-version metadata, delete without reset, and operation overlap/constructor mismatch rejection.
-
-## Memory Diagnostics
-
-`PersistentSettings<T>.GetMemorySnapshot()` reports the bridge operation state, settings revision, underlying persistence operation/limits, started load/save/delete counts, overlap rejections, and last/peak record bytes. The O(1) snapshot never clones or inspects the settings value and does not expose storage content.
-
-`PersistentSettings<T>.GetMemorySnapshot()` exposes owner-local operation and retained-record counters. This type coordinates operations but owns neither the authoritative settings value nor persistence buffers after an operation. The Persistence record schema and migration behavior are unchanged.
+| Symptom | Cause | Action |
+| --- | --- | --- |
+| Load returns `Missing` | The location has no record | State already holds validated defaults; save explicitly if needed. |
+| Load returns `RecordFormatMismatch` | The record was written by another format token | Bind the codec that wrote it, or write the record again with the current profile. |
+| Load returns `IntegrityCheckFailed` | The record was edited or damaged | Restore from a known-good copy; do not bypass the checksum. |
+| Load returns `StateCommitFailed` with `ValidationFailed` | The decoded value violates the schema | Inspect the record and the schema; state remains unchanged. |
+| Load returns `RevisionConflict` | Another commit won during the async read | Keep the newer state. |
+| Overlap throws | Two lifecycle operations on one integration instance | Serialize calls in the composition owner. |
+| Observer warning appears | A registered observer threw a recoverable exception | Fix the observer independently; the commit is already authoritative. |

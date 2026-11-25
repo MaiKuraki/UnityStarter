@@ -4,13 +4,11 @@ using System.Threading.Tasks;
 
 namespace CycloneGames.Persistence
 {
-    /// <summary>
-    /// Binds one storage location to one codec profile. The store owns no application state.
-    /// </summary>
     public sealed class PersistenceStore<T>
     {
         private readonly IPersistenceStorage _storage;
         private readonly PersistenceProfile<T> _profile;
+        private readonly BoundedByteBufferWriter _writer;
         private int _operationActive;
         private long _startedLoadCount;
         private long _startedSaveCount;
@@ -25,13 +23,15 @@ namespace CycloneGames.Persistence
         {
             _storage = storage ?? throw new ArgumentNullException(nameof(storage));
             _profile = profile ?? throw new ArgumentNullException(nameof(profile));
+            _writer = new BoundedByteBufferWriter(
+                profile.Limits.InitialBufferBytes,
+                profile.Limits.MaximumPayloadBytes);
         }
 
         public string Location => _storage.Location;
 
         public PersistenceProfile<T> Profile => _profile;
 
-        /// <summary>Returns an allocation-free snapshot without inspecting persisted content.</summary>
         public PersistenceStoreMemorySnapshot GetMemorySnapshot()
         {
             PersistenceLimits limits = _profile.Limits;
@@ -48,19 +48,13 @@ namespace CycloneGames.Persistence
         }
 
         public Task<PersistenceLoadResult<T>> LoadAsync(
-            int maximumSupportedContentVersion,
             CancellationToken cancellationToken = default)
         {
-            if (maximumSupportedContentVersion < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(maximumSupportedContentVersion));
-            }
-
             BeginOperation();
             Interlocked.Increment(ref _startedLoadCount);
             try
             {
-                return LoadCoreAsync(maximumSupportedContentVersion, cancellationToken);
+                return LoadCoreAsync(cancellationToken);
             }
             catch
             {
@@ -71,14 +65,8 @@ namespace CycloneGames.Persistence
 
         public Task<PersistenceOperationResult> SaveAsync(
             in T value,
-            int contentVersion,
             CancellationToken cancellationToken = default)
         {
-            if (contentVersion < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(contentVersion));
-            }
-
             BeginOperation();
             Interlocked.Increment(ref _startedSaveCount);
             byte[] record = null;
@@ -86,22 +74,23 @@ namespace CycloneGames.Persistence
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 PersistenceLimits limits = _profile.Limits;
-                var context = new PersistenceWriteContext(
-                    contentVersion,
-                    limits,
-                    cancellationToken);
-                using (var writer = new BoundedByteBufferWriter(
-                           limits.InitialBufferBytes,
-                           limits.MaximumPayloadBytes))
+                var context = new PersistenceWriteContext(limits, cancellationToken);
+                // The gate serializes operations on this instance, so one pooled writer is reused
+                // across saves. Reset/Release keep the hot path free of writer-object allocation.
+                _writer.Reset();
+                try
                 {
-                    _profile.Codec.Serialize(in value, writer, in context);
+                    _profile.Codec.Serialize(in value, _writer, in context);
                     cancellationToken.ThrowIfCancellationRequested();
-                    record = PersistenceRecordV1.Encode(
-                        writer.WrittenSpan,
-                        contentVersion,
+                    record = PersistenceRecord.Encode(
+                        _writer.WrittenSpan,
                         _profile.CodecId,
                         limits);
                     ObserveRecordBytes(record.Length);
+                }
+                finally
+                {
+                    _writer.Release();
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
@@ -157,7 +146,6 @@ namespace CycloneGames.Persistence
         }
 
         private async Task<PersistenceLoadResult<T>> LoadCoreAsync(
-            int maximumSupportedContentVersion,
             CancellationToken cancellationToken)
         {
             byte[] record = null;
@@ -191,10 +179,10 @@ namespace CycloneGames.Persistence
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
-                PersistenceRecordParseResult parsed = PersistenceRecordV1.Parse(
+                // Parse runs before the codec sees any payload memory; parse failures never call it.
+                PersistenceRecordParseResult parsed = PersistenceRecord.Parse(
                     record,
                     _profile.CodecId,
-                    maximumSupportedContentVersion,
                     _profile.Limits);
                 if (!parsed.IsSuccess)
                 {
@@ -202,10 +190,7 @@ namespace CycloneGames.Persistence
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
-                var context = new PersistenceReadContext(
-                    parsed.ContentVersion,
-                    _profile.Limits,
-                    cancellationToken);
+                var context = new PersistenceReadContext(_profile.Limits, cancellationToken);
                 T value;
                 try
                 {
@@ -237,7 +222,7 @@ namespace CycloneGames.Persistence
                         exception);
                 }
 
-                return PersistenceLoadResult<T>.Loaded(value, parsed.ContentVersion);
+                return PersistenceLoadResult<T>.Loaded(value);
             }
             catch (OperationCanceledException exception)
                 when (cancellationToken.IsCancellationRequested)
@@ -259,6 +244,8 @@ namespace CycloneGames.Persistence
             }
         }
 
+        // The storage write is the commit boundary. A successful replacement reports success even
+        // when the caller token is cancelled afterwards.
         private async Task<PersistenceOperationResult> SaveCoreAsync(
             byte[] record,
             CancellationToken cancellationToken)
@@ -317,6 +304,8 @@ namespace CycloneGames.Persistence
             }
         }
 
+        // The guard covers one Store instance. Stores sharing a storage or codec instance are not
+        // serialized against each other; the composition root owns that policy.
         private void BeginOperation()
         {
             if (Interlocked.CompareExchange(ref _operationActive, 1, 0) != 0)
@@ -351,6 +340,8 @@ namespace CycloneGames.Persistence
             }
         }
 
+        // Read buffers transferred from storage and write buffers created here are both owned by
+        // the Store and cleared once the operation completes.
         private static void Clear(byte[] content)
         {
             if (content != null)

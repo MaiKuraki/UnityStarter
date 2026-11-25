@@ -146,7 +146,7 @@ public static ulong ComputePacketHash(
 6. 整数与浮点数表示。
 7. 摘要字节序。
 8. null、空、缺失与默认值规则。
-9. Schema 或协议版本。
+9. Schema 或协议标识。
 
 例如，没有编码边界时，下面两组字段序列会塌缩为相同的输入字节：
 
@@ -183,9 +183,9 @@ FNV 运行状态不是密钥，对恶意输入没有防护能力。
 
 文本必须有显式契约。视觉上相同的字符串可能包含不同的 Unicode code point、归一化形式、大小写、行尾或空白。
 
-**序号 UTF-16 标识符** —— `ComputeUtf16Ordinal` 对每个 .NET `char` 执行一次 XOR/multiply，不会把字符串编码为 UTF-8 或 UTF-16LE 字节。当所有生产者使用相同的 .NET UTF-16 code-unit 定义、且需要序号区分大小写行为时使用。
+**序号 UTF-16 标识符**：`ComputeUtf16Ordinal` 对每个 .NET `char` 执行一次 XOR/multiply，不会把字符串编码为 UTF-8 或 UTF-16LE 字节。当所有生产者使用相同的 .NET UTF-16 code-unit 定义、且需要序号区分大小写行为时使用。
 
-**用于交换的 UTF-8** —— 网络、文件、工具链或跨语言数据，需显式定义归一化，再把文本编码为 UTF-8 字节后哈希：
+**用于交换的 UTF-8**：网络、文件、工具链或跨语言数据，需显式定义归一化，再把文本编码为 UTF-8 字节后哈希：
 
 ```csharp
 using System.Text;
@@ -389,7 +389,7 @@ public static ulong RegisterAbilityId(
 
 - .NET 字符串是 UTF-16；许多其他语言默认 UTF-8。
 - .NET `BitConverter` 使用机器字节序；显式 `HashByteOrder` 调用避免歧义。
-- `GetHashCode()` 在不同机器、进程或 .NET 版本之间不稳定。不要持久化或传输它。
+- `GetHashCode()` 在不同机器、进程或 .NET 发行版之间不稳定。不要持久化或传输它。
 
 ### 何时改用加密摘要
 

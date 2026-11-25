@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.IO provides bounded whole-file reads, streaming transfer, strict atomic commits, exact comparison, file hashing, portable path sandboxing, deterministic text decoding, and explicit retry for Unity projects and pure C# services. Three capability contracts — `IFileStore`, `IAtomicFileStore`, `IStreamFileStore` — define the storage surface; `SystemFileStore` implements all three.
+CycloneGames.IO provides bounded whole-file reads, streaming transfer, strict atomic commits, exact comparison, file hashing, portable path sandboxing, deterministic text decoding, and explicit retry for Unity projects and pure C# services. Three capability contracts: `IFileStore`, `IAtomicFileStore`, `IStreamFileStore` define the storage surface; `SystemFileStore` implements all three.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ CycloneGames.IO provides bounded whole-file reads, streaming transfer, strict at
 
 ## Overview
 
-Every whole-file read requires an explicit allocation ceiling. Every atomic commit writes to a same-directory temporary file, then calls `File.Move` or `File.Replace` — never delete-then-move. Comparison checks length and bytes exactly; hashes are not accepted as equality proof. Argument and contract violations throw `ArgumentException`, `ArgumentOutOfRangeException`, or `ArgumentNullException`. Filesystem and platform failures remain visible as their corresponding exceptions. Cancellation throws `OperationCanceledException`.
+Every whole-file read requires an explicit allocation ceiling. Every atomic commit writes to a same-directory temporary file, then calls `File.Move` or `File.Replace`. It never deletes before moving. Comparison checks length and bytes exactly; hashes are not accepted as equality proof. Argument and contract violations throw `ArgumentException`, `ArgumentOutOfRangeException`, or `ArgumentNullException`. Filesystem and platform failures remain visible as their corresponding exceptions. Cancellation throws `OperationCanceledException`.
 
 ### Key features
 
@@ -86,6 +86,23 @@ Add an asmdef reference to `CycloneGames.IO.SystemIO` (and `CycloneGames.IO.Unit
 using CycloneGames.IO;
 ```
 
+### Declare a transfer budget
+
+`SystemFileStoreOptions` carries the transfer buffer size, its declared lower and upper bounds, and the pooled-buffer clearing mode. Every value is constructor-injected. The absolute allocation limits only reject a budget that could grow without bound.
+
+```csharp
+// Low-memory device tier: smaller buffer and tighter bounds.
+var lowEnd = new SystemFileStoreOptions(
+    bufferSize: 16 * 1024,
+    pooledBufferClearMode: PooledBufferClearMode.UsedRegion,
+    minimumBufferSize: 4 * 1024,
+    maximumBufferSize: 64 * 1024);
+
+var store = new SystemFileStore(lowEnd);
+```
+
+`SystemFileStore.Default` and `SystemFileStoreOptions.Default` are immutable convenience instances using a 64 KiB buffer with 4 KiB to 1 MiB bounds. They hold no mutable state. Pass an explicit options instance to any method that accepts one when a device tier needs different bounds.
+
 ### Write a settings file atomically
 
 ```csharp
@@ -147,7 +164,7 @@ Commit behavior:
 2. Content is written, then flushed with `FileStream.Flush(true)` where supported.
 3. A new destination is committed with `File.Move`.
 4. An existing destination is committed with `File.Replace`.
-5. Unsupported replacement fails closed — the destination is never deleted before moving the temporary file.
+5. Unsupported replacement fails closed. The destination is never deleted before moving the temporary file.
 6. Failed or cancelled operations attempt to remove their temporary file and preserve the previous destination.
 
 The operation is atomic per destination. With concurrent writers, each committed file is complete and the last successful OS commit wins. Use a higher-level revision or compare-and-swap policy when ordering matters.
@@ -251,7 +268,7 @@ if (!UnityFileUri.TryCreate(
         out string userUri,
         out UnityFileUriError error))
 {
-    // Convert the typed error into product-specific diagnostics.
+    // Map the error code to diagnostics.
 }
 ```
 
@@ -292,7 +309,7 @@ Default transfer buffer is 64 KiB, configurable from 4 KiB to 1 MiB via `SystemF
 | `EntireBuffer` | Clears the entire rented array. |
 | `None` | For non-sensitive content with maximum throughput. |
 
-Text convenience methods clear temporary encoded/decoded byte arrays. Failed or cancelled bounded reads clear their partially filled allocation. Direct write methods may leave a partial destination — use atomic methods when partial state is unacceptable.
+Text convenience methods clear temporary encoded/decoded byte arrays. Failed or cancelled bounded reads clear their partially filled allocation. Direct write methods may leave a partial destination. Use atomic methods when partial state is unacceptable.
 
 ### Progress callbacks
 
@@ -411,7 +428,7 @@ The runtime package creates no file until called.
 
 | Data | Location | Owner | Cleanup |
 | --- | --- | --- | --- |
-| Caller content | Caller-provided path | Calling product/module | Caller defines schema, retention, backup, migration, and recovery |
+| Caller content | Caller-provided path | Calling product/module | Caller defines schema, retention, backup, import, and recovery |
 | Atomic temporary file | Destination directory | One atomic transaction | Removed after failure/cancellation when possible; stale `.cyclone-*.tmp` files can be removed only when no transaction is active |
 | Benchmark data | `Application.temporaryCachePath/CycloneGames.IO.Benchmark/<run-id>/` | Editor benchmark window | Deleted after each run |
 
@@ -419,7 +436,7 @@ The package does not use `PlayerPrefs`, `EditorPrefs`, `SessionState`, registry,
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Resolution |
+| Symptom | Cause | Resolution |
 | --- | --- | --- |
 | `ReadBytesAsync` throws on a valid file | File grew between length check and read | Retry the read; for untrusted sources, use streaming |
 | Atomic write leaves a `.cyclone-*.tmp` file | Previous transaction was interrupted | Remove stale temp file only when no transaction is active |
@@ -448,7 +465,3 @@ Minimum verification:
 5. Validate atomic replacement, quota behavior, and sudden-termination recovery on each shipping platform.
 
 ## Memory Ownership
-
-The IO abstractions intentionally own no shared cache or process-global pressure responder. Products that need bounded admission or operation metrics must add an explicit decorator at their composition boundary without changing the underlying file-store ownership.
-
-Direct use of legacy IO APIs is the product composition root's responsibility. Validate each decorated store's limits and failure paths on the shipping filesystem implementation.

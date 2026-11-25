@@ -1,6 +1,5 @@
 namespace CycloneGames.Settings.Persistence
 {
-    /// <summary>Allocation-free operation and bounded-persistence attribution for one settings bridge.</summary>
     public readonly struct PersistentSettingsMemorySnapshot
     {
         public PersistentSettingsMemorySnapshot(

@@ -2,62 +2,58 @@
 
 [English](README.md) | 简体中文
 
-可选紧凑二进制 codec，桥接 `CycloneGames.Persistence` 与 MessagePack-CSharp。通过显式传入的 source-generated resolver 和强制的 untrusted-data security policy，转换类型化持久化 DTO。
+`CycloneGames.Persistence.MessagePack` 是 [CycloneGames.Persistence](../CycloneGames.Persistence/README.SCH.md) 的 codec provider。`MessagePackPersistenceCodec<T>` 通过调用方提供的 source-generated resolver 与 `MessagePackSecurity` policy，把一个类型化 DTO 序列化为 MessagePack bytes。Record framing、字节上限、checksum 校验和 storage 编排仍由 core package 负责。
 
-Provider source 随 package 提供，但仅当 `com.github.messagepack-csharp` `3.1.8` 已安装时才编译。当前 UnityStarter checkout 未激活 MessagePack。Assembly 由 `versionDefines` 生成的 `CYCLONEGAMES_HAS_MESSAGEPACK` 条件编译。
+格式 token 是 `messagepack-nocompress`，表示无压缩、current-spec、使用显式 formatter 的 MessagePack。
 
 ## 目录
 
 - [概述](#概述)
-- [架构](#架构)
-- [快速开始](#快速开始)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [高级主题](#高级主题)
+- [Assembly 与依赖](#assembly-与依赖)
+- [快速上手](#快速上手)
+- [公共 API](#公共-api)
+- [构造函数校验](#构造函数校验)
+- [序列化与反序列化](#序列化与反序列化)
+- [格式身份](#格式身份)
+- [安全策略](#安全策略)
+- [AOT 与 IL2CPP](#aot-与-il2cpp)
+- [测试](#测试)
 - [问题排查](#问题排查)
 
 ## 概述
 
-`MessagePackPersistenceCodec<T>` 以稳定标识符 `messagepack/1` 实现 `IPersistenceCodec<T>`。它通过显式 `IFormatterResolver` 和基于 `UntrustedData` 的 `MessagePackSecurity` 策略进行序列化。Persistence Core 负责 record framing、content version metadata、字节上限、checksum 校验和 storage orchestration。
-
-Codec 强制：无压缩（压缩会改变 wire profile，需要新标识符）、不使用 runtime type-name 解析、不依赖 reflection formatter 发现、一个解码值后不允许多余字节、不放宽 assembly-version 约束（`OmitAssemblyVersion` 和 `AllowAssemblyVersionMismatch` 已关闭）。构造函数会拒绝不包含 `T` 的显式 formatter 的 resolver，以及缺少 collision-resistant hashing、正数 graph depth 和正数 decompressed-size limit 的 security policy。
-
-### 关键特性
-
-- 稳定 codec ID `messagepack/1`——无压缩 current-spec option profile + 显式 generated formatter schema
-- 安全优先的构造函数——强制 collision-resistant hashing、graph-depth limit、decompressed-size 上限
-- Trailing-byte 拒绝——解码值必须消耗整个 payload
-- 仅 source-generated formatter——不支持 reflection 或 typeless resolver
-- 直接写入 `IBufferWriter<byte>`——无中间 array 分配
-
-## 架构
-
-| Assembly | Package | 引用 |
-| --- | --- | --- |
-| `CycloneGames.Persistence.MessagePack` | `com.cyclone-games.persistence.messagepack` | `CycloneGames.Persistence.Core`、`MessagePack.dll` |
-
-Assembly 使用 `defineConstraints: ["CYCLONEGAMES_HAS_MESSAGEPACK"]` 和 `com.github.messagepack-csharp` `[3.1.8,4.0.0)` 的 `versionDefines`。Unity package 未安装时 assembly 不编译。不要手动添加 `CYCLONEGAMES_HAS_MESSAGEPACK`。
-
-### 激活状态
-
-| 项目 | 当前 checkout |
+| 项目 | 值 |
 | --- | --- |
-| Provider source | Present |
-| `CycloneGames.Persistence.MessagePack` assembly | Inactive |
-| Provider tests | Inactive |
-| `com.github.messagepack-csharp` | 未安装 |
-| NuGet `MessagePack` binary、annotations 与 analyzer | 未安装 |
+| Namespace | `CycloneGames.Persistence.MessagePack` |
+| Assembly | `CycloneGames.Persistence.MessagePack` |
+| 格式 token | `messagepack-nocompress` |
+| 契约 | `IPersistenceCodec<T>` |
+| Wire profile | 无压缩、current spec、严格的程序集标识校验 |
 
-## 快速开始
+Codec 不持有文件路径、全局 resolver 或应用状态。
 
-使用本 provider 前，安装完整依赖集：
+## Assembly 与依赖
 
-1. 安装精确版本的 `MessagePack` NuGet package，包括匹配的 annotations 和 analyzer/source generator。
-2. 安装相同版本的官方 `com.github.messagepack-csharp` Unity package，固定到 immutable tag 或 commit。
-3. 让 Unity 解析 `CYCLONEGAMES_HAS_MESSAGEPACK`。
-4. Consumer asmdef 显式引用 `CycloneGames.Persistence.MessagePack`。
+| Assembly | 引用 | `defineConstraints` | `autoReferenced` |
+| --- | --- | --- | --- |
+| `CycloneGames.Persistence.MessagePack` | `CycloneGames.Persistence.Core`、`MessagePack.dll` | `CYCLONEGAMES_HAS_MESSAGEPACK` | `false` |
+| `CycloneGames.Persistence.Tests.MessagePack` | Core、provider、`MessagePack.dll`、`MessagePack.Annotations.dll` | `UNITY_INCLUDE_TESTS`、`CYCLONEGAMES_HAS_MESSAGEPACK` | `false` |
 
-定义稳定二进制合约：
+两个 asmdef 都声明同一条 `versionDefines`：`com.github.messagepack-csharp` 在 `[3.1.8,4.0.0)` 范围内时定义 `CYCLONEGAMES_HAS_MESSAGEPACK`。缺少该 Unity package 时，provider 与测试都不参与编译。该符号应通过 `versionDefines` 产生，不要在 PlayerSettings 中手动添加。
+
+启用 provider 前，先安装 release 匹配的 `MessagePack` NuGet binary、annotations 和 analyzer/source generator，再安装同一 release 的 `com.github.messagepack-csharp` Unity package，并在 consumer asmdef 中引用 `CycloneGames.Persistence.MessagePack`。
+
+```mermaid
+flowchart LR
+    App["应用 composition root"] --> Codec["MessagePack provider"]
+    Codec --> Core["Persistence.Core"]
+    Codec --> Dll["MessagePack.dll"]
+    Gate["versionDefines capability symbol"] -.-> Codec
+```
+
+## 快速上手
+
+### 第 1 步：定义二进制契约
 
 ```csharp
 using MessagePack;
@@ -70,94 +66,126 @@ public sealed class PlayerPreferences
 }
 ```
 
-构造 codec：
+使用 `[MessagePackObject]` 和显式整数 `[Key]`。运行 MessagePack source generator，使 `GeneratedMessagePackResolver` 包含该类型的 formatter。
+
+### 第 2 步：配置安全策略
 
 ```csharp
 MessagePackSecurity security = MessagePackSecurity.UntrustedData
     .WithMaximumObjectGraphDepth(64)
     .WithMaximumDecompressedSize(1024 * 1024);
+```
 
+`UntrustedData` 启用 collision-resistant hashing。两个 limit 都必须为正数，decompressed-size limit 不能超过 `PersistenceLimits.HardMaximumPayloadBytes`。
+
+### 第 3 步：创建并绑定 codec
+
+```csharp
 var codec = new MessagePackPersistenceCodec<PlayerPreferences>(
     GeneratedMessagePackResolver.Instance,
     security);
+
+IPersistenceStorage storage =
+    UnityPersistentStorage.Create("Settings/input.cgp");
+
+var profile = new PersistenceProfile<PlayerPreferences>(
+    codec,
+    new PersistenceLimits(256 * 1024));
+
+var store = new PersistenceStore<PlayerPreferences>(storage, profile);
 ```
 
-绑定到 `PersistenceProfile<PlayerPreferences>` 并照常创建 Store。Persistence Core 负责 record framing、limits、versioning 和 checksums。
-
-## 核心概念
-
-### Codec 构造
+### 第 4 步：保存与加载
 
 ```csharp
-public sealed class MessagePackPersistenceCodec<T> : IPersistenceCodec<T>
+var preferences = new PlayerPreferences
 {
-    public MessagePackPersistenceCodec(
-        IFormatterResolver resolver,
-        MessagePackSecurity security)
-    {
-        // 验证 resolver 为 T 提供 formatter
-        // 验证 security：collision-resistant hash、
-        //   正数 graph depth、正数 decompressed-size limit
-        // 构建锁定 options：No compression、current spec、
-        //   OmitAssemblyVersion=false、AllowAssemblyVersionMismatch=false
-    }
+    LookSensitivity = 0.65f,
+    InvertY = false
+};
 
-    public PersistenceCodecId CodecId => new PersistenceCodecId("messagepack/1");
+PersistenceOperationResult saved = await store.SaveAsync(in preferences, ct);
+PersistenceLoadResult<PlayerPreferences> loaded = await store.LoadAsync(ct);
+
+if (loaded.Status == PersistenceLoadStatus.Loaded)
+{
+    ApplyPreferences(loaded.Value);
 }
 ```
 
-Option 在构造时锁定。调用方不能在同一 codec identifier 下替换 option profile。改变 option-level wire behavior 需要新标识符和显式格式决策。
+## 公共 API
 
-### 序列化与反序列化
+| 成员 | 说明 |
+| --- | --- |
+| `MessagePackPersistenceCodec(IFormatterResolver resolver, MessagePackSecurity security)` | 校验两个参数，并构建固定的 `MessagePackSerializerOptions`。 |
+| `CodecId` | `messagepack-nocompress`，静态只读 `PersistenceCodecId`。 |
+| `Serialize(in T value, IBufferWriter<byte> destination, in PersistenceWriteContext context)` | 调用 `MessagePackSerializer.Serialize` 并传入调用方 token。 |
+| `Deserialize(ReadOnlyMemory<byte> payload, in PersistenceReadContext context)` | 调用 `MessagePackSerializer.Deserialize<T>`，并要求解码值消耗整个 payload。 |
 
-- **Serialize**——通过 `MessagePackSerializer.Serialize` 直接写入 `IBufferWriter<byte>`，传递 `PersistenceWriteContext` 的 cancellation token
-- **Deserialize**——读取借用 `ReadOnlyMemory<byte>`，验证 `bytesRead == payload.Length`，拒绝多余字节
+Options 在构造时锁定。没有公开的 setter，也没有允许在该 token 下替换 option profile 的重载。
 
-## 使用指南
+## 构造函数校验
 
-### Schema Policy
+```mermaid
+flowchart TD
+    R["resolver"] --> RNull{"为 null？"}
+    RNull -->|是| ANE["ArgumentNullException"]
+    RNull -->|否| RFmt["resolver 取 T 的 formatter"]
+    RFmt --> RHas{"formatter 存在？"}
+    RHas -->|否| AE["ArgumentException"]
+    RHas -->|是| S["security"]
+    S --> SNull{"为 null？"}
+    SNull -->|是| ANE
+    SNull -->|否| SCheck{"Collision-resistant hashing 且正数 limits 不超硬上限？"}
+    SCheck -->|否| AE
+    SCheck -->|是| Opt["构建锁定的 options"]
+```
 
-- 使用 `[MessagePackObject]` 与显式整数 `[Key]`。
-- 新字段使用新的 Optional Key。
-- 删除字段的 Key 永久保留——不得复用。
-- Contractless、typeless 和 reflection-generated resolver 不属于 `messagepack/1` 契约。
-- 不持久化 Runtime Type Name。
-- Schema Migration 由所属领域负责，不属于本 provider。
+| Option | 值 |
+| --- | --- |
+| `WithCompression` | `MessagePackCompression.None` |
+| `WithOldSpec` | `false` |
+| `WithOmitAssemblyVersion` | `false` |
+| `WithAllowAssemblyVersionMismatch` | `false` |
+| `WithSecurity` | 调用方传入并已通过校验的 policy |
 
-### 安全约束
+## 序列化与反序列化
 
-构造函数要求以 `MessagePackSecurity.UntrustedData` 为基础 policy，并拒绝：
-- 缺少 collision-resistant hashing 的 policy
-- 零或负 `MaximumObjectGraphDepth`
-- 零或负 `MaximumDecompressedSize`
-- 超过 `PersistenceLimits.HardMaximumPayloadBytes` 的 decompressed size
+| 路径 | 行为 |
+| --- | --- |
+| `Serialize` | 直接写入 Core store 的 writer；codec 不分配中间数组。 |
+| `Deserialize` | 读取借用的 `ReadOnlyMemory<byte>`，并比较 `bytesRead` 与 `payload.Length`。 |
+| Trailing bytes | 抛 `InvalidDataException`，消息中给出未读取的字节数。 |
+| 截断的 payload | MessagePack reader 抛异常，Store 归类为 `DeserializeFailed`。 |
 
-Persistence Core 在调用 codec 前校验 record length、codec identity、transform identity 和 xxHash64。xxHash64 只能检测意外修改，不提供 authentication。
+一条 record 恰好承载一个值。拒绝 trailing bytes 可以在返回值之前发现重复编码和 framing 错误。
 
-## 高级主题
+## 格式身份
 
-### Compression 与 Wire Profile
+`messagepack-nocompress` 是无压缩、使用显式整数 key 的 MessagePack。Formatter 从构造时传入的 generated resolver 解析。Contractless、typeless 和 reflection-generated resolver 不被接受，runtime type name 不会被持久化。
 
-`messagepack/1` 禁用 MessagePack compression。启用 compression 会形成不同 wire profile，必须使用新 codec identifier。Compression 不是 encryption。Authenticated encryption 属于独立审查的 Persistence Security Provider。
+## 安全策略
 
-### AOT 与 IL2CPP
+以 `MessagePackSecurity.UntrustedData` 为基础 policy。构造函数拒绝缺少 collision-resistant hashing 的 policy、depth 或 decompressed-size limit 非正的 policy，以及超过 `PersistenceLimits.HardMaximumPayloadBytes` 的 limit。Codec 本身不启用压缩，压缩输入不能膨胀到超过 record 预算。
 
-Unity IL2CPP 要求每个持久化 DTO 都具有 source-generated 或显式注册的 formatter。Editor/Mono reflection fallback 不是发布证据。MessagePack binary、annotations、analyzer、generated resolver 和 Unity package 必须保持同版。
+分配量取决于 DTO 与 generated formatter；两个 codec 方法都是同步 CPU 工作。
 
-在发布产品中启用前，必须使用准确 DTO assembly 和 stripping 配置执行 IL2CPP round trip。
+## AOT 与 IL2CPP
 
-### 内存与性能
+IL2CPP 下每个持久化 DTO 都需要 generated 或显式注册的 formatter。传入拥有该 DTO 的 assembly 所生成的 resolver，并用发布时的 DTO 集合和 stripping 配置做 Player build 验证。MessagePack binary、annotations、analyzer、generated resolver 和 Unity package 保持同一 release。
 
-序列化直接写入 Persistence Core 的有界 `IBufferWriter<byte>`。反序列化读取借用的 `ReadOnlyMemory<byte>`。两者都是同步 CPU 工作。Allocation 取决于 DTO 和 MessagePack formatter 行为。Persistence 是有界冷路径——不要逐帧调用。
+## 测试
+
+`CycloneGames.Persistence.Tests.MessagePack` 是由 `UNITY_INCLUDE_TESTS` 与 `CYCLONEGAMES_HAS_MESSAGEPACK` 门控的 EditMode assembly。`MessagePackPersistenceCodecTests.cs` 覆盖 class/struct round trip、格式 token、trailing 与截断 payload、对 `MessagePackSecurity.TrustedData` 的拒绝，以及与使用相同无压缩 option profile 的 `MessagePackSerializer` 逐字节一致的输出。
 
 ## 问题排查
 
-| 现象 | 原因 | 解决方案 |
+| 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| Assembly 不编译 | `com.github.messagepack-csharp` 未安装或版本不匹配 | 安装固定到 immutable tag 的 `3.1.8`；验证 `versionDefines` 解析。 |
-| 构造函数抛出 `ArgumentException` | Resolver 缺少 `T` 的显式 formatter | 添加 `[MessagePackObject]` 和 `[Key]` attribute；重新生成 resolver。 |
-| 构造函数抛出 `ArgumentException` | Security policy 的 depth 或 size limit 为零 | 使用带正数 limits 的 `MessagePackSecurity.UntrustedData`。 |
-| `InvalidDataException` 含 trailing bytes | Payload 在一个值后包含额外数据 | 验证序列化输出；检查是否存在重复编码。 |
-| 反序列化返回错误数据 | Key 值变更或复用 | 保留已删除 key；以新 optional key 添加新字段。 |
-| IL2CPP Player 抛出 `MissingFormatterException` | 使用 reflection-based 或 typeless resolver | 切换为 source-generated resolver + 显式 formatter。 |
-| 设置文件不可读 | 在活跃 profile 上切换了 compression | Compression 改变 wire format；旧 record 需迁移或使用新 codec ID。 |
+| Provider assembly 不编译 | 缺少 `com.github.messagepack-csharp`，或 release 不在支持范围内 | 安装匹配的 Unity package，让 `versionDefines` 解析出符号。 |
+| 构造函数抛 `ArgumentException` | Resolver 没有 `T` 的显式 formatter | 添加 `[MessagePackObject]` 与 `[Key]`，重新生成 resolver。 |
+| 构造函数抛 `ArgumentException` | 安全策略的 limit 为零，或 hashing 不满足要求 | 从 `MessagePackSecurity.UntrustedData` 起步，设置正数 limits。 |
+| `InvalidDataException` 提示 trailing bytes | Payload 在第一个值之后还有数据 | 检查是否重复编码或写入方追加了数据。 |
+| 反序列化后字段值不对 | Key 编号与 DTO 不一致 | 让 DTO 的 key 属性与序列化数据一致。 |
+| IL2CPP Player 抛 `MissingFormatterException` | 使用 reflection-based 或 typeless resolver | 改用带显式 formatter 的 source-generated resolver。 |
+| Load 返回 `RecordFormatMismatch` | Record 由不同 token 写入 | 绑定写入该 record 的 codec，或用当前 profile 重新写入。 |
