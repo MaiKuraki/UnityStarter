@@ -289,17 +289,6 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             }
 
             string persistenceContent = yamlContent;
-            if (initialization.Validation?.WasMigrated == true &&
-                !InputConfigurationYamlCodec.TrySerialize(
-                    initialization.Validation.Configuration,
-                    out persistenceContent,
-                    out string serializationError))
-            {
-                Log.Warning(
-                    $"{LogPrefix} Configuration is active but migrated YAML serialization failed: " +
-                    serializationError);
-                return false;
-            }
 
             IInputConfigurationStore userStore = _options.Bootstrap.UserStore;
             string userKey = _options.Bootstrap.UserKey;

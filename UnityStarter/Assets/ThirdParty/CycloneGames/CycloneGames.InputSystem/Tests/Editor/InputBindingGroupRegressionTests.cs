@@ -122,11 +122,11 @@ namespace CycloneGames.InputSystem.Tests.Editor
         }
 
         [Test]
-        public void LegacyConfig_WithoutPerBindingGroups_KeepsExactlyTheOldBehaviour()
+        public void Config_WithoutPerBindingGroups_FallsBackToActionLevelGroups()
         {
             // Without per-binding groups, action-level mixed groups still let a gamepad binding
             // through the KeyboardMouse mask.
-            var pad = UIS.AddDevice<Gamepad>("LegacyPad");
+            var pad = UIS.AddDevice<Gamepad>("FallbackPad");
             EnsureSchemeDevices();
             var manager = new InputManager();
             try

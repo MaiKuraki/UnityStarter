@@ -111,8 +111,7 @@ namespace CycloneGames.InputSystem.Runtime
         NotRequested,
         Succeeded,
         Failed,
-        Canceled,
-        SerializationFailed
+        Canceled
     }
 
     public readonly struct InputSystemLoadResult
@@ -354,26 +353,9 @@ namespace CycloneGames.InputSystem.Runtime
                 userStore != null &&
                 !string.IsNullOrEmpty(userKey))
             {
-                InputSystemPersistenceStatus persistenceStatus;
+                InputSystemPersistenceStatus persistenceStatus = InputSystemPersistenceStatus.NotRequested;
                 string persistenceError = null;
                 string persistenceContent = defaultRead.Content;
-                if (initialization.Validation?.WasMigrated == true &&
-                    !InputConfigurationYamlCodec.TrySerialize(
-                        initialization.Validation.Configuration,
-                        out persistenceContent,
-                        out string serializationError))
-                {
-                    Log.Warning(
-                        $"{LogPrefix} Initialized from migrated defaults but could not serialize the prepared configuration: " +
-                        serializationError);
-                    persistenceStatus = InputSystemPersistenceStatus.SerializationFailed;
-                    persistenceError = serializationError;
-                    persistenceContent = null;
-                }
-                else
-                {
-                    persistenceStatus = InputSystemPersistenceStatus.NotRequested;
-                }
 
                 if (persistenceContent != null)
                 {
