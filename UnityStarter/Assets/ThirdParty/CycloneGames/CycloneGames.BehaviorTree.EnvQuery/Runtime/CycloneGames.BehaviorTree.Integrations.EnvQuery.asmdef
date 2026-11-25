@@ -1,9 +1,9 @@
 {
-    "name": "CycloneGames.BehaviorTree.Runtime.Integrations.Spatial",
-    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.Integrations.Spatial",
+    "name": "CycloneGames.BehaviorTree.Integrations.EnvQuery",
+    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery",
     "references": [
         "CycloneGames.BehaviorTree.Core",
-        "CycloneGames.Spatial.Core"
+        "CycloneGames.AIEnvQuery.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

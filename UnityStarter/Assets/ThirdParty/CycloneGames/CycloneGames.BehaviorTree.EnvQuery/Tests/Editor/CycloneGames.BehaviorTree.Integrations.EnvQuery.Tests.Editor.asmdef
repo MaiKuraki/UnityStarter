@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.BehaviorTree.Integrations.EnvQuery.Tests.Editor",
     "references": [
         "CycloneGames.BehaviorTree.Core",
-        "CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery",
+        "CycloneGames.BehaviorTree.Integrations.EnvQuery",
         "CycloneGames.AIEnvQuery.Core"
     ],
     "includePlatforms": [

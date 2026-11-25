@@ -120,6 +120,8 @@
 
 依赖只有一个方向：`Runtime -> Core`。Core 仅引用 `CycloneGames.Hash.Core` 与 `CycloneGames.Logging.Core`，服务端只引用 Core 即可，不需要引擎 assembly。
 
+包内目录遵循 CycloneGames 约定：`Core/` 是引擎无关 assembly，`Runtime/` 承载 Unity 授权与组件层，`Editor/` 承载图工具，`Tests/` 承载 Editor、PlayMode、Support 与 Benchmarks 测试，`Runtime/Integrations/` 承载依赖两个模块的可选桥接，`Samples/` 承载授权资源。特性 assembly 留在所属层内，例如 `Runtime/DOD/` 与 `Tests/Editor/DOD/`。
+
 三个可选 assembly 均为 `autoReferenced: false`，使用方 asmdef 必须显式引用：
 
 - `CycloneGames.BehaviorTree.Runtime.DOD` 由 `com.unity.burst`、`com.unity.collections`、`com.unity.mathematics` 的 `versionDefines` 及对应 `defineConstraints` 门控，并引用 Unity.Burst、Unity.Collections、Unity.Mathematics 与 Unity.Jobs。

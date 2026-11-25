@@ -21,7 +21,7 @@ The bridge copies what the sensor already computed. It does not evaluate sight, 
 
 | Assembly | Purpose | Consumer reference |
 | --- | --- | --- |
-| `CycloneGames.BehaviorTree.Runtime.Integrations.Perception` | Reads a sensor and publishes to the blackboard. | Explicit |
+| `CycloneGames.BehaviorTree.Integrations.Perception` | Reads a sensor and publishes to the blackboard. | Explicit |
 | `CycloneGames.BehaviorTree.Integrations.Perception.Tests.Editor` | Contract, fuzz, allocation and soak tests. | Test Runner only |
 
 The assembly references `CycloneGames.BehaviorTree.Core` and `CycloneGames.AIPerception`. It is `autoReferenced: false`, so a project that never reads perception does not compile against it.
