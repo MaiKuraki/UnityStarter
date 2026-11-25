@@ -48,9 +48,6 @@ namespace CycloneGames.Hash.Core
             return Fnv1a32.CombineUInt32LittleEndian(hash, value);
         }
 
-        /// <summary>
-        /// Maps 0 to <see cref="NonZeroFallback"/>. Call this on a final digest, not every intermediate state.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static uint EnsureNonZero(uint value)
         {

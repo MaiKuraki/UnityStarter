@@ -6,9 +6,9 @@ using System.Threading.Tasks;
 namespace CycloneGames.Persistence
 {
     /// <summary>
-    /// Converts one application value to and from an explicitly versioned payload.
-    /// Implementations must not retain the value, destination, payload, or contexts.
-    /// T must be pure persisted data and must not own disposable or thread-affine resources.
+    /// Converts one application value to and from one wire format identified by
+    /// <see cref="CodecId"/>. Implementations borrow every input and must not retain it.
+    /// T is plain persisted data without disposable or thread-affine resources.
     /// </summary>
     public interface IPersistenceCodec<T>
     {
@@ -24,9 +24,6 @@ namespace CycloneGames.Persistence
             in PersistenceReadContext context);
     }
 
-    /// <summary>
-    /// Owns one storage location and transfers ownership of successful read buffers to the caller.
-    /// </summary>
     public interface IPersistenceStorage
     {
         string Location { get; }
@@ -46,9 +43,6 @@ namespace CycloneGames.Persistence
         Task DeleteAsync(CancellationToken cancellationToken = default);
     }
 
-    /// <summary>
-    /// Thrown by a bounded writer before a codec can grow beyond the configured payload budget.
-    /// </summary>
     public sealed class PersistencePayloadBudgetExceededException : Exception
     {
         public PersistencePayloadBudgetExceededException(int maximumPayloadBytes)

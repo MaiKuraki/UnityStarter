@@ -18,7 +18,7 @@ CycloneGames.Hash provides deterministic, non-cryptographic hashing primitives f
 
 ## Overview
 
-A hash function answers one question: given the same algorithm and the same input bytes, what fixed-width digest should every producer compute? CycloneGames.Hash answers that question with a small set of focused algorithms, each exposing its contract (algorithm, seed, byte order) explicitly at the call site.
+CycloneGames.Hash computes fixed-width digests from algorithm, seed, byte order, and input bytes. Each API exposes those parameters at the call site.
 
 The module exists for the moments when a project needs a compact fingerprint of canonical data: asset content, build inputs, protocol schemas, deterministic-state snapshots, named definitions, or cache keys. The owner decides what bytes to hash; this module turns those bytes into a stable digest that can be compared, cached, transmitted, or logged.
 
@@ -28,7 +28,7 @@ Use this module when:
 - The same logical value must produce the same digest across machines, processes, and Unity backends.
 - You want span-based, allocation-free hashing on hot paths.
 
-Do not use this module for cryptographic authentication, tamper resistance, password storage, or guaranteed-unique identifiers. Those belong to a security-owned layer with a cryptographic digest plus signature or MAC.
+Do not use this module for cryptographic authentication, tamper resistance, password storage, or guaranteed-unique identifiers.
 
 ### Key features
 
@@ -136,7 +136,7 @@ Algorithm count is not a measure of quality. A reliable contract benefits more f
 
 ### Deterministic contracts
 
-A numeric digest is deterministic only when the entire input contract is deterministic. Persisted, networked, or cross-process data should fix every property in this list:
+A numeric digest is deterministic only when the entire input contract is deterministic. Persisted, networked, or cross-process data fixes every property in this list:
 
 1. Algorithm and digest width.
 2. Initial seed or running state.
@@ -146,7 +146,7 @@ A numeric digest is deterministic only when the entire input contract is determi
 6. Integer and floating-point representation.
 7. Digest byte order.
 8. Null, empty, missing, and default-value rules.
-9. Schema or protocol revision.
+9. Schema or protocol identity.
 
 For example, without an encoded boundary, these two field sequences collapse to the same input bytes:
 
@@ -183,9 +183,9 @@ An FNV running state is not a secret key and provides no protection against mali
 
 Text must have an explicit contract. Visually identical strings can differ in Unicode code points, normalization form, case, line endings, or whitespace.
 
-**Ordinal UTF-16 identifiers** — `ComputeUtf16Ordinal` performs one XOR/multiply step per .NET `char`. It does not encode the string as UTF-8 or UTF-16LE bytes. Use it when every producer uses the same .NET UTF-16 code-unit definition and ordinal case-sensitive behavior is acceptable.
+**Ordinal UTF-16 identifiers**: `ComputeUtf16Ordinal` performs one XOR/multiply step per .NET `char`. It does not encode the string as UTF-8 or UTF-16LE bytes. Use it when every producer uses the same .NET UTF-16 code-unit definition and ordinal case-sensitive behavior is acceptable.
 
-**UTF-8 for interchange** — for network, file, toolchain, or cross-language data, define normalization explicitly and encode text as UTF-8 bytes before hashing:
+**UTF-8 for interchange**: for network, file, toolchain, or cross-language data, define normalization explicitly and encode text as UTF-8 bytes before hashing:
 
 ```csharp
 using System.Text;
@@ -274,7 +274,7 @@ Use one-shot hashing when the complete payload is already contiguous:
 ulong digest = XxHash64.Compute(payloadBytes, seed: 0UL);
 ```
 
-Use streaming when data arrives in chunks or when concatenating would require an extra buffer:
+Use streaming when data arrives in chunks or when concatenating requires an extra buffer:
 
 ```csharp
 using System.IO;
@@ -352,7 +352,7 @@ Use 32-bit identifiers only when storage or protocol constraints require them an
 
 `StableHash32` and `StableHash64` map a final zero digest to `NonZeroFallback`. This lets a system reserve `0` as "unset", but it does not create uniqueness and adds one collision with the fallback value.
 
-Cold-path registries should retain the canonical key alongside the hash:
+Cold-path registries retain the canonical key alongside the hash:
 
 ```csharp
 using System.Collections.Generic;
@@ -389,7 +389,7 @@ When a digest must match a non-.NET producer (a C++ server, a Rust tool, a Pytho
 
 - .NET strings are UTF-16; many other languages default to UTF-8.
 - .NET `BitConverter` uses machine endianness; explicit `HashByteOrder` calls avoid ambiguity.
-- `GetHashCode()` is not stable across machines, processes, or .NET versions. Never persist or transmit it.
+- `GetHashCode()` is not stable across machines, processes, or .NET releases. Never persist or transmit it.
 
 ### When to use a cryptographic digest instead
 
@@ -470,7 +470,7 @@ The owner retains the canonical name and rejects collisions during authoring.
 
 The span-based core paths do not allocate managed memory. XXH64 processes 32-byte stripes and keeps up to 31 unprocessed bytes in an inline 32-byte buffer.
 
-The module does not cache input buffers, strings, paths, digests, reflection results, or encoding buffers. This avoids cache invalidation, retained-memory growth, synchronization, and cleanup ownership. Reuse `XxHash64` with `Reset` rather than pooling its small value state.
+The module does not cache input buffers, strings, paths, digests, reflection results, or encoding buffers. This avoids cache invalidation, retained-memory growth, synchronization, and cleanup ownership. `XxHash64` is reused with `Reset`; its small value state is not pooled.
 
 Caller code can still allocate through `Encoding.GetBytes(string)`, new arrays and collection growth, LINQ, delegates, closures, iterators, stream/task wrappers, `ToString`, and hexadecimal formatting. Profile the complete call path before attributing allocations to the hashing layer.
 
@@ -483,11 +483,11 @@ Caller code can still allocate through `Encoding.GetBytes(string)`, new arrays a
 
 ### Platform behavior
 
-The Runtime assembly is enabled for all Unity platforms, has no `UnityEngine` or platform SDK reference, uses portable integer arithmetic, spans, and `BinaryPrimitives`, uses explicit endianness, uses no unsafe code, native plugin, reflection, or dynamic code generation, and owns no thread, file, socket, handle, or native container. Release validation should run the same known vectors and chunk-boundary tests under the target scripting backend, followed by target-specific performance and allocation measurements.
+The Runtime assembly is enabled for all Unity platforms, has no `UnityEngine` or platform SDK reference, uses portable integer arithmetic, spans, and `BinaryPrimitives`, uses explicit endianness, uses no unsafe code, native plugin, reflection, or dynamic code generation, and owns no thread, file, socket, handle, or native container. Release validation runs the same known vectors and chunk-boundary tests under the target scripting backend, followed by target-specific performance and allocation measurements.
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Resolution |
+| Symptom | Cause | Resolution |
 | --- | --- | --- |
 | The same visible text hashes differently | Encoding, normalization, case, whitespace, or line-ending rules differ | Compare the canonical text contract and hash explicit bytes |
 | Numeric digests match but serialized bytes differ | Producers use different byte order | Use explicit `HashByteOrder` or `TryWriteHash*` methods |

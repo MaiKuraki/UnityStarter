@@ -2,168 +2,213 @@
 
 [English | 简体中文](README.SCH.md)
 
-Human-readable YAML codec that bridges `CycloneGames.Persistence` to VYaml. Converts typed persistence DTOs to UTF-8 YAML through an explicitly supplied generated resolver. Persistence Core owns record framing, content version metadata, byte limits, checksum verification, and storage orchestration.
+`CycloneGames.Persistence.VYaml` is a codec provider for [CycloneGames.Persistence](../CycloneGames.Persistence/README.md). `VYamlPersistenceCodec<T>` maps one typed DTO to UTF-8 YAML through a source-generated formatter resolver. Record framing, byte limits, checksum verification, and storage orchestration stay in the core package.
 
-## Table of Contents
+The format token is `vyaml-utf8-lf`. YAML output is readable in a text editor, which makes settings and diagnostic records easy to inspect.
+
+## Contents
 
 - [Overview](#overview)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
+- [Assembly and dependencies](#assembly-and-dependencies)
+- [Getting started](#getting-started)
+- [Public API](#public-api)
+- [Resolver chain](#resolver-chain)
+- [Serialization behavior](#serialization-behavior)
+- [DTO rules](#dto-rules)
+- [Format identity](#format-identity)
+- [AOT and IL2CPP](#aot-and-il2cpp)
+- [Tests](#tests)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
 
-`VYamlPersistenceCodec<T>` implements `IPersistenceCodec<T>` with the stable identifier `vyaml/1`. It serializes through an `IYamlFormatterResolver` using a composite resolver chain: the caller's generated resolver, VYaml standard formatters, and VYaml Unity formatters (only when the first two resolvers do not own the type).
+| Item | Value |
+| --- | --- |
+| Namespace | `CycloneGames.Persistence.VYaml` |
+| Assembly | `CycloneGames.Persistence.VYaml` |
+| Format token | `vyaml-utf8-lf` |
+| Contract | `IPersistenceCodec<T>` |
+| Output | UTF-8 without BOM, LF line endings |
 
-Use this codec for settings and diagnostic data where human reviewability matters more than binary compactness. YAML readability is a diagnostic convenience — it does not bypass record integrity, migration, validation, or the record byte budget.
+The codec owns no file path, no global resolver, and no application state. The composition root constructs it and binds it to a `PersistenceProfile<T>`.
 
-### Key Features
+## Assembly and dependencies
 
-- Stable codec ID `vyaml/1`
-- Composite resolver chain — primary resolver + `StandardResolver` + `UnityResolver` fallback
-- UTF-8 without BOM, canonical LF line endings
-- Direct `IBufferWriter<byte>` serialization — no intermediate array allocation
-- `ReadOnlyMemory<byte>` deserialization — no retained borrow after return
-- Resolver validation at construction — rejects resolvers that lack a formatter for `T`
+| Assembly | References | `autoReferenced` | `noEngineReferences` |
+| --- | --- | --- | --- |
+| `CycloneGames.Persistence.VYaml` | `CycloneGames.Persistence.Core`, `VYaml.Core` | `false` | `true` |
+| `CycloneGames.Persistence.Tests.VYaml` | Core, provider, `VYaml.Core` | `false` | `true` |
 
-## Architecture
+Both asmdefs are gated by `CYCLONEGAMES_HAS_VYAML`, declared through `versionDefines` on `jp.hadashikick.vyaml` in the `[1.4.0,2.0.0)` range. When that Unity package is absent, the provider and its tests are excluded from compilation instead of reporting a missing `VYaml.Core` reference. Add `CycloneGames.Persistence.VYaml` to the consumer asmdef when the symbol is active.
 
-| Assembly | Package | References |
-| --- | --- | --- |
-| `CycloneGames.Persistence.VYaml` | `com.cyclone-games.persistence.vyaml` | `CycloneGames.Persistence.Core`, `VYaml.Core` |
+VYaml is installed in two coordinated parts in this checkout: NuGetForUnity installs `VYaml`, `VYaml.Annotations`, and the source generator artifacts; Unity Package Manager installs `jp.hadashikick.vyaml` from its Git package URL, which supplies `VYaml.Core` and the Unity formatters. Keep all of them on one release. The test asmdef sets `overrideReferences: true` and lists `VYaml.dll` and `VYaml.Annotations.dll`. The gate observes the Unity package only; the NuGet assemblies still have to be installed before the gated assembly can compile.
 
-The assembly uses `autoReferenced: false` and `noEngineReferences: true`. Persistence Core has no VYaml dependency. Applications that do not reference this provider do not compile its codec into their dependency graph.
+```mermaid
+flowchart LR
+    App["Application composition root"] --> Codec["VYaml provider"]
+    Codec --> Core["Persistence.Core"]
+    Codec --> VYamlCore["VYaml.Core"]
+    VYamlCore --> Dll["VYaml.dll and VYaml.Annotations.dll"]
+```
 
-VYaml installation requires two coordinated parts:
-1. NuGetForUnity installs `VYaml`, `VYaml.Annotations`, and source-generator artifacts.
-2. Unity Package Manager installs `jp.hadashikick.vyaml`, which supplies `VYaml.Core` and Unity formatters while referencing NuGet `VYaml.dll`.
+## Getting started
 
-Keep the binary, annotations, source generator, and Unity bridge on the same version. The supported baseline is VYaml `1.4.0`.
-
-## Quick Start
-
-Define an explicit VYaml contract:
+### Step 1: define the DTO
 
 ```csharp
 using VYaml.Annotations;
 
-[YamlObject]
-public sealed partial class AudioSettings
+namespace MyGame.Contracts
 {
-    public float MasterVolume { get; set; } = 1f;
-    public bool Muted { get; set; }
+    [YamlObject]
+    public sealed partial class AudioSettings
+    {
+        public float MasterVolume { get; set; } = 1f;
+        public bool Muted { get; set; }
+    }
 }
 ```
 
-Create the codec with the source-generated resolver:
+The class is `partial` and carries `[YamlObject]`. The source generator emits `GeneratedResolver` in the DTO namespace. Rebuild after changing fields.
+
+### Step 2: create the codec
 
 ```csharp
 using CycloneGames.Persistence.VYaml;
-using VYaml.Serialization;
+using MyGame.Contracts;
 
 var codec = new VYamlPersistenceCodec<AudioSettings>(
     GeneratedResolver.Instance);
 ```
 
-Bind into `PersistenceProfile<AudioSettings>` and create `PersistenceStore<AudioSettings>` with the selected storage provider. The composition root owns the profile and store. This package does not use a global resolver or service locator.
+The constructor calls `primaryResolver.GetFormatter<AudioSettings>()`. A missing formatter throws `ArgumentException`; a null resolver throws `ArgumentNullException`.
 
-## Core Concepts
-
-### Composite resolver
-
-The codec builds a custom resolver chain at construction time:
+### Step 3: bind it to a store
 
 ```csharp
-private sealed class PersistenceYamlResolver : IYamlFormatterResolver
+using CycloneGames.Persistence;
+using CycloneGames.Persistence.Unity;
+
+IPersistenceStorage storage =
+    UnityPersistentStorage.Create("Settings/audio.cgp");
+
+var profile = new PersistenceProfile<AudioSettings>(
+    codec,
+    new PersistenceLimits(256 * 1024));
+
+var store = new PersistenceStore<AudioSettings>(storage, profile);
+```
+
+### Step 4: save and load
+
+```csharp
+var settings = new AudioSettings { MasterVolume = 0.8f, Muted = false };
+
+PersistenceOperationResult saved = await store.SaveAsync(in settings, ct);
+PersistenceLoadResult<AudioSettings> loaded = await store.LoadAsync(ct);
+
+if (loaded.Status == PersistenceLoadStatus.Loaded)
 {
-    private readonly IYamlFormatterResolver _primaryResolver;
-
-    public IYamlFormatter<TValue> GetFormatter<TValue>()
-    {
-        // 1. Caller's generated resolver
-        IYamlFormatter<TValue> formatter = _primaryResolver.GetFormatter<TValue>();
-        if (formatter != null) return formatter;
-
-        // 2. VYaml standard formatters (primitives, collections)
-        formatter = StandardResolver.Instance.GetFormatter<TValue>();
-        if (formatter != null) return formatter;
-
-        // 3. VYaml Unity formatters (UnityEngine types)
-        return UnityResolver.Instance.GetFormatter<TValue>();
-    }
+    ApplySettings(loaded.Value);
 }
 ```
 
-There is no reflection discovery, resolver registry, mutable global default, or runtime type-name contract.
+## Public API
 
-### Serialization and deserialization
+| Member | Description |
+| --- | --- |
+| `VYamlPersistenceCodec(IYamlFormatterResolver primaryResolver)` | Validates that the resolver has a formatter for `T`, then builds the fixed resolver chain. |
+| `CodecId` | `vyaml-utf8-lf`, a static readonly `PersistenceCodecId`. |
+| `Serialize(in T value, IBufferWriter<byte> destination, in PersistenceWriteContext context)` | Emits YAML directly into the supplied writer. A null destination throws `ArgumentNullException`. |
+| `Deserialize(ReadOnlyMemory<byte> payload, in PersistenceReadContext context)` | Parses the borrowed payload and returns `T`. |
+
+`YamlSerializerOptions` is created once at construction. The codec has no public configuration beyond the resolver and no mutable state after construction.
+
+## Resolver chain
+
+`VYamlPersistenceCodec<T>` builds a private `IYamlFormatterResolver` at construction:
 
 ```csharp
-// Serialize: write directly to bounded IBufferWriter<byte>
-public void Serialize(in T value, IBufferWriter<byte> destination,
-    in PersistenceWriteContext context)
+public IYamlFormatter<TValue> GetFormatter<TValue>()
 {
-    var emitter = new Utf8YamlEmitter(destination);
-    YamlSerializer.Serialize(ref emitter, value, _serializerOptions);
-}
+    IYamlFormatter<TValue> formatter = _primaryResolver.GetFormatter<TValue>();
+    if (formatter != null) return formatter;
 
-// Deserialize: read borrowed ReadOnlyMemory<byte>
-public T Deserialize(ReadOnlyMemory<byte> payload,
-    in PersistenceReadContext context)
-{
-    return YamlSerializer.Deserialize<T>(payload, _serializerOptions);
+    formatter = StandardResolver.Instance.GetFormatter<TValue>();
+    if (formatter != null) return formatter;
+
+    return UnityResolver.Instance.GetFormatter<TValue>();
 }
 ```
 
-## Usage Guide
+| Order | Resolver | Handles |
+| --- | --- | --- |
+| 1 | Caller's generated resolver | `[YamlObject]` DTOs and nested generated types |
+| 2 | `StandardResolver` | Primitives, strings, collections, and built-in types |
+| 3 | `UnityResolver` | `UnityEngine` types |
 
-### Generated formatter namespace safety
+The order is fixed so built-in fallbacks cannot shadow a generated formatter. There is no reflection discovery, resolver registry, mutable global default, or runtime type-name contract.
 
-The supported VYaml source generator emits formatter code with references such as `VYaml.Annotations` that are not prefixed with `global::`. A DTO namespace that introduces a local `VYaml` namespace can shadow the dependency's root namespace, producing misleading missing-namespace compiler errors.
-
-Keep generated persistence DTOs in a neutral domain namespace:
-
-```csharp
-namespace MyGame.Settings.Contracts;
+```mermaid
+flowchart LR
+    DTO["T value"] --> Codec["VYaml codec Serialize"]
+    Codec --> Writer["Bounded byte writer"]
+    Writer --> Encode["Encode record"]
+    Encode --> Storage["Storage WriteAtomicallyAsync"]
+    Read["Storage ReadAsync"] --> Parse["Parse record"]
+    Parse --> Slice["Borrowed payload memory"]
+    Slice --> Decode["VYaml codec Deserialize"]
+    Decode --> Value["T value"]
 ```
 
-Avoid placing `[YamlObject]` DTOs in namespaces such as `MyGame.Persistence.VYaml`. If generated code reports that `Annotations` or `Serialization` does not exist below a project-local `VYaml` namespace, move the DTO to a neutral namespace and rebuild the resolver.
+## Serialization behavior
 
-### Readability and integrity
+| Property | Behavior |
+| --- | --- |
+| Output encoding | UTF-8 without BOM |
+| Line endings | LF only; no CR bytes |
+| Destination | The core store's writer, through `Utf8YamlEmitter` |
+| Intermediate copies | None; the emitter writes through `GetSpan` and `Advance` |
+| Deserialization input | `ReadOnlyMemory<byte>` borrowed from the record array |
+| Retention | The codec does not retain the payload, value, writer, or contexts |
 
-The record header is a valid YAML comment preamble followed by the exact YAML payload. The payload is readable for diagnosis, but runtime integrity remains strict. Manual edits invalidate xxHash64 and are rejected.
+`Serialize` creates `Utf8YamlEmitter` over the destination and calls `YamlSerializer.Serialize`. Because the destination is budget-capped, a payload past the configured limit raises `PersistencePayloadBudgetExceededException`, which the store maps to `PayloadTooLarge`. `Deserialize` calls `YamlSerializer.Deserialize<T>`; malformed YAML throws and the store classifies it as `DeserializeFailed`.
 
-If a product needs editable imports, implement an Editor/import workflow that parses untrusted YAML, validates the domain object, and rewrites it through the official save pipeline. Do not add a runtime checksum bypass.
+The codec adds no parser depth, alias expansion, CPU time, or stack budget beyond the record byte limit.
 
-## Advanced Topics
+## DTO rules
 
-### AOT and IL2CPP
+- Mark every persisted type with `[YamlObject]` and declare it `partial`.
+- Rebuild the generated resolver after changing fields.
+- Keep DTOs in a namespace such as `MyGame.Contracts`. Generated formatter code references `VYaml.Annotations` and `VYaml.Serialization` without a global prefix, so a local `VYaml` namespace shadows the dependency.
+- An assembly declaring `[YamlObject]` types needs its own internal `ModuleInitializerAttribute` shim. The VYaml generator emits `[ModuleInitializer]` based on the attribute metadata name, while `VYaml.dll` exposes only an internal copy. `Tests/Editor/ModuleInitializerAttributeShim.cs` shows the definition.
+- `T` is plain managed data without `IDisposable` resources, unmanaged handles, or thread-affine state.
 
-The constructor requires `IYamlFormatterResolver`. Pass the generated resolver from the assembly that owns the serialized DTO. It checks that a formatter exists for `T` before accepting the resolver.
+## Format identity
 
-Editor compilation of a generated resolver is not IL2CPP evidence. Every released DTO set needs a Player/AOT smoke test.
+`vyaml-utf8-lf` is UTF-8 YAML without a BOM, with LF line endings. VYaml maps fields by name. A field absent from the payload receives its type default. The token is checked by ordinal equality during parsing.
 
-### Hostile YAML safety
+`vyaml-utf8-lf` is checked by ordinal equality during parsing. A record written by another token returns `RecordFormatMismatch` before the codec runs.
 
-The current provider is qualified for trusted local settings. The 1 MiB record limit bounds bytes and allocation, but it does not prove bounded parser depth, alias/anchor expansion, CPU time, or stack usage. Do not feed attacker-controlled YAML to this codec until the selected VYaml version has reproducible hostile-input fixtures and an enforced parser budget. An editable import workflow must impose those limits before domain validation.
+## AOT and IL2CPP
 
-### Platform and threading
+IL2CPP needs a generated or explicitly registered formatter for every persisted DTO. Pass the resolver produced by the assembly that owns the DTO and verify the shipping DTO set with a Player build using the shipping stripping configuration.
 
-The codec is synchronous managed code and exposes no Unity types in its public contract. Generated DTOs containing only standard managed types do not initialize the Unity resolver. A DTO containing a Unity type enters the `VYaml.Core` Unity formatter path and requires a Unity host.
+The public contract exposes no `UnityEngine` types. A DTO with only standard managed types never enters the Unity formatter path; a DTO containing a Unity type resolves through `VYaml.Core` and needs a Unity host. The codec runs synchronously on the thread chosen by the owning persistence workflow and holds no mutable state.
 
-The codec may run on the thread selected by the owning persistence workflow. Do not share a mutable resolver or DTO across threads without an explicit ownership policy.
+## Tests
+
+`CycloneGames.Persistence.Tests.VYaml` is an EditMode assembly gated by `UNITY_INCLUDE_TESTS`. `VYamlPersistenceCodecTests.cs` covers the format token, class and struct round trips, UTF-8 output without BOM, LF-only line endings, the destination budget, resolver validation, and recovery after a deserialize failure. `VYamlModuleInitializerShimTests.cs` checks the generated registration type. Fixture DTOs live in `CycloneGames.Tests.Persistence.VYamlFixtures`.
 
 ## Troubleshooting
 
-| Symptom | Cause | Solution |
+| Symptom | Cause | Action |
 | --- | --- | --- |
-| Constructor throws `ArgumentNullException` | Null resolver passed | Pass `GeneratedResolver.Instance` or a concrete `IYamlFormatterResolver`. |
-| Constructor throws `ArgumentException` | Resolver has no formatter for `T` | Add `[YamlObject]` attribute to the DTO and regenerate the resolver. |
-| Compiler error: missing namespace `VYaml.Annotations` | DTO namespace shadows the VYaml dependency | Move DTO to a neutral namespace (e.g. `MyGame.Settings.Contracts`). |
-| Malformed YAML not caught by Persistence Store | Record-level integrity checks pass but YAML is broken | Persistence Core rejects checksum failures; use VYaml tests for structural YAML issues. |
-| `MissingFormatterException` in IL2CPP Player | Reflection-based resolver or missing generated formatter | Verify all DTOs have `[YamlObject]` and the generated resolver is included in the Player build. |
-| Encoding contains carriage returns | VYaml is not emitting canonical LF | Verify VYaml version is `1.4.0`; provider tests validate LF-only output. |
-| NuGet/Unity version mismatch | VYaml binary and Unity bridge versions differ | Pin both to the same immutable tag or commit; mismatched artifacts are install errors. |
+| `ArgumentNullException` in the constructor | A null resolver was passed | Pass `GeneratedResolver.Instance` or another concrete resolver. |
+| `ArgumentException` in the constructor | The resolver has no formatter for `T` | Add `[YamlObject]`, declare the type `partial`, and rebuild. |
+| Compiler error: `VYaml.Annotations` does not exist | A local `VYaml` namespace shadows the dependency | Move the DTO to a neutral namespace and rebuild. |
+| CS0122 on a generated `[ModuleInitializer]` | The assembly lacks the internal attribute shim | Add the assembly-local `ModuleInitializerAttribute` definition. |
+| `MissingFormatterException` in an IL2CPP Player | A DTO has no generated formatter | Generate or register the formatter and include the resolver in the build. |
+| Output contains CR bytes or a BOM | The NuGet packages and Unity package are on different releases | Align them to one release. |
+| `DeserializeFailed` with broken YAML | The record checksum is valid but the YAML cannot be parsed | Inspect the payload and fix the writer that produced it. |
+| `PayloadTooLarge` on save | The YAML exceeded the profile limit | Raise `PersistenceLimits` up to 1048576, or reduce the DTO. |

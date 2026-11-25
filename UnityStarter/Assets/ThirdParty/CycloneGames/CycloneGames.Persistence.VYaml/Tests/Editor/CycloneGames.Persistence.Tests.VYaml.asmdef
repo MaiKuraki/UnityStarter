@@ -18,9 +18,16 @@
     ],
     "autoReferenced": false,
     "defineConstraints": [
-        "UNITY_INCLUDE_TESTS"
+        "UNITY_INCLUDE_TESTS",
+        "CYCLONEGAMES_HAS_VYAML"
     ],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vyaml",
+            "expression": "[1.4.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_VYAML"
+        }
+    ],
     "noEngineReferences": true,
     "optionalUnityReferences": [
         "TestAssemblies"

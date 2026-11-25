@@ -26,11 +26,6 @@
       "displayName": "Behavior Tree Sample",
       "description": "Behavior Tree Sample",
       "path": "Samples"
-    },
-    {
-      "displayName": "Behavior Tree Tests",
-      "description": "Behavior Tree Tests",
-      "path": "Tests"
     }
   ]
 }

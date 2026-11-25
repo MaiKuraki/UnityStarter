@@ -3,9 +3,6 @@ using System.Text;
 
 namespace CycloneGames.IO
 {
-    /// <summary>
-    /// Strict deterministic text decoding. BOM-less content uses exactly one caller-selected encoding.
-    /// </summary>
     public static class TextCodec
     {
         private static readonly Encoding Utf8NoBomEncoding = new UTF8Encoding(false, true);

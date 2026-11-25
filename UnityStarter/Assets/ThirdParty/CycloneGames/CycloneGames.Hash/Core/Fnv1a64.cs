@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 namespace CycloneGames.Hash.Core
 {
     /// <summary>
-    /// Deterministic FNV-1a 64-bit helpers for byte-oriented contracts and legacy UTF-16 ordinal IDs.
+    /// Deterministic FNV-1a 64-bit helpers for byte-oriented contracts and UTF-16 ordinal identifiers.
     /// This is a non-cryptographic hash and must not be used for tamper-proof security.
     /// </summary>
     public static class Fnv1a64
@@ -44,7 +44,7 @@ namespace CycloneGames.Hash.Core
         }
 
         /// <summary>
-        /// Continues the legacy ordinal string contract by folding each UTF-16 code unit once.
+        /// Continues the ordinal string contract by folding each UTF-16 code unit once.
         /// This is intentionally not the FNV-1a hash of a UTF-16LE or UTF-8 byte encoding.
         /// </summary>
         public static ulong ComputeUtf16Ordinal(ReadOnlySpan<char> text, ulong seed)

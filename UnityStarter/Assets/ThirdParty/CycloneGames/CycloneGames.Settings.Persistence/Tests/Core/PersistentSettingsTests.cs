@@ -20,94 +20,93 @@ namespace CycloneGames.Settings.Persistence.Tests
         }
 
         [Test]
-        public async Task LoadAsync_MissingPreservesDefaultsAndRequiresSave()
+        public void Constructor_RejectsNullDependencies()
+        {
+            var state = new SettingsState<TestSettings>(new TestSchema());
+            Assert.Throws<ArgumentNullException>(() =>
+                new PersistentSettings<TestSettings>(null, CreateStore(new MemoryStorage())));
+            Assert.Throws<ArgumentNullException>(() =>
+                new PersistentSettings<TestSettings>(state, null));
+        }
+
+        [Test]
+        public async Task LoadAsync_MissingPreservesDefaults()
         {
             var storage = new MemoryStorage();
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
-            var persistent = CreatePersistentSettings(state, storage);
+            var state = new SettingsState<TestSettings>(new TestSchema());
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
 
-            var result = await persistent.LoadAsync();
+            PersistentSettingsLoadResult result = await settings.LoadAsync();
 
             Assert.That(result.Completed, Is.True);
             Assert.That(result.IsMissing, Is.True);
-            Assert.That(result.RequiresSave, Is.True);
             Assert.That(state.Snapshot().Value, Is.EqualTo(10));
         }
 
         [Test]
-        public async Task LoadAsync_CurrentVersionCommitsLoadedValue()
+        public async Task LoadAsync_CommitsLoadedValue()
         {
             var storage = new MemoryStorage();
-            await SeedAsync(storage, new TestSettings(35), 2);
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
-            var persistent = CreatePersistentSettings(state, storage);
+            await SeedAsync(storage, new TestSettings(35));
+            var state = new SettingsState<TestSettings>(new TestSchema());
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
 
-            var result = await persistent.LoadAsync();
+            PersistentSettingsLoadResult result = await settings.LoadAsync();
 
             Assert.That(result.IsLoaded, Is.True);
-            Assert.That(result.MigrationApplied, Is.False);
-            Assert.That(result.RequiresSave, Is.False);
+            Assert.That(result.HasObserverWarnings, Is.False);
             Assert.That(state.Snapshot().Value, Is.EqualTo(35));
         }
 
         [Test]
-        public async Task LoadAsync_OldVersionMigratesCommitsAndRequiresExplicitSave()
+        public async Task LoadAsync_ValidatesLoadedCandidateBeforeCommit()
         {
             var storage = new MemoryStorage();
-            await SeedAsync(storage, new TestSettings(5), 0);
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
-            var persistent = CreatePersistentSettings(state, storage);
+            await SeedAsync(storage, new TestSettings(-5));
+            var state = new SettingsState<TestSettings>(new TestSchema());
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
 
-            var result = await persistent.LoadAsync();
-
-            Assert.That(result.IsLoaded, Is.True);
-            Assert.That(result.MigrationApplied, Is.True);
-            Assert.That(result.RequiresSave, Is.True);
-            Assert.That(state.Snapshot().Value, Is.EqualTo(8));
-
-            var unchangedRecord = await CreateStore(storage).LoadAsync(2);
-            Assert.That(unchangedRecord.ContentVersion, Is.EqualTo(0));
-        }
-
-        [Test]
-        public async Task LoadAsync_MigrationValidationFailureLeavesStateUnchanged()
-        {
-            var storage = new MemoryStorage();
-            await SeedAsync(storage, new TestSettings(10), 1);
-            var schema = new TestSchema(2);
-            var state = new SettingsState<TestSettings>(schema);
-            var pipeline = new SettingsMigrationPipeline<TestSettings>(
-                schema,
-                1,
-                new AddMigration(1, 2, 500));
-            var persistent = new PersistentSettings<TestSettings>(
-                state,
-                pipeline,
-                CreateStore(storage));
-
-            var result = await persistent.LoadAsync();
+            PersistentSettingsLoadResult result = await settings.LoadAsync();
 
             Assert.That(result.Completed, Is.False);
-            Assert.That(result.Error, Is.EqualTo(PersistentSettingsLoadError.MigrationFailed));
-            Assert.That(result.MigrationError, Is.EqualTo(SettingsMigrationError.ValidationFailed));
-            Assert.That(result.MigrationApplied, Is.False);
+            Assert.That(result.Error, Is.EqualTo(PersistentSettingsLoadError.StateCommitFailed));
+            Assert.That(result.StateError, Is.EqualTo(SettingsUpdateError.ValidationFailed));
             Assert.That(state.Snapshot().Value, Is.EqualTo(10));
         }
 
         [Test]
-        public async Task LoadAsync_FutureContentVersionFailsWithoutReplacingState()
+        public async Task LoadAsync_CorruptedRecordDoesNotReplaceState()
         {
             var storage = new MemoryStorage();
-            await SeedAsync(storage, new TestSettings(50), 3);
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
-            state.Update((ref TestSettings candidate) => candidate.Value = 25);
-            var persistent = CreatePersistentSettings(state, storage);
+            await SeedAsync(storage, new TestSettings(35));
+            storage.MutateLastByte();
+            var state = new SettingsState<TestSettings>(new TestSchema());
+            state.Update((ref TestSettings candidate) => candidate.Value = 20);
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
 
-            var result = await persistent.LoadAsync();
+            PersistentSettingsLoadResult result = await settings.LoadAsync();
 
             Assert.That(result.Completed, Is.False);
-            Assert.That(result.Error, Is.EqualTo(PersistentSettingsLoadError.PersistenceFailed));
-            Assert.That(result.PersistenceError, Is.EqualTo(PersistenceErrorCode.FutureContentVersion));
+            Assert.That(result.PersistenceError, Is.EqualTo(PersistenceErrorCode.IntegrityCheckFailed));
+            Assert.That(state.Snapshot().Value, Is.EqualTo(20));
+        }
+
+        [Test]
+        public async Task LoadAsync_UnknownFormatDoesNotReplaceState()
+        {
+            var storage = new MemoryStorage();
+            await SeedAsync(storage, new TestSettings(35));
+            var state = new SettingsState<TestSettings>(new TestSchema());
+            state.Update((ref TestSettings candidate) => candidate.Value = 25);
+            var store = new PersistenceStore<TestSettings>(
+                storage,
+                new PersistenceProfile<TestSettings>(new TestCodec("other-settings")));
+            var settings = new PersistentSettings<TestSettings>(state, store);
+
+            PersistentSettingsLoadResult result = await settings.LoadAsync();
+
+            Assert.That(result.Completed, Is.False);
+            Assert.That(result.PersistenceError, Is.EqualTo(PersistenceErrorCode.RecordFormatMismatch));
             Assert.That(state.Snapshot().Value, Is.EqualTo(25));
         }
 
@@ -115,17 +114,17 @@ namespace CycloneGames.Settings.Persistence.Tests
         public async Task LoadAsync_ObserverFailureIsWarningAfterSuccessfulCommit()
         {
             var storage = new MemoryStorage();
-            await SeedAsync(storage, new TestSettings(30), 2);
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
+            await SeedAsync(storage, new TestSettings(30));
+            var state = new SettingsState<TestSettings>(new TestSchema());
             var laterObserverCalled = false;
             state.Changed +=
                 (in TestSettings snapshot, SettingsChangeReason reason) =>
                     throw new TestException("expected observer failure");
             state.Changed +=
                 (in TestSettings snapshot, SettingsChangeReason reason) => laterObserverCalled = true;
-            var persistent = CreatePersistentSettings(state, storage);
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
 
-            var result = await persistent.LoadAsync();
+            PersistentSettingsLoadResult result = await settings.LoadAsync();
 
             Assert.That(result.IsLoaded, Is.True);
             Assert.That(result.HasObserverWarnings, Is.True);
@@ -136,19 +135,18 @@ namespace CycloneGames.Settings.Persistence.Tests
         }
 
         [Test]
-        public async Task SaveAsync_WritesSnapshotWithCurrentSchemaVersion()
+        public async Task SaveAsync_WritesCurrentStateSnapshot()
         {
             var storage = new MemoryStorage();
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
+            var state = new SettingsState<TestSettings>(new TestSchema());
             state.Update((ref TestSettings candidate) => candidate.Value = 44);
-            var persistent = CreatePersistentSettings(state, storage);
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
 
-            var saveResult = await persistent.SaveAsync();
-            var stored = await CreateStore(storage).LoadAsync(2);
+            PersistenceOperationResult saveResult = await settings.SaveAsync();
+            PersistenceLoadResult<TestSettings> stored = await CreateStore(storage).LoadAsync();
 
             Assert.That(saveResult.IsSuccess, Is.True);
             Assert.That(stored.IsSuccess, Is.True);
-            Assert.That(stored.ContentVersion, Is.EqualTo(2));
             Assert.That(stored.Value.Value, Is.EqualTo(44));
         }
 
@@ -156,13 +154,13 @@ namespace CycloneGames.Settings.Persistence.Tests
         public async Task DeleteStoredValueAsync_DoesNotResetRuntimeState()
         {
             var storage = new MemoryStorage();
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
+            var state = new SettingsState<TestSettings>(new TestSchema());
             state.Update((ref TestSettings candidate) => candidate.Value = 70);
-            var persistent = CreatePersistentSettings(state, storage);
-            await persistent.SaveAsync();
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
+            await settings.SaveAsync();
 
-            var deleteResult = await persistent.DeleteStoredValueAsync();
-            var stored = await CreateStore(storage).LoadAsync(2);
+            PersistenceOperationResult deleteResult = await settings.DeleteStoredValueAsync();
+            PersistenceLoadResult<TestSettings> stored = await CreateStore(storage).LoadAsync();
 
             Assert.That(deleteResult.IsSuccess, Is.True);
             Assert.That(stored.IsMissing, Is.True);
@@ -173,13 +171,13 @@ namespace CycloneGames.Settings.Persistence.Tests
         public async Task LoadAsync_CancellationIsReportedAndStateIsUnchanged()
         {
             var storage = new MemoryStorage();
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
-            var persistent = CreatePersistentSettings(state, storage);
+            var state = new SettingsState<TestSettings>(new TestSchema());
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
             using (var cancellation = new CancellationTokenSource())
             {
                 cancellation.Cancel();
 
-                var result = await persistent.LoadAsync(cancellation.Token);
+                PersistentSettingsLoadResult result = await settings.LoadAsync(cancellation.Token);
 
                 Assert.That(result.Completed, Is.False);
                 Assert.That(result.PersistenceError, Is.EqualTo(PersistenceErrorCode.Cancelled));
@@ -191,12 +189,11 @@ namespace CycloneGames.Settings.Persistence.Tests
         public async Task LoadAsync_StateChangedWhileReadWasPendingReturnsConflict()
         {
             var storage = new GatedStorage();
-            await SeedAsync(storage, new TestSettings(35), 2);
-            var schema = new TestSchema(2);
-            var state = new SettingsState<TestSettings>(schema);
-            var persistent = CreatePersistentSettings(state, storage);
+            await SeedAsync(storage, new TestSettings(35));
+            var state = new SettingsState<TestSettings>(new TestSchema());
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
 
-            Task<PersistentSettingsLoadResult> pending = persistent.LoadAsync();
+            Task<PersistentSettingsLoadResult> pending = settings.LoadAsync();
             state.Update((ref TestSettings candidate) => candidate.Value = 77);
             storage.CompleteStored();
             PersistentSettingsLoadResult result = await pending;
@@ -208,42 +205,17 @@ namespace CycloneGames.Settings.Persistence.Tests
         }
 
         [Test]
-        public async Task LoadAsync_CancellationDuringMigrationDoesNotCommit()
-        {
-            var storage = new MemoryStorage();
-            await SeedAsync(storage, new TestSettings(20), 1);
-            var schema = new TestSchema(2);
-            var state = new SettingsState<TestSettings>(schema);
-            using (var cancellation = new CancellationTokenSource())
-            {
-                var pipeline = new SettingsMigrationPipeline<TestSettings>(
-                    schema,
-                    1,
-                    new CancelMigration(cancellation));
-                var persistent = new PersistentSettings<TestSettings>(
-                    state,
-                    pipeline,
-                    CreateStore(storage));
-
-                PersistentSettingsLoadResult result = await persistent.LoadAsync(cancellation.Token);
-
-                Assert.That(result.PersistenceError, Is.EqualTo(PersistenceErrorCode.Cancelled));
-                Assert.That(state.Snapshot().Value, Is.EqualTo(10));
-            }
-        }
-
-        [Test]
         public async Task SaveAsync_PreCancelledDoesNotCloneState()
         {
-            var schema = new TestSchema(2);
+            var schema = new TestSchema();
             var state = new SettingsState<TestSettings>(schema);
-            var persistent = CreatePersistentSettings(state, new MemoryStorage());
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(new MemoryStorage()));
             int cloneCountBeforeSave = schema.CloneCount;
             using (var cancellation = new CancellationTokenSource())
             {
                 cancellation.Cancel();
 
-                PersistenceOperationResult result = await persistent.SaveAsync(cancellation.Token);
+                PersistenceOperationResult result = await settings.SaveAsync(cancellation.Token);
 
                 Assert.That(result.ErrorCode, Is.EqualTo(PersistenceErrorCode.Cancelled));
                 Assert.That(schema.CloneCount, Is.EqualTo(cloneCountBeforeSave));
@@ -254,13 +226,13 @@ namespace CycloneGames.Settings.Persistence.Tests
         public async Task LoadAsync_RejectsOverlappingIntegrationOperation()
         {
             var storage = new GatedStorage();
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
-            var persistent = CreatePersistentSettings(state, storage);
+            var state = new SettingsState<TestSettings>(new TestSchema());
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
 
-            var firstLoad = persistent.LoadAsync();
-            Assert.Throws<InvalidOperationException>(() => persistent.SaveAsync());
+            Task<PersistentSettingsLoadResult> firstLoad = settings.LoadAsync();
+            Assert.Throws<InvalidOperationException>(() => settings.SaveAsync());
 
-            PersistentSettingsMemorySnapshot active = persistent.GetMemorySnapshot();
+            PersistentSettingsMemorySnapshot active = settings.GetMemorySnapshot();
             Assert.That(active.IsOperationActive, Is.True);
             Assert.That(active.PersistenceOperationActive, Is.True);
             Assert.That(active.StartedLoadCount, Is.EqualTo(1));
@@ -268,10 +240,10 @@ namespace CycloneGames.Settings.Persistence.Tests
             Assert.That(active.ConcurrentOperationRejectionCount, Is.EqualTo(1));
             storage.CompleteMissing();
 
-            var result = await firstLoad;
+            PersistentSettingsLoadResult result = await firstLoad;
             Assert.That(result.IsMissing, Is.True);
 
-            PersistentSettingsMemorySnapshot completed = persistent.GetMemorySnapshot();
+            PersistentSettingsMemorySnapshot completed = settings.GetMemorySnapshot();
             Assert.That(completed.IsOperationActive, Is.False);
             Assert.That(completed.PersistenceOperationActive, Is.False);
         }
@@ -280,17 +252,17 @@ namespace CycloneGames.Settings.Persistence.Tests
         public async Task MemorySnapshot_TracksOperationCountsLimitsAndRecordBytes()
         {
             var storage = new MemoryStorage();
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
-            var persistent = CreatePersistentSettings(state, storage);
+            var state = new SettingsState<TestSettings>(new TestSchema());
+            var settings = new PersistentSettings<TestSettings>(state, CreateStore(storage));
 
-            await persistent.SaveAsync();
-            await persistent.LoadAsync();
-            await persistent.DeleteStoredValueAsync();
+            await settings.SaveAsync();
+            await settings.LoadAsync();
+            await settings.DeleteStoredValueAsync();
 
-            PersistentSettingsMemorySnapshot snapshot = persistent.GetMemorySnapshot();
+            PersistentSettingsMemorySnapshot snapshot = settings.GetMemorySnapshot();
             Assert.That(snapshot.StateRevision, Is.EqualTo(state.Revision));
-            Assert.That(snapshot.MaximumPayloadBytes, Is.EqualTo(PersistenceLimits.Default.MaximumPayloadBytes));
-            Assert.That(snapshot.MaximumRecordBytes, Is.EqualTo(PersistenceLimits.Default.MaximumRecordBytes));
+            Assert.That(snapshot.MaximumPayloadBytes, Is.EqualTo(new PersistenceLimits().MaximumPayloadBytes));
+            Assert.That(snapshot.MaximumRecordBytes, Is.EqualTo(new PersistenceLimits().MaximumRecordBytes));
             Assert.That(snapshot.StartedLoadCount, Is.EqualTo(1));
             Assert.That(snapshot.StartedSaveCount, Is.EqualTo(1));
             Assert.That(snapshot.StartedDeleteCount, Is.EqualTo(1));
@@ -298,64 +270,16 @@ namespace CycloneGames.Settings.Persistence.Tests
             Assert.That(snapshot.PeakRecordBytes, Is.GreaterThanOrEqualTo(snapshot.LastRecordBytes));
         }
 
-        [Test]
-        public void Constructor_RejectsVersionMismatch()
-        {
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
-            var pipeline = new SettingsMigrationPipeline<TestSettings>(
-                new TestSchema(1),
-                new AddMigration(0, 1, 1));
-
-            Assert.Throws<ArgumentException>(
-                () => new PersistentSettings<TestSettings>(
-                    state,
-                    pipeline,
-                    CreateStore(new MemoryStorage())));
-        }
-
-        [Test]
-        public void Constructor_RejectsDifferentSchemaAuthoritiesAtSameVersion()
-        {
-            var state = new SettingsState<TestSettings>(new TestSchema(2));
-            var pipeline = new SettingsMigrationPipeline<TestSettings>(
-                new TestSchema(2),
-                new AddMigration(0, 1, 1),
-                new AddMigration(1, 2, 2));
-
-            Assert.Throws<ArgumentException>(
-                () => new PersistentSettings<TestSettings>(
-                    state,
-                    pipeline,
-                    CreateStore(new MemoryStorage())));
-        }
-
-        private static PersistentSettings<TestSettings> CreatePersistentSettings(
-            SettingsState<TestSettings> state,
-            IPersistenceStorage storage)
-        {
-            var pipeline = new SettingsMigrationPipeline<TestSettings>(
-                state.Schema,
-                new AddMigration(0, 1, 1),
-                new AddMigration(1, 2, 2));
-            return new PersistentSettings<TestSettings>(
-                state,
-                pipeline,
-                CreateStore(storage));
-        }
-
         private static PersistenceStore<TestSettings> CreateStore(IPersistenceStorage storage)
         {
             return new PersistenceStore<TestSettings>(
                 storage,
-                new PersistenceProfile<TestSettings>(new TestCodec()));
+                new PersistenceProfile<TestSettings>(new TestCodec("test-settings")));
         }
 
-        private static async Task SeedAsync(
-            IPersistenceStorage storage,
-            TestSettings value,
-            int contentVersion)
+        private static async Task SeedAsync(IPersistenceStorage storage, TestSettings value)
         {
-            var result = await CreateStore(storage).SaveAsync(in value, contentVersion);
+            PersistenceOperationResult result = await CreateStore(storage).SaveAsync(in value);
             Assert.That(result.IsSuccess, Is.True);
         }
 
@@ -371,15 +295,6 @@ namespace CycloneGames.Settings.Persistence.Tests
 
         private sealed class TestSchema : ISettingsSchema<TestSettings>
         {
-            private readonly int _currentVersion;
-
-            public TestSchema(int currentVersion)
-            {
-                _currentVersion = currentVersion;
-            }
-
-            public int CurrentVersion => _currentVersion;
-
             public int CloneCount { get; private set; }
 
             public TestSettings CreateDefault()
@@ -401,62 +316,24 @@ namespace CycloneGames.Settings.Persistence.Tests
             }
         }
 
-        private sealed class AddMigration : ISettingsMigration<TestSettings>
-        {
-            private readonly int _amount;
-
-            public AddMigration(int sourceVersion, int targetVersion, int amount)
-            {
-                SourceVersion = sourceVersion;
-                TargetVersion = targetVersion;
-                _amount = amount;
-            }
-
-            public int SourceVersion { get; }
-
-            public int TargetVersion { get; }
-
-            public SettingsMigrationResult Apply(ref TestSettings candidate)
-            {
-                candidate.Value += _amount;
-                return SettingsMigrationResult.Success();
-            }
-        }
-
-        private sealed class CancelMigration : ISettingsMigration<TestSettings>
-        {
-            private readonly CancellationTokenSource _cancellation;
-
-            public CancelMigration(CancellationTokenSource cancellation)
-            {
-                _cancellation = cancellation;
-            }
-
-            public int SourceVersion => 1;
-
-            public int TargetVersion => 2;
-
-            public SettingsMigrationResult Apply(ref TestSettings candidate)
-            {
-                candidate.Value++;
-                _cancellation.Cancel();
-                return SettingsMigrationResult.Success();
-            }
-        }
-
         private sealed class TestCodec : IPersistenceCodec<TestSettings>
         {
-            private static readonly PersistenceCodecId Id = new PersistenceCodecId("test-settings/1");
+            private readonly PersistenceCodecId _id;
 
-            public PersistenceCodecId CodecId => Id;
+            internal TestCodec(string token)
+            {
+                _id = new PersistenceCodecId(token);
+            }
+
+            public PersistenceCodecId CodecId => _id;
 
             public void Serialize(
                 in TestSettings value,
                 IBufferWriter<byte> destination,
                 in PersistenceWriteContext context)
             {
-                var span = destination.GetSpan(4);
-                var number = value.Value;
+                Span<byte> span = destination.GetSpan(4);
+                int number = value.Value;
                 span[0] = (byte)number;
                 span[1] = (byte)(number >> 8);
                 span[2] = (byte)(number >> 16);
@@ -473,8 +350,8 @@ namespace CycloneGames.Settings.Persistence.Tests
                     throw new FormatException("The test payload must contain four bytes.");
                 }
 
-                var span = payload.Span;
-                var number = span[0]
+                ReadOnlySpan<byte> span = payload.Span;
+                int number = span[0]
                     | (span[1] << 8)
                     | (span[2] << 16)
                     | (span[3] << 24);
@@ -514,6 +391,11 @@ namespace CycloneGames.Settings.Persistence.Tests
                 _content = null;
                 return Task.CompletedTask;
             }
+
+            internal void MutateLastByte()
+            {
+                _content[_content.Length - 1] ^= 0x01;
+            }
         }
 
         private sealed class GatedStorage : IPersistenceStorage
@@ -546,12 +428,12 @@ namespace CycloneGames.Settings.Persistence.Tests
                 return Task.CompletedTask;
             }
 
-            public void CompleteMissing()
+            internal void CompleteMissing()
             {
                 _read.SetResult(PersistenceStorageReadResult.Missing());
             }
 
-            public void CompleteStored()
+            internal void CompleteStored()
             {
                 _read.SetResult(PersistenceStorageReadResult.Found((byte[])_content.Clone()));
             }

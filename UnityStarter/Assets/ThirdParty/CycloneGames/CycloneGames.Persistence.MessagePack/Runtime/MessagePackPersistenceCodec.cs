@@ -6,13 +6,10 @@ using MessagePack;
 
 namespace CycloneGames.Persistence.MessagePack
 {
-    /// <summary>
-    /// Compact binary codec that requires explicit generated formatters and an untrusted-data policy.
-    /// </summary>
     public sealed class MessagePackPersistenceCodec<T> : IPersistenceCodec<T>
     {
         private static readonly PersistenceCodecId StableCodecId =
-            new PersistenceCodecId("messagepack/1");
+            new PersistenceCodecId("messagepack-nocompress");
 
         private readonly MessagePackSerializerOptions _options;
 
@@ -47,6 +44,8 @@ namespace CycloneGames.Persistence.MessagePack
                     nameof(security));
             }
 
+            // The wire profile is bound to the messagepack-nocompress token: uncompressed, current
+            // spec, strict assembly versions. Options are fixed at construction and never mutated.
             _options = new MessagePackSerializerOptions(resolver)
                 .WithCompression(MessagePackCompression.None)
                 .WithOldSpec(false)
@@ -83,6 +82,7 @@ namespace CycloneGames.Persistence.MessagePack
                 _options,
                 out int bytesRead,
                 context.CancellationToken);
+            // One record carries exactly one value; trailing bytes indicate a framing or encoder error.
             if (bytesRead != payload.Length)
             {
                 throw new InvalidDataException(
