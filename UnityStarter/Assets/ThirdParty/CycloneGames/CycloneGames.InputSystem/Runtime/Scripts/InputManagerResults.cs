@@ -103,7 +103,6 @@ namespace CycloneGames.InputSystem.Runtime
         public string Message { get; }
         public InputConfigurationValidationResult Validation { get; }
         public InputConfigurationPreflightResult Preflight { get; }
-        public bool WasMigrated => Validation != null && Validation.WasMigrated;
     }
 
     /// <summary>

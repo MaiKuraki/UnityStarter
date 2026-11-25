@@ -58,9 +58,7 @@ namespace CycloneGames.InputSystem.Editor
             }
 
             var playerIds = new HashSet<int>();
-            string warning = runtimeValidation.WasMigrated
-                ? "The schema-zero configuration was migrated in memory. Save explicitly to persist schema one."
-                : null;
+            string warning = null;
 
             for (int playerIndex = 0; playerIndex < configuration.PlayerSlots.Count; playerIndex++)
             {

@@ -101,6 +101,61 @@ namespace CycloneGames.InputSystem.Runtime
             public bool IsActive { get; set; }
         }
 
+        /// <summary>Policy of one context as seen by this player. The context itself is never mutated.</summary>
+        private readonly struct ContextPolicy
+        {
+            public ContextPolicy(int priority, bool blocksLowerPriority)
+            {
+                Priority = priority;
+                BlocksLowerPriority = blocksLowerPriority;
+            }
+
+            public int Priority { get; }
+            public bool BlocksLowerPriority { get; }
+        }
+
+        /// <summary>
+        /// Subscriptions of one active context. Rebuilt only when the context re-enters the active set or
+        /// its binding version changes.
+        /// </summary>
+        private sealed class ContextProjectionState
+        {
+            public readonly List<IDisposable> Subscriptions = new List<IDisposable>(8);
+            public int BindingVersion = -1;
+        }
+
+        /// <summary>Main-thread-confined cumulative counters of the context projection.</summary>
+        internal struct ProjectionDiagnostics
+        {
+            public int Passes;
+            public int MapEnables;
+            public int MapDisables;
+            public int MapReuses;
+            public int DesiredMaps;
+            public int SubscriptionReuses;
+            public int SubscriptionRebuilds;
+            public int PolicyCacheHits;
+            public int PolicyCacheMisses;
+        }
+
+        /// <summary>
+        /// Base policy and action map of one context. Both are immutable for the player's lifetime,
+        /// so they are resolved once.
+        /// </summary>
+        private readonly struct ResolvedContext
+        {
+            public ResolvedContext(int priority, bool blocksLowerPriority, InputActionMap map)
+            {
+                Priority = priority;
+                BlocksLowerPriority = blocksLowerPriority;
+                Map = map;
+            }
+
+            public int Priority { get; }
+            public bool BlocksLowerPriority { get; }
+            public InputActionMap Map { get; }
+        }
+
         /// <summary>
         /// Plain IObserver so the subscription does not depend on any reactive extension overload.
         /// </summary>
@@ -206,8 +261,21 @@ namespace CycloneGames.InputSystem.Runtime
         /// </summary>
         public Observable<InputDeviceActivity> DeviceActivity => _deviceActivity;
 
-        public event Action<string> OnContextChanged;
-        public event Action<InputPlayerDeviceStatus> OnDeviceStatusChanged;
+        // Subscriptions keep a snapshot array so notifying subscribers does not allocate.
+        private Action<string>[] _contextChangedHandlers = Array.Empty<Action<string>>();
+        private Action<InputPlayerDeviceStatus>[] _deviceStatusHandlers = Array.Empty<Action<InputPlayerDeviceStatus>>();
+
+        public event Action<string> OnContextChanged
+        {
+            add { _contextChangedHandlers = Append(_contextChangedHandlers, value); }
+            remove { _contextChangedHandlers = Remove(_contextChangedHandlers, value); }
+        }
+
+        public event Action<InputPlayerDeviceStatus> OnDeviceStatusChanged
+        {
+            add { _deviceStatusHandlers = Append(_deviceStatusHandlers, value); }
+            remove { _deviceStatusHandlers = Remove(_deviceStatusHandlers, value); }
+        }
 
         public int PlayerId { get; }
 
@@ -234,6 +302,12 @@ namespace CycloneGames.InputSystem.Runtime
 
         private readonly ReactiveProperty<string> _activeContextName = new ReactiveProperty<string>(null);
         private readonly ReactiveProperty<InputDeviceKind> _activeDeviceKind = new ReactiveProperty<InputDeviceKind>(InputDeviceKind.Unknown);
+        private readonly Dictionary<InputContext, ContextPolicy> _contextPolicyOverrides = new Dictionary<InputContext, ContextPolicy>();
+        private readonly Dictionary<InputContext, ResolvedContext> _resolvedContexts = new Dictionary<InputContext, ResolvedContext>();
+        private readonly List<int> _contextPriorities = new List<int>(8);
+        private readonly List<bool> _contextBlocks = new List<bool>(8);
+        private readonly List<InputActionMap> _desiredMaps = new List<InputActionMap>(4);
+        private ProjectionDiagnostics _projection;
         private readonly Stack<InputContext> _contextStack = new Stack<InputContext>();
         private readonly HashSet<InputContext> _contextSet = new HashSet<InputContext>();
         private readonly Stack<CaptureEntry> _captureStack = new Stack<CaptureEntry>();
@@ -249,10 +323,6 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly Dictionary<InputActionKey, Subject<Vector2>> _vector2Subjects = new Dictionary<InputActionKey, Subject<Vector2>>();
         private readonly Dictionary<InputActionKey, Subject<float>> _scalarSubjects = new Dictionary<InputActionKey, Subject<float>>();
 
-        private readonly Dictionary<string, InputActionKey> _actionNameToKey = new Dictionary<string, InputActionKey>(StringComparer.Ordinal);
-        private readonly HashSet<string> _ambiguousActionNames = new HashSet<string>(StringComparer.Ordinal);
-        private readonly Dictionary<InputActionKey, InputActionKey> _legacyActionKeys = new Dictionary<InputActionKey, InputActionKey>();
-        private readonly HashSet<InputActionKey> _ambiguousLegacyActionKeys = new HashSet<InputActionKey>();
         private readonly Dictionary<InputActionKey, InputAction> _actionsByKey = new Dictionary<InputActionKey, InputAction>();
         private readonly Dictionary<int, ActionRegistration> _actionLookup = new Dictionary<int, ActionRegistration>();
         private readonly Dictionary<int, string> _actionIdToName = new Dictionary<int, string>();
@@ -263,7 +333,8 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly List<PollingActionState> _pollingActions = new List<PollingActionState>();
         private readonly List<HoldState> _holdStates = new List<HoldState>();
 
-        private CompositeDisposable _subscriptions = new CompositeDisposable();
+        private readonly Dictionary<InputContext, ContextProjectionState> _projectionStates = new Dictionary<InputContext, ContextProjectionState>();
+        private readonly List<InputContext> _staleContexts = new List<InputContext>(4);
         private readonly CompositeDisposable _actionWiringSubscriptions = new CompositeDisposable();
         private readonly CancellationTokenSource _cancellation = new CancellationTokenSource();
         private readonly RuntimePlayerSlotConfig _config;
@@ -397,6 +468,8 @@ namespace CycloneGames.InputSystem.Runtime
             if (removed && !_contextSet.Contains(context) && !_captureSet.Contains(context))
             {
                 context.RemoveOwner(this);
+                _contextPolicyOverrides.Remove(context);
+                _resolvedContexts.Remove(context);
             }
 
             RequestContextRefresh();
@@ -446,7 +519,12 @@ namespace CycloneGames.InputSystem.Runtime
 
             InputContext context = _contextStack.Pop();
             _contextSet.Remove(context);
-            if (!_captureSet.Contains(context)) context.RemoveOwner(this);
+            if (!_captureSet.Contains(context))
+            {
+                context.RemoveOwner(this);
+                _contextPolicyOverrides.Remove(context);
+                _resolvedContexts.Remove(context);
+            }
             RequestContextRefresh();
         }
 
@@ -456,88 +534,31 @@ namespace CycloneGames.InputSystem.Runtime
             RequestContextRefresh();
         }
 
-        public Observable<Vector2> GetVector2Observable(string actionName)
+        public bool SetContextPolicy(InputContext context, int priority, bool blocksLowerPriority)
         {
-            return TryResolveActionKey(actionName, out InputActionKey key) && _vector2Subjects.TryGetValue(key, out Subject<Vector2> subject)
-                ? subject
-                : EmptyObservables.Vector2;
+            EnsureUsable();
+            if (context == null) return false;
+            if (!_contextSet.Contains(context) && !_captureSet.Contains(context)) return false;
+
+            if (_contextPolicyOverrides.TryGetValue(context, out ContextPolicy current) &&
+                current.Priority == priority && current.BlocksLowerPriority == blocksLowerPriority)
+            {
+                return true;
+            }
+
+            _contextPolicyOverrides[context] = new ContextPolicy(priority, blocksLowerPriority);
+            RequestContextRefresh();
+            return true;
         }
 
-        public Observable<Unit> GetButtonObservable(string actionName)
+        public bool ClearContextPolicy(InputContext context)
         {
-            return TryResolveActionKey(actionName, out InputActionKey key) && _buttonSubjects.TryGetValue(key, out Subject<Unit> subject)
-                ? subject
-                : EmptyObservables.Unit;
-        }
+            EnsureUsable();
+            if (context == null) return false;
+            if (!_contextPolicyOverrides.Remove(context)) return false;
 
-        public Observable<Unit> GetLongPressObservable(string actionName)
-        {
-            return TryResolveActionKey(actionName, out InputActionKey key) && _longPressSubjects.TryGetValue(key, out Subject<Unit> subject)
-                ? subject
-                : EmptyObservables.Unit;
-        }
-
-        public Observable<float> GetLongPressProgressObservable(string actionName)
-        {
-            return TryResolveActionKey(actionName, out InputActionKey key) && _longPressProgressSubjects.TryGetValue(key, out Subject<float> subject)
-                ? subject
-                : EmptyObservables.Float;
-        }
-
-        public Observable<float> GetScalarObservable(string actionName)
-        {
-            return TryResolveActionKey(actionName, out InputActionKey key) && _scalarSubjects.TryGetValue(key, out Subject<float> subject)
-                ? subject
-                : EmptyObservables.Float;
-        }
-
-        public Observable<bool> GetPressStateObservable(string actionName)
-        {
-            return TryResolveActionKey(actionName, out InputActionKey key) && _pressStateSubjects.TryGetValue(key, out BehaviorSubject<bool> subject)
-                ? subject
-                : EmptyObservables.Bool;
-        }
-
-        public Observable<Vector2> GetVector2Observable(string actionMapName, string actionName)
-        {
-            return TryResolveActionKey(actionMapName, actionName, out InputActionKey key) && _vector2Subjects.TryGetValue(key, out Subject<Vector2> subject)
-                ? subject
-                : EmptyObservables.Vector2;
-        }
-
-        public Observable<Unit> GetButtonObservable(string actionMapName, string actionName)
-        {
-            return TryResolveActionKey(actionMapName, actionName, out InputActionKey key) && _buttonSubjects.TryGetValue(key, out Subject<Unit> subject)
-                ? subject
-                : EmptyObservables.Unit;
-        }
-
-        public Observable<Unit> GetLongPressObservable(string actionMapName, string actionName)
-        {
-            return TryResolveActionKey(actionMapName, actionName, out InputActionKey key) && _longPressSubjects.TryGetValue(key, out Subject<Unit> subject)
-                ? subject
-                : EmptyObservables.Unit;
-        }
-
-        public Observable<float> GetLongPressProgressObservable(string actionMapName, string actionName)
-        {
-            return TryResolveActionKey(actionMapName, actionName, out InputActionKey key) && _longPressProgressSubjects.TryGetValue(key, out Subject<float> subject)
-                ? subject
-                : EmptyObservables.Float;
-        }
-
-        public Observable<float> GetScalarObservable(string actionMapName, string actionName)
-        {
-            return TryResolveActionKey(actionMapName, actionName, out InputActionKey key) && _scalarSubjects.TryGetValue(key, out Subject<float> subject)
-                ? subject
-                : EmptyObservables.Float;
-        }
-
-        public Observable<bool> GetPressStateObservable(string actionMapName, string actionName)
-        {
-            return TryResolveActionKey(actionMapName, actionName, out InputActionKey key) && _pressStateSubjects.TryGetValue(key, out BehaviorSubject<bool> subject)
-                ? subject
-                : EmptyObservables.Bool;
+            RequestContextRefresh();
+            return true;
         }
 
         public Observable<Vector2> GetVector2Observable(string contextName, string actionMapName, string actionName)
@@ -675,26 +696,11 @@ namespace CycloneGames.InputSystem.Runtime
             get { EnsureUsable(); return Mouse.current != null && Mouse.current.middleButton.isPressed; }
         }
 
-        public bool RebindAction(string actionMapName, string actionName, string oldBinding, string newBinding)
-        {
-            EnsureUsable();
-            if (!TryFindAction(actionMapName, actionName, out InputAction action)) return false;
-            return ApplyBindingOverride(action, oldBinding, newBinding);
-        }
-
         public bool RebindAction(string contextName, string actionMapName, string actionName, string oldBinding, string newBinding)
         {
             EnsureUsable();
             if (!_actionsByKey.TryGetValue(new InputActionKey(contextName, actionMapName, actionName), out InputAction action)) return false;
             return ApplyBindingOverride(action, oldBinding, newBinding);
-        }
-
-        public bool ResetActionBinding(string actionMapName, string actionName)
-        {
-            EnsureUsable();
-            if (!TryFindAction(actionMapName, actionName, out InputAction action)) return false;
-            action.RemoveAllBindingOverrides();
-            return true;
         }
 
         public bool ResetActionBinding(string contextName, string actionMapName, string actionName)
@@ -709,13 +715,6 @@ namespace CycloneGames.InputSystem.Runtime
         {
             EnsureUsable();
             _inputActionAsset.RemoveAllBindingOverrides();
-        }
-
-        public string[] GetActionBindings(string actionMapName, string actionName)
-        {
-            EnsureUsable();
-            if (!TryFindAction(actionMapName, actionName, out InputAction action)) return Array.Empty<string>();
-            return GetActionBindings(action);
         }
 
         public string[] GetActionBindings(string contextName, string actionMapName, string actionName)
@@ -1185,24 +1184,6 @@ namespace CycloneGames.InputSystem.Runtime
             return false;
         }
 
-        public Observable<Unit> GetChordObservable(string actionName1, string actionName2, float windowMs = 300f)
-        {
-            Observable<bool> first = GetPressStateObservable(actionName1);
-            Observable<bool> second = GetPressStateObservable(actionName2);
-            return ReferenceEquals(first, EmptyObservables.Bool) || ReferenceEquals(second, EmptyObservables.Bool)
-                ? EmptyObservables.Unit
-                : CreateChordStream(first, second, windowMs);
-        }
-
-        public Observable<Unit> GetChordObservable(string actionMapName, string actionName1, string actionName2, float windowMs = 300f)
-        {
-            Observable<bool> first = GetPressStateObservable(actionMapName, actionName1);
-            Observable<bool> second = GetPressStateObservable(actionMapName, actionName2);
-            return ReferenceEquals(first, EmptyObservables.Bool) || ReferenceEquals(second, EmptyObservables.Bool)
-                ? EmptyObservables.Unit
-                : CreateChordStream(first, second, windowMs);
-        }
-
         public Observable<Unit> GetChordObservable(int actionId1, int actionId2, float windowMs = 300f)
         {
             Observable<bool> first = GetPressStateObservable(actionId1);
@@ -1233,7 +1214,7 @@ namespace CycloneGames.InputSystem.Runtime
             }
 
             CleanupSafely(_cancellation.Cancel, "cancel runtime work");
-            CleanupSafely(_subscriptions.Dispose, "dispose context subscriptions");
+            CleanupSafely(DisposeAllContextSubscriptions, "dispose context subscriptions");
             CleanupSafely(_actionWiringSubscriptions.Dispose, "dispose action subscriptions");
             if (_inputActionAsset != null)
             {
@@ -1245,8 +1226,8 @@ namespace CycloneGames.InputSystem.Runtime
             CleanupSafely(_activeContextName.Dispose, "dispose active-context state");
             CleanupSafely(_activeDeviceKind.Dispose, "dispose active-device state");
             CleanupSafely(_deviceActivity.Dispose, "dispose device activity stream");
-            OnContextChanged = null;
-            OnDeviceStatusChanged = null;
+            _contextChangedHandlers = Array.Empty<Action<string>>();
+            _deviceStatusHandlers = Array.Empty<Action<InputPlayerDeviceStatus>>();
 
             if (User.valid)
             {
@@ -1489,15 +1470,6 @@ namespace CycloneGames.InputSystem.Runtime
         private void ActivateTopContextCore()
         {
             long activationVersion = unchecked(++_contextActivationVersion);
-            CompositeDisposable previousSubscriptions = _subscriptions;
-            var activationSubscriptions = new CompositeDisposable();
-            _subscriptions = activationSubscriptions;
-            CleanupSafely(previousSubscriptions.Dispose, "replace context subscriptions");
-            if (!IsContextActivationCurrent(activationVersion)) return;
-
-            InputActionAsset asset = _inputActionAsset;
-            asset.Disable();
-            if (!IsContextActivationCurrent(activationVersion)) return;
             if (_isInputBlocked)
             {
                 ResetHoldStates();
@@ -1507,6 +1479,9 @@ namespace CycloneGames.InputSystem.Runtime
             BuildActiveContextList();
             if (!IsContextActivationCurrent(activationVersion)) return;
 
+            if (!SyncEnabledMaps(activationVersion)) return;
+            if (!SyncContextSubscriptions(activationVersion)) return;
+
             if (_activeContexts.Count == 0)
             {
                 _activeContextName.Value = null;
@@ -1515,16 +1490,6 @@ namespace CycloneGames.InputSystem.Runtime
                 return;
             }
 
-            if (!_isInputBlocked && !EnableActiveActionMaps(activationVersion)) return;
-            int contextCount = _activeContexts.Count;
-            for (int i = 0; i < contextCount; i++)
-            {
-                if (!IsContextActivationCurrent(activationVersion) || i >= _activeContexts.Count) return;
-                InputContext context = _activeContexts[i];
-                if (!SubscribeContextCommands(context, activationSubscriptions, activationVersion)) return;
-            }
-
-            if (!IsContextActivationCurrent(activationVersion) || _activeContexts.Count == 0) return;
             string topContextName = _activeContexts[0].Name;
             _activeContextName.Value = topContextName;
             if (!IsContextActivationCurrent(activationVersion)) return;
@@ -1585,9 +1550,7 @@ namespace CycloneGames.InputSystem.Runtime
             _contextRefreshPending = false;
             unchecked { _contextActivationVersion++; }
 
-            CompositeDisposable subscriptions = _subscriptions;
-            _subscriptions = new CompositeDisposable();
-            CleanupSafely(subscriptions.Dispose, "dispose failed context subscriptions");
+            CleanupSafely(DisposeAllContextSubscriptions, "dispose failed context subscriptions");
 
             InputActionAsset asset = _inputActionAsset;
             if (asset != null) CleanupSafely(asset.Disable, "disable a failed context projection");
@@ -1619,92 +1582,260 @@ namespace CycloneGames.InputSystem.Runtime
                 return;
             }
 
+            // Policies are sorted next to their contexts, so the insertion sort compares integers only.
             _tempContextList.Clear();
-            foreach (InputContext context in _contextStack) _tempContextList.Add(context);
+            _contextPriorities.Clear();
+            _contextBlocks.Clear();
+            foreach (InputContext context in _contextStack)
+            {
+                _tempContextList.Add(context);
+                GetEffectivePolicy(context, out int priority, out bool blocks);
+                _contextPriorities.Add(priority);
+                _contextBlocks.Add(blocks);
+            }
+
             for (int i = 1; i < _tempContextList.Count; i++)
             {
                 InputContext candidate = _tempContextList[i];
-                int candidatePriority = GetContextPriority(candidate);
+                int candidatePriority = _contextPriorities[i];
+                bool candidateBlocks = _contextBlocks[i];
                 int insertionIndex = i;
-                while (insertionIndex > 0 && candidatePriority > GetContextPriority(_tempContextList[insertionIndex - 1]))
+                while (insertionIndex > 0 && candidatePriority > _contextPriorities[insertionIndex - 1])
                 {
                     _tempContextList[insertionIndex] = _tempContextList[insertionIndex - 1];
+                    _contextPriorities[insertionIndex] = _contextPriorities[insertionIndex - 1];
+                    _contextBlocks[insertionIndex] = _contextBlocks[insertionIndex - 1];
                     insertionIndex--;
                 }
 
                 _tempContextList[insertionIndex] = candidate;
+                _contextPriorities[insertionIndex] = candidatePriority;
+                _contextBlocks[insertionIndex] = candidateBlocks;
             }
 
             int count = _tempContextList.Count;
             for (int i = 0; i < count; i++)
             {
-                InputContext context = _tempContextList[i];
-                _activeContexts.Add(context);
-                if (DoesContextBlockLowerPriority(context)) break;
+                _activeContexts.Add(_tempContextList[i]);
+                if (_contextBlocks[i]) break;
             }
         }
 
-        private bool EnableActiveActionMaps(long activationVersion)
+        private void GetEffectivePolicy(InputContext context, out int priority, out bool blocksLowerPriority)
         {
-            int count = _activeContexts.Count;
-            for (int i = 0; i < count; i++)
+            if (_contextPolicyOverrides.Count != 0 &&
+                _contextPolicyOverrides.TryGetValue(context, out ContextPolicy policy))
             {
-                if (!IsContextActivationCurrent(activationVersion) || i >= _activeContexts.Count) return false;
-                InputContext context = _activeContexts[i];
-                if (TryResolveContextKey(context, out InputActionKey contextKey) &&
-                    _contextMaps.TryGetValue(contextKey, out InputActionMap map))
+                priority = policy.Priority;
+                blocksLowerPriority = policy.BlocksLowerPriority;
+                return;
+            }
+
+            ResolvedContext resolved = ResolveContext(context);
+            priority = resolved.Priority;
+            blocksLowerPriority = resolved.BlocksLowerPriority;
+        }
+
+        private ResolvedContext ResolveContext(InputContext context)
+        {
+            if (_resolvedContexts.TryGetValue(context, out ResolvedContext resolved))
+            {
+                _projection.PolicyCacheHits++;
+                return resolved;
+            }
+
+            _projection.PolicyCacheMisses++;
+            int priority;
+            bool blocksLowerPriority;
+            if (context.HasExplicitPolicy)
+            {
+                priority = context.Priority;
+                blocksLowerPriority = context.BlocksLowerPriority;
+            }
+            else if (TryResolveContextDefinition(context, out RuntimeContextDefinitionConfig definition))
+            {
+                priority = definition.Priority;
+                blocksLowerPriority = definition.BlocksLowerPriority;
+            }
+            else
+            {
+                priority = context.Priority;
+                blocksLowerPriority = context.BlocksLowerPriority;
+            }
+
+            InputActionMap map = null;
+            if (TryResolveContextKey(context, out InputActionKey contextKey))
+            {
+                _contextMaps.TryGetValue(contextKey, out map);
+            }
+
+            resolved = new ResolvedContext(priority, blocksLowerPriority, map);
+            _resolvedContexts.Add(context, resolved);
+            return resolved;
+        }
+
+        internal ProjectionDiagnostics GetProjectionDiagnostics()
+        {
+            EnsureMainThread();
+            return _projection;
+        }
+
+        /// <summary>Enables and disables only the maps whose state differs from the active contexts.</summary>
+        private bool SyncEnabledMaps(long activationVersion)
+        {
+            _projection.Passes++;
+            _desiredMaps.Clear();
+
+            if (!_isInputBlocked)
+            {
+                int activeCount = _activeContexts.Count;
+                for (int i = 0; i < activeCount; i++)
                 {
-                    map.Enable();
-                    if (!IsContextActivationCurrent(activationVersion)) return false;
+                    InputActionMap map = ResolveContext(_activeContexts[i]).Map;
+                    if (map != null && !ContainsMap(_desiredMaps, map)) _desiredMaps.Add(map);
                 }
             }
 
+            _projection.DesiredMaps += _desiredMaps.Count;
+
+            // map.enabled is the source of truth, so a fail-closed asset disable cannot leave stale state.
+            foreach (InputActionMap map in _contextMaps.Values)
+            {
+                bool desired = ContainsMap(_desiredMaps, map);
+                if (map.enabled == desired)
+                {
+                    _projection.MapReuses++;
+                    continue;
+                }
+
+                if (desired)
+                {
+                    map.Enable();
+                    _projection.MapEnables++;
+                }
+                else
+                {
+                    map.Disable();
+                    _projection.MapDisables++;
+                }
+
+                if (!IsContextActivationCurrent(activationVersion)) return false;
+            }
+
             return true;
+        }
+
+        /// <summary>
+        /// Subscribes newly active contexts and releases the ones that left. An unchanged active set
+        /// performs no subscription work.
+        /// </summary>
+        private bool SyncContextSubscriptions(long activationVersion)
+        {
+            _staleContexts.Clear();
+            foreach (KeyValuePair<InputContext, ContextProjectionState> entry in _projectionStates)
+            {
+                if (!ContainsContext(_activeContexts, entry.Key)) _staleContexts.Add(entry.Key);
+            }
+
+            for (int i = 0; i < _staleContexts.Count; i++)
+            {
+                InputContext stale = _staleContexts[i];
+                if (_projectionStates.TryGetValue(stale, out ContextProjectionState state)) DisposeState(state);
+                _projectionStates.Remove(stale);
+            }
+
+            int activeCount = _activeContexts.Count;
+            for (int i = 0; i < activeCount; i++)
+            {
+                InputContext context = _activeContexts[i];
+                if (!_projectionStates.TryGetValue(context, out ContextProjectionState state))
+                {
+                    state = new ContextProjectionState();
+                    _projectionStates.Add(context, state);
+                }
+
+                if (state.BindingVersion == context.BindingVersion)
+                {
+                    _projection.SubscriptionReuses++;
+                    continue;
+                }
+
+                DisposeState(state);
+                if (!SubscribeContextCommands(context, state.Subscriptions, activationVersion) ||
+                    !IsContextActivationCurrent(activationVersion))
+                {
+                    DisposeState(state);
+                    _projectionStates.Remove(context);
+                    return false;
+                }
+
+                state.BindingVersion = context.BindingVersion;
+                _projection.SubscriptionRebuilds++;
+            }
+
+            return true;
+        }
+
+        private static bool ContainsContext(List<InputContext> contexts, InputContext candidate)
+        {
+            for (int i = 0; i < contexts.Count; i++)
+            {
+                if (ReferenceEquals(contexts[i], candidate)) return true;
+            }
+
+            return false;
+        }
+
+        private static void DisposeState(ContextProjectionState state)
+        {
+            for (int i = 0; i < state.Subscriptions.Count; i++) state.Subscriptions[i].Dispose();
+            state.Subscriptions.Clear();
+            state.BindingVersion = -1;
+        }
+
+        private void DisposeAllContextSubscriptions()
+        {
+            foreach (ContextProjectionState state in _projectionStates.Values) DisposeState(state);
+            _projectionStates.Clear();
+        }
+
+        private static bool ContainsMap(List<InputActionMap> maps, InputActionMap candidate)
+        {
+            for (int i = 0; i < maps.Count; i++)
+            {
+                if (ReferenceEquals(maps[i], candidate)) return true;
+            }
+
+            return false;
         }
 
         private bool SubscribeContextCommands(
             InputContext context,
-            CompositeDisposable subscriptions,
+            List<IDisposable> subscriptions,
             long activationVersion)
         {
             foreach (KeyValuePair<Observable<Unit>, IActionCommand> pair in context.ActionBindings)
             {
-                new SafeSubscription(pair.Key.Subscribe(_ => pair.Value.Execute())).AddTo(subscriptions);
+                subscriptions.Add(new SafeSubscription(pair.Key.Subscribe(_ => pair.Value.Execute())));
                 if (!IsContextActivationCurrent(activationVersion)) return false;
             }
             foreach (KeyValuePair<Observable<Vector2>, IMoveCommand> pair in context.MoveBindings)
             {
-                new SafeSubscription(pair.Key.Subscribe(pair.Value.Execute)).AddTo(subscriptions);
+                subscriptions.Add(new SafeSubscription(pair.Key.Subscribe(pair.Value.Execute)));
                 if (!IsContextActivationCurrent(activationVersion)) return false;
             }
             foreach (KeyValuePair<Observable<float>, IScalarCommand> pair in context.ScalarBindings)
             {
-                new SafeSubscription(pair.Key.Subscribe(pair.Value.Execute)).AddTo(subscriptions);
+                subscriptions.Add(new SafeSubscription(pair.Key.Subscribe(pair.Value.Execute)));
                 if (!IsContextActivationCurrent(activationVersion)) return false;
             }
             foreach (KeyValuePair<Observable<bool>, IBoolCommand> pair in context.BoolBindings)
             {
-                new SafeSubscription(pair.Key.Subscribe(pair.Value.Execute)).AddTo(subscriptions);
+                subscriptions.Add(new SafeSubscription(pair.Key.Subscribe(pair.Value.Execute)));
                 if (!IsContextActivationCurrent(activationVersion)) return false;
             }
 
             return true;
-        }
-
-        private int GetContextPriority(InputContext context)
-        {
-            if (context.HasExplicitPolicy) return context.Priority;
-            return TryResolveContextDefinition(context, out RuntimeContextDefinitionConfig definition)
-                ? definition.Priority
-                : context.Priority;
-        }
-
-        private bool DoesContextBlockLowerPriority(InputContext context)
-        {
-            if (context.HasExplicitPolicy) return context.BlocksLowerPriority;
-            return TryResolveContextDefinition(context, out RuntimeContextDefinitionConfig definition)
-                ? definition.BlocksLowerPriority
-                : context.BlocksLowerPriority;
         }
 
         private bool TryResolveContextDefinition(InputContext context, out RuntimeContextDefinitionConfig definition)
@@ -1749,39 +1880,6 @@ namespace CycloneGames.InputSystem.Runtime
             return false;
         }
 
-        private bool TryResolveActionKey(string actionName, out InputActionKey key)
-        {
-            EnsureUsable();
-            int activeCount = _activeContexts.Count;
-            for (int i = 0; i < activeCount; i++)
-            {
-                if (TryResolveContextKey(_activeContexts[i], out InputActionKey contextKey))
-                {
-                    key = new InputActionKey(contextKey.ContextName, contextKey.MapName, actionName);
-                    if (_actionsByKey.ContainsKey(key)) return true;
-                }
-            }
-
-            return _actionNameToKey.TryGetValue(actionName, out key);
-        }
-
-        private bool TryResolveActionKey(string actionMapName, string actionName, out InputActionKey key)
-        {
-            EnsureUsable();
-            int activeCount = _activeContexts.Count;
-            for (int i = 0; i < activeCount; i++)
-            {
-                if (TryResolveContextKey(_activeContexts[i], out InputActionKey contextKey) &&
-                    string.Equals(contextKey.MapName, actionMapName, StringComparison.Ordinal))
-                {
-                    key = new InputActionKey(contextKey.ContextName, actionMapName, actionName);
-                    if (_actionsByKey.ContainsKey(key)) return true;
-                }
-            }
-
-            return _legacyActionKeys.TryGetValue(new InputActionKey(actionMapName, actionName), out key);
-        }
-
         private bool TryGetActionKey(int actionId, out InputActionKey key)
         {
             EnsureUsable();
@@ -1819,37 +1917,6 @@ namespace CycloneGames.InputSystem.Runtime
             _actionsByKey.Add(key, action);
             _actionLookup.Add(actionId, new ActionRegistration(key, action));
             _actionIdToName.Add(actionId, identity);
-            RegisterLegacyLookups(key);
-        }
-
-        private void RegisterLegacyLookups(InputActionKey key)
-        {
-            if (!_ambiguousActionNames.Contains(key.ActionName))
-            {
-                if (_actionNameToKey.TryGetValue(key.ActionName, out InputActionKey existing) && existing != key)
-                {
-                    _actionNameToKey.Remove(key.ActionName);
-                    _ambiguousActionNames.Add(key.ActionName);
-                }
-                else
-                {
-                    _actionNameToKey[key.ActionName] = key;
-                }
-            }
-
-            InputActionKey legacyKey = new InputActionKey(key.MapName, key.ActionName);
-            if (!_ambiguousLegacyActionKeys.Contains(legacyKey))
-            {
-                if (_legacyActionKeys.TryGetValue(legacyKey, out InputActionKey existing) && existing != key)
-                {
-                    _legacyActionKeys.Remove(legacyKey);
-                    _ambiguousLegacyActionKeys.Add(legacyKey);
-                }
-                else
-                {
-                    _legacyActionKeys[legacyKey] = key;
-                }
-            }
         }
 
         private void RegisterContextMapLookup(InputActionKey contextKey)
@@ -1864,20 +1931,6 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 _uniqueContextByMap[contextKey.MapName] = contextKey;
             }
-        }
-
-        private bool TryFindAction(string actionMapName, string actionName, out InputAction action)
-        {
-            if (string.IsNullOrEmpty(actionMapName) || string.IsNullOrEmpty(actionName))
-            {
-                action = null;
-                return false;
-            }
-
-            if (TryResolveActionKey(actionMapName, actionName, out InputActionKey key))
-                return _actionsByKey.TryGetValue(key, out action);
-            action = null;
-            return false;
         }
 
         private bool ApplyBindingOverride(InputAction action, string oldBinding, string newBinding)
@@ -1940,14 +1993,12 @@ namespace CycloneGames.InputSystem.Runtime
 
         private void NotifyContextChanged(string contextName, long activationVersion)
         {
-            Action<string> handlers = OnContextChanged;
-            if (handlers == null) return;
-            Delegate[] invocationList = handlers.GetInvocationList();
-            for (int i = 0; i < invocationList.Length; i++)
+            Action<string>[] handlers = _contextChangedHandlers;
+            for (int i = 0; i < handlers.Length; i++)
             {
                 try
                 {
-                    ((Action<string>)invocationList[i]).Invoke(contextName);
+                    handlers[i](contextName);
                 }
                 catch (Exception exception) when (
                     exception is not OutOfMemoryException &&
@@ -1965,14 +2016,12 @@ namespace CycloneGames.InputSystem.Runtime
 
         private void NotifyDeviceStatusChanged(InputPlayerDeviceStatus status)
         {
-            Action<InputPlayerDeviceStatus> handlers = OnDeviceStatusChanged;
-            if (handlers == null) return;
-            Delegate[] invocationList = handlers.GetInvocationList();
-            for (int i = 0; i < invocationList.Length; i++)
+            Action<InputPlayerDeviceStatus>[] handlers = _deviceStatusHandlers;
+            for (int i = 0; i < handlers.Length; i++)
             {
                 try
                 {
-                    ((Action<InputPlayerDeviceStatus>)invocationList[i]).Invoke(status);
+                    handlers[i](status);
                 }
                 catch (Exception exception) when (
                     exception is not OutOfMemoryException &&
@@ -2250,7 +2299,12 @@ namespace CycloneGames.InputSystem.Runtime
             if (removed && !HasCapturedContext(target.Context))
             {
                 _captureSet.Remove(target.Context);
-                if (!_contextSet.Contains(target.Context)) target.Context.RemoveOwner(this);
+                if (!_contextSet.Contains(target.Context))
+                {
+                    target.Context.RemoveOwner(this);
+                    _contextPolicyOverrides.Remove(target.Context);
+                    _resolvedContexts.Remove(target.Context);
+                }
             }
 
             RequestContextRefresh();
@@ -2278,6 +2332,8 @@ namespace CycloneGames.InputSystem.Runtime
             _captureSet.Clear();
             while (_contextStack.Count > 0) _contextStack.Pop().RemoveOwner(this);
             _contextSet.Clear();
+            _contextPolicyOverrides.Clear();
+            _resolvedContexts.Clear();
             _activeContexts.Clear();
         }
 
@@ -2314,7 +2370,7 @@ namespace CycloneGames.InputSystem.Runtime
 
             CleanupSafely(_deviceActivity.Dispose, "dispose construction device activity stream");
             CleanupSafely(_cancellation.Cancel, "cancel construction work");
-            CleanupSafely(_subscriptions.Dispose, "dispose construction context subscriptions");
+            CleanupSafely(DisposeAllContextSubscriptions, "dispose construction context subscriptions");
             CleanupSafely(_actionWiringSubscriptions.Dispose, "dispose construction action subscriptions");
             DisposeSubjects();
             InputActionAsset asset = _inputActionAsset;
@@ -2326,6 +2382,30 @@ namespace CycloneGames.InputSystem.Runtime
             }
             CleanupSafely(_cancellation.Dispose, "dispose the construction cancellation source");
             _isDisposed = true;
+        }
+
+        private static T[] Append<T>(T[] handlers, T handler) where T : Delegate
+        {
+            if (handler == null) return handlers;
+            T[] updated = new T[handlers.Length + 1];
+            Array.Copy(handlers, updated, handlers.Length);
+            updated[handlers.Length] = handler;
+            return updated;
+        }
+
+        private static T[] Remove<T>(T[] handlers, T handler) where T : Delegate
+        {
+            for (int i = handlers.Length - 1; i >= 0; i--)
+            {
+                if (!handlers[i].Equals(handler)) continue;
+                if (handlers.Length == 1) return Array.Empty<T>();
+                T[] updated = new T[handlers.Length - 1];
+                Array.Copy(handlers, 0, updated, 0, i);
+                Array.Copy(handlers, i + 1, updated, i, handlers.Length - i - 1);
+                return updated;
+            }
+
+            return handlers;
         }
 
         private static void CleanupSafely(Action cleanup, string phase)

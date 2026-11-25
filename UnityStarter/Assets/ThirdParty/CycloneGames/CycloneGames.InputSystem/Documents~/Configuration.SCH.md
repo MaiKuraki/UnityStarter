@@ -84,8 +84,8 @@ Context 按产品状态组织 action：`Gameplay` 用于角色控制，`Vehicle`
 | --- | --- | --- |
 | `name` | 是 | Runtime lookup 与 generated constants 使用的 context identity。 |
 | `actionMap` | 是 | 为该 context 构建的 Unity Input System action-map 名称。 |
-| `priority` | 是 | 多个 active context 竞争时，较大值优先。 |
-| `blocksLowerPriority` | 是 | Active 时阻止较低优先级 context dispatch。 |
+| `priority` | 否 | 数值较大的先被考虑，默认 `0`，数值相同时保持入栈顺序。 |
+| `blocksLowerPriority` | 否 | 为 `true` 时停止激活优先级更低的 context，默认 `false`。 |
 | `bindings` | 是 | 该 context 可用的 action definition。 |
 
 Runtime `InputContext` 引用已配置的 context/action-map identity，并持有 command subscription。配置定义可用 action；runtime code 决定哪些 context active。

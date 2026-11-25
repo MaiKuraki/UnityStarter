@@ -25,6 +25,8 @@ namespace CycloneGames.InputSystem.Runtime
         public bool BlocksLowerPriority { get; }
         internal bool HasExplicitPolicy { get; }
         internal bool IsDisposed => _isDisposed;
+        /// <summary>Increments whenever the binding set changes.</summary>
+        internal int BindingVersion { get; private set; }
 
         internal readonly Dictionary<Observable<Unit>, IActionCommand> ActionBindings = new();
         internal readonly Dictionary<Observable<Vector2>, IMoveCommand> MoveBindings = new();
@@ -67,6 +69,7 @@ namespace CycloneGames.InputSystem.Runtime
             EnsureMutable();
             if (source == null) throw new ArgumentNullException(nameof(source));
             ActionBindings[source] = command ?? NullCommand.Instance;
+            BindingVersion++;
             return this;
         }
 
@@ -75,6 +78,7 @@ namespace CycloneGames.InputSystem.Runtime
             EnsureMutable();
             if (source == null) throw new ArgumentNullException(nameof(source));
             MoveBindings[source] = command ?? NullCommand.Instance;
+            BindingVersion++;
             return this;
         }
 
@@ -83,6 +87,7 @@ namespace CycloneGames.InputSystem.Runtime
             EnsureMutable();
             if (source == null) throw new ArgumentNullException(nameof(source));
             ScalarBindings[source] = command ?? NullCommand.Instance;
+            BindingVersion++;
             return this;
         }
 
@@ -91,31 +96,40 @@ namespace CycloneGames.InputSystem.Runtime
             EnsureMutable();
             if (source == null) throw new ArgumentNullException(nameof(source));
             BoolBindings[source] = command ?? NullCommand.Instance;
+            BindingVersion++;
             return this;
         }
 
         public bool RemoveBinding(Observable<Unit> source)
         {
             EnsureMutable();
-            return ActionBindings.Remove(source);
+            if (!ActionBindings.Remove(source)) return false;
+            BindingVersion++;
+            return true;
         }
 
         public bool RemoveBinding(Observable<Vector2> source)
         {
             EnsureMutable();
-            return MoveBindings.Remove(source);
+            if (!MoveBindings.Remove(source)) return false;
+            BindingVersion++;
+            return true;
         }
 
         public bool RemoveBinding(Observable<float> source)
         {
             EnsureMutable();
-            return ScalarBindings.Remove(source);
+            if (!ScalarBindings.Remove(source)) return false;
+            BindingVersion++;
+            return true;
         }
 
         public bool RemoveBinding(Observable<bool> source)
         {
             EnsureMutable();
-            return BoolBindings.Remove(source);
+            if (!BoolBindings.Remove(source)) return false;
+            BindingVersion++;
+            return true;
         }
 
         internal void AddOwner(IInputPlayer player)

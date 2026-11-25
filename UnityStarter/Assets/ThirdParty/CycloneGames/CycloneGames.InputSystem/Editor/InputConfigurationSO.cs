@@ -515,11 +515,8 @@ namespace CycloneGames.InputSystem.Editor
         }
     }
 
-    public class InputConfigurationSO : ScriptableObject, ISerializationCallbackReceiver
+    public class InputConfigurationSO : ScriptableObject
     {
-        private const int CurrentEditorDataVersion = 1;
-
-        [SerializeField, HideInInspector] private int _editorDataVersion;
         [SerializeField, HideInInspector] private int _schemaVersion;
         [SerializeField, HideInInspector] private string _schemaFingerprint;
         [SerializeField, HideInInspector] private bool _schemaFingerprintWasNull;
@@ -535,7 +532,6 @@ namespace CycloneGames.InputSystem.Editor
                 throw new ArgumentNullException(nameof(data));
             }
 
-            _editorDataVersion = CurrentEditorDataVersion;
             _schemaVersion = data.SchemaVersion;
             _schemaFingerprint = data.SchemaFingerprint;
             _schemaFingerprintWasNull = data.SchemaFingerprint == null;
@@ -570,7 +566,6 @@ namespace CycloneGames.InputSystem.Editor
 
         public InputConfiguration ToData()
         {
-            EnsureSerializedDataMigrated();
             return new InputConfiguration
             {
                 SchemaVersion = _schemaVersion,
@@ -597,30 +592,6 @@ namespace CycloneGames.InputSystem.Editor
             return result;
         }
 
-        public void OnBeforeSerialize()
-        {
-        }
-
-        public void OnAfterDeserialize()
-        {
-            EnsureSerializedDataMigrated();
-        }
-
-        private void EnsureSerializedDataMigrated()
-        {
-            if (_editorDataVersion >= CurrentEditorDataVersion) return;
-            _hasJoinAction = _joinAction != null;
-            if (_playerSlots != null)
-            {
-                for (int index = 0; index < _playerSlots.Count; index++)
-                {
-                    PlayerSlotDrawerData player = _playerSlots[index];
-                    if (player != null) player.HasJoinAction = player.JoinAction != null;
-                }
-            }
-
-            _editorDataVersion = CurrentEditorDataVersion;
-        }
     }
 
     [CustomPropertyDrawer(typeof(ActionBindingDrawerData))]
