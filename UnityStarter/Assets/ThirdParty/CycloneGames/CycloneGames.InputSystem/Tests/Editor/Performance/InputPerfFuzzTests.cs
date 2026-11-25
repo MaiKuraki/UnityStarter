@@ -273,7 +273,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
                 string newPath = paths[random.Next(paths.Length)];
                 try
                 {
-                    if (player.RebindAction("Map0", actionName, oldPath, newPath)) accepted++;
+                    if (player.RebindAction("Ctx0", "Map0", actionName, oldPath, newPath)) accepted++;
                     else rejected++;
                 }
                 catch (Exception)

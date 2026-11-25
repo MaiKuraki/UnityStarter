@@ -13,7 +13,6 @@ namespace CycloneGames.InputSystem.Tests.Editor
 {
     public sealed class InputEditorBridgeEditorTests
     {
-        private static string LegacyAssetPath => FindFixtureAsset("LegacyInputConfiguration.asset");
 
         private static string FindFixtureAsset(string fileName)
         {
@@ -257,43 +256,16 @@ namespace CycloneGames.InputSystem.Tests.Editor
         }
 
         [Test]
-        public void LegacySerializedAsset_MigratesImplicitJoinActions()
-        {
-            AssetDatabase.ImportAsset(
-                LegacyAssetPath,
-                ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
-            InputConfigurationSO asset =
-                AssetDatabase.LoadAssetAtPath<InputConfigurationSO>(LegacyAssetPath);
-
-            Assert.That(asset, Is.Not.Null);
-            InputConfiguration configuration = asset.ToData();
-            Assert.That(configuration.JoinAction, Is.Not.Null);
-            Assert.That(configuration.JoinAction.ActionName, Is.EqualTo("JoinGame"));
-            Assert.That(configuration.PlayerSlots, Has.Count.EqualTo(1));
-            Assert.That(configuration.PlayerSlots[0].JoinAction, Is.Not.Null);
-            Assert.That(configuration.PlayerSlots[0].JoinAction.ActionName, Is.EqualTo("JoinGame"));
-            Assert.That(configuration.PlayerSlots[0].Contexts[0].Bindings[0].ActionName, Is.EqualTo("Confirm"));
-        }
-
-        [Test]
-        public void SchemaZeroInlineComposite_LoadsIntoMigratedWorkingCopyAndReloads()
+        public void CompositeBindings_LoadIntoWorkingCopyAndReload()
         {
             InputConfiguration source = CreateExtendedConfiguration();
-            source.SchemaVersion = 0;
-            ActionBindingConfig action = source.PlayerSlots[0].Contexts[0].Bindings[0];
-            action.DeviceBindings = new List<string>
-            {
-                "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)"
-            };
-            action.CompositeBindings.Clear();
-
             EditorWindow window = CreateEditorWindow();
             string directory = Path.Combine(
                 Path.GetTempPath(),
                 "CycloneGames.InputSystem.EditorTests",
                 Guid.NewGuid().ToString("N"));
-            string firstPath = Path.Combine(directory, "schema0.yaml");
-            string migratedPath = Path.Combine(directory, "schema1.yaml");
+            string firstPath = Path.Combine(directory, "first.yaml");
+            string secondPath = Path.Combine(directory, "second.yaml");
             try
             {
                 Directory.CreateDirectory(directory);
@@ -301,19 +273,18 @@ namespace CycloneGames.InputSystem.Tests.Editor
                     firstPath,
                     InvokeStatic<byte[]>(window.GetType(), "SerializeConfiguration", source));
                 Assert.That(
-                    InvokeInstance<bool>(window, "LoadConfigFromPath", firstPath, "Loaded schema zero."),
+                    InvokeInstance<bool>(window, "LoadConfigFromPath", firstPath, "Loaded."),
                     Is.True);
 
-                InputConfiguration migrated = ReadWorkingConfiguration(window);
-                Assert.That(migrated.SchemaVersion, Is.EqualTo(InputConfiguration.CurrentSchemaVersion));
-                Assert.That(migrated.PlayerSlots[0].Contexts[0].Bindings[0].DeviceBindings, Is.Empty);
-                Assert.That(migrated.PlayerSlots[0].Contexts[0].Bindings[0].CompositeBindings, Has.Count.EqualTo(1));
+                InputConfiguration loaded = ReadWorkingConfiguration(window);
+                Assert.That(loaded.SchemaVersion, Is.EqualTo(InputConfiguration.CurrentSchemaVersion));
+                Assert.That(loaded.PlayerSlots[0].Contexts[0].Bindings[0].CompositeBindings, Has.Count.EqualTo(1));
 
                 File.WriteAllBytes(
-                    migratedPath,
-                    InvokeStatic<byte[]>(window.GetType(), "SerializeConfiguration", migrated));
+                    secondPath,
+                    InvokeStatic<byte[]>(window.GetType(), "SerializeConfiguration", loaded));
                 Assert.That(
-                    InvokeInstance<bool>(window, "LoadConfigFromPath", migratedPath, "Reloaded schema one."),
+                    InvokeInstance<bool>(window, "LoadConfigFromPath", secondPath, "Reloaded."),
                     Is.True);
                 InputConfiguration reloaded = ReadWorkingConfiguration(window);
                 Assert.That(reloaded.SchemaVersion, Is.EqualTo(InputConfiguration.CurrentSchemaVersion));

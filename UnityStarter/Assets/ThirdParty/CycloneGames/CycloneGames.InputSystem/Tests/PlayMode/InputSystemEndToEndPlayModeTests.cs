@@ -172,7 +172,7 @@ namespace CycloneGames.InputSystem.Tests.PlayMode
                 "Join must pair the injected gamepad; otherwise the test would measure an unbound graph.");
 
             int fired = 0;
-            Track(player.GetButtonObservable("Confirm").Subscribe(_ => fired++));
+            Track(player.GetButtonObservable("Gameplay", "Map0", "Confirm").Subscribe(_ => fired++));
 
             yield return null;
             UIS.QueueStateEvent(pad, new GamepadState { buttons = SouthButton });
@@ -200,7 +200,7 @@ namespace CycloneGames.InputSystem.Tests.PlayMode
 
             Vector2 last = new Vector2(float.NaN, float.NaN);
             int samples = 0;
-            Track(player.GetVector2Observable("Move").Subscribe(value =>
+            Track(player.GetVector2Observable("Gameplay", "Map0", "Move").Subscribe(value =>
             {
                 last = value;
                 samples++;
@@ -246,8 +246,8 @@ namespace CycloneGames.InputSystem.Tests.PlayMode
 
             int firedA = 0;
             int firedB = 0;
-            Track(playerA.GetButtonObservable("Confirm").Subscribe(_ => firedA++));
-            Track(playerB.GetButtonObservable("Confirm").Subscribe(_ => firedB++));
+            Track(playerA.GetButtonObservable("Gameplay", "Map0", "Confirm").Subscribe(_ => firedA++));
+            Track(playerB.GetButtonObservable("Gameplay", "Map1", "Confirm").Subscribe(_ => firedB++));
 
             yield return null;
             Gamepad ownerOfA = OwnsDevice(playerA, padA) ? padA : padB;
@@ -342,7 +342,7 @@ namespace CycloneGames.InputSystem.Tests.PlayMode
             InputPlayer player = Join(manager, 0, "Map0");
 
             int fired = 0;
-            Track(player.GetButtonObservable("Confirm").Subscribe(_ => fired++));
+            Track(player.GetButtonObservable("Gameplay", "Map0", "Confirm").Subscribe(_ => fired++));
 
             yield return null;
             UIS.QueueStateEvent(first, new GamepadState { buttons = SouthButton });
@@ -369,7 +369,7 @@ namespace CycloneGames.InputSystem.Tests.PlayMode
                 "Reassignment was expected to build a fresh player instance.");
 
             int firedAfter = 0;
-            Track(reassigned.GetButtonObservable("Confirm").Subscribe(_ => firedAfter++));
+            Track(reassigned.GetButtonObservable("Gameplay", "Map0", "Confirm").Subscribe(_ => firedAfter++));
             yield return null;
 
             UIS.QueueStateEvent(second, new GamepadState { buttons = SouthButton });

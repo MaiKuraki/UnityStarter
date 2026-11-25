@@ -21,21 +21,15 @@ namespace CycloneGames.InputSystem.Runtime
         /// </summary>
         Observable<InputDeviceKind> GetActiveDeviceKindObservableForContext(InputContext context);
 
-        Observable<Vector2> GetVector2Observable(string actionName);
-        Observable<Vector2> GetVector2Observable(string actionMapName, string actionName);
         Observable<Vector2> GetVector2Observable(string contextName, string actionMapName, string actionName);
         Observable<Vector2> GetVector2Observable(int actionId);
 
-        Observable<Unit> GetButtonObservable(string actionName);
-        Observable<Unit> GetButtonObservable(string actionMapName, string actionName);
         Observable<Unit> GetButtonObservable(string contextName, string actionMapName, string actionName);
         Observable<Unit> GetButtonObservable(int actionId);
 
         /// <summary>
         /// Fires when button is held for configured long-press duration. Returns empty if not configured.
         /// </summary>
-        Observable<Unit> GetLongPressObservable(string actionName);
-        Observable<Unit> GetLongPressObservable(string actionMapName, string actionName);
         Observable<Unit> GetLongPressObservable(string contextName, string actionMapName, string actionName);
         Observable<Unit> GetLongPressObservable(int actionId);
 
@@ -43,21 +37,15 @@ namespace CycloneGames.InputSystem.Runtime
         /// Emits continuous progress (0~1) while holding button. Emits -1 when released before completion.
         /// Returns an empty observable when long press is not configured.
         /// </summary>
-        Observable<float> GetLongPressProgressObservable(string actionName);
-        Observable<float> GetLongPressProgressObservable(string actionMapName, string actionName);
         Observable<float> GetLongPressProgressObservable(string contextName, string actionMapName, string actionName);
         Observable<float> GetLongPressProgressObservable(int actionId);
 
         /// <summary>
         /// Emits true on press start, false on release.
         /// </summary>
-        Observable<bool> GetPressStateObservable(string actionName);
-        Observable<bool> GetPressStateObservable(string actionMapName, string actionName);
         Observable<bool> GetPressStateObservable(string contextName, string actionMapName, string actionName);
         Observable<bool> GetPressStateObservable(int actionId);
 
-        Observable<float> GetScalarObservable(string actionName);
-        Observable<float> GetScalarObservable(string actionMapName, string actionName);
         Observable<float> GetScalarObservable(string contextName, string actionMapName, string actionName);
         Observable<float> GetScalarObservable(int actionId);
 
@@ -74,6 +62,18 @@ namespace CycloneGames.InputSystem.Runtime
         bool RemoveContext(InputContext context);
         void PopContext();
         void RefreshActiveContext();
+
+        /// <summary>
+        /// Sets the priority and blocking policy this player applies to an owned context, without
+        /// changing the context. A changed policy triggers one context refresh.
+        /// </summary>
+        /// <returns>false when the context is null or not owned by this player.</returns>
+        bool SetContextPolicy(InputContext context, int priority, bool blocksLowerPriority);
+
+        /// <summary>
+        /// Removes the policy set by <see cref="SetContextPolicy"/>. Returns false when no override exists.
+        /// </summary>
+        bool ClearContextPolicy(InputContext context);
 
         // Binding Management
         bool RemoveBindingFromContext(InputContext context, Observable<Unit> source);
@@ -116,13 +116,11 @@ namespace CycloneGames.InputSystem.Runtime
         /// Overrides a specific device binding path for an action. Only the matching binding is replaced.
         /// Returns true if the old binding was found and overridden.
         /// </summary>
-        bool RebindAction(string actionMapName, string actionName, string oldBinding, string newBinding);
 
         /// <summary>
         /// Resets a specific action's bindings to their original configuration (removes all overrides).
         /// Returns true if the action was found.
         /// </summary>
-        bool ResetActionBinding(string actionMapName, string actionName);
 
         /// <summary>
         /// Resets all actions' bindings to their original configuration.
@@ -133,7 +131,6 @@ namespace CycloneGames.InputSystem.Runtime
         /// Returns the current effective binding paths for an action (including any overrides).
         /// Returns an empty array if the action is not found.
         /// </summary>
-        string[] GetActionBindings(string actionMapName, string actionName);
 
         /// <summary>
         /// Context-qualified overloads for configurations that reuse an action map and action name.
@@ -163,8 +160,6 @@ namespace CycloneGames.InputSystem.Runtime
         /// Resets when either button is released. Returns an empty observable if either action is not
         /// configured as a Button.
         /// </summary>
-        Observable<Unit> GetChordObservable(string actionName1, string actionName2, float windowMs = 300f);
-        Observable<Unit> GetChordObservable(string actionMapName, string actionName1, string actionName2, float windowMs = 300f);
         Observable<Unit> GetChordObservable(int actionId1, int actionId2, float windowMs = 300f);
     }
 }

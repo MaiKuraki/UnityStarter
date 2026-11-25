@@ -254,10 +254,10 @@ namespace CycloneGames.InputSystem.Tests.Editor
         }
 
         [Test]
-        public void LegacyConfiguration_KeepsImmediateSwitching()
+        public void Configuration_WithoutDebounce_KeepsImmediateSwitching()
         {
             string yaml = SingleSlotYaml(debounceMs: 0);
-            var devices = Attach("KG", "Legacy");
+            var devices = Attach("KG", "NoDebounce");
             var manager = new InputManager();
             try
             {
@@ -328,12 +328,12 @@ namespace CycloneGames.InputSystem.Tests.Editor
             Assert.That(runtime.MaxDevicesPerLayout, Is.EqualTo(8), "Hostile per-layout values must be clamped.");
             Assert.That(runtime.DeviceSwitchDebounceMs, Is.EqualTo(5000), "Hostile debounce values must be clamped.");
 
-            string legacy = SingleSlotYaml(debounceMs: 0, maxPerLayout: 0);
-            var legacyValidation = InputConfigurationValidator.ValidateAndPrepare(
-                VYaml.Serialization.YamlSerializer.Deserialize<InputConfiguration>(Encoding.UTF8.GetBytes(legacy)), null);
-            Assert.That(legacyValidation.IsValid, Is.True);
-            Assert.That(legacyValidation.RuntimeConfiguration.PlayerSlots[0].MaxDevicesPerLayout, Is.EqualTo(1));
-            Assert.That(legacyValidation.RuntimeConfiguration.PlayerSlots[0].DeviceSwitchDebounceMs, Is.Zero);
+            string omitted = SingleSlotYaml(debounceMs: 0, maxPerLayout: 0);
+            var omittedValidation = InputConfigurationValidator.ValidateAndPrepare(
+                VYaml.Serialization.YamlSerializer.Deserialize<InputConfiguration>(Encoding.UTF8.GetBytes(omitted)), null);
+            Assert.That(omittedValidation.IsValid, Is.True);
+            Assert.That(omittedValidation.RuntimeConfiguration.PlayerSlots[0].MaxDevicesPerLayout, Is.EqualTo(1));
+            Assert.That(omittedValidation.RuntimeConfiguration.PlayerSlots[0].DeviceSwitchDebounceMs, Is.Zero);
         }
 
         [Test]

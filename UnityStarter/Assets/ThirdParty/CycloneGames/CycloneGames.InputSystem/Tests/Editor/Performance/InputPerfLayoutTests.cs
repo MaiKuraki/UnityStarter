@@ -78,7 +78,7 @@ namespace CycloneGames.InputSystem.Tests.Editor
                 });
                 double[] observableByName = PerfMeter.SamplePerCallMicroseconds(1000, 8, () =>
                 {
-                    GC.KeepAlive(player.GetScalarObservable(ActionName));
+                    GC.KeepAlive(player.GetScalarObservable(ContextName, MapName, ActionName));
                 });
                 double[] observableById = PerfMeter.SamplePerCallMicroseconds(1000, 8, () =>
                 {

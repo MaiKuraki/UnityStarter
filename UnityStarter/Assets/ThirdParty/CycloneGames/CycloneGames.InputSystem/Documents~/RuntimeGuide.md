@@ -151,6 +151,18 @@ Dispose or pop the menu context to restore gameplay dispatch:
 menu.Dispose();
 ```
 
+**Changing the policy of an active context:**
+
+```csharp
+// The dialog stays open and Gameplay receives input again.
+player.SetContextPolicy(dialog, priority: 100, blocksLowerPriority: false);
+
+// Back to the constructor policy.
+player.ClearContextPolicy(dialog);
+```
+
+The policy is stored per player, so a context shared by two players can behave differently on each. A changed policy triggers one context refresh.
+
 Use capture scopes for temporary modal ownership when several systems must restore context state reliably after nested operations.
 
 ### Event-driven and polled input

@@ -402,7 +402,7 @@ namespace CycloneGames.InputSystem.Runtime
                 _bindingOverridesByPlayer.Clear();
                 var successResult = new InputManagerInitializationResult(
                     InputManagerInitializationStatus.Success,
-                    validation.WasMigrated ? "Configuration migrated and initialized." : "Configuration initialized.",
+                    "Configuration initialized.",
                     validation,
                     preflight);
                 LastInitializationResult = successResult;
@@ -1555,45 +1555,10 @@ namespace CycloneGames.InputSystem.Runtime
             return true;
         }
 
-        public bool RebindAction(int playerId, string actionMapName, string actionName, string oldBinding, string newBinding)
-        {
-            EnsureMainThread();
-            return _registeredPlayers.TryGetValue(playerId, out IInputPlayer player) &&
-                   player.RebindAction(actionMapName, actionName, oldBinding, newBinding);
-        }
-
-        public bool ResetActionBinding(int playerId, string actionMapName, string actionName)
-        {
-            EnsureMainThread();
-            return _registeredPlayers.TryGetValue(playerId, out IInputPlayer player) &&
-                   player.ResetActionBinding(actionMapName, actionName);
-        }
-
         public void ResetAllActionBindings(int playerId)
         {
             EnsureMainThread();
             if (_registeredPlayers.TryGetValue(playerId, out IInputPlayer player)) player.ResetAllActionBindings();
-        }
-
-        public string[] GetActionBindings(int playerId, string actionMapName, string actionName)
-        {
-            EnsureMainThread();
-            return _registeredPlayers.TryGetValue(playerId, out IInputPlayer player)
-                ? player.GetActionBindings(actionMapName, actionName)
-                : Array.Empty<string>();
-        }
-
-        public Observable<Unit> GetChordObservable(
-            int playerId,
-            string actionMapName,
-            string firstAction,
-            string secondAction,
-            float windowMs = 300f)
-        {
-            EnsureMainThread();
-            return _registeredPlayers.TryGetValue(playerId, out IInputPlayer player)
-                ? player.GetChordObservable(actionMapName, firstAction, secondAction, windowMs)
-                : EmptyObservables.Unit;
         }
 
         public InputBindingOverrideProfile ExportBindingOverrideProfile()
