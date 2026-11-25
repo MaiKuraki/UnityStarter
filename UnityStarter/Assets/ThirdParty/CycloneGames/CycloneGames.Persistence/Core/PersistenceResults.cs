@@ -8,17 +8,13 @@ namespace CycloneGames.Persistence
         ReadFailed = 1,
         PayloadTooLarge = 2,
         RecordFormatMismatch = 3,
-        UnsupportedRecordVersion = 4,
-        MalformedRecord = 5,
-        IntegrityCheckFailed = 6,
-        CodecMismatch = 7,
-        TransformMismatch = 8,
-        FutureContentVersion = 9,
-        DeserializeFailed = 10,
-        SerializationFailed = 11,
-        WriteFailed = 12,
-        DeleteFailed = 13,
-        Cancelled = 14
+        MalformedRecord = 4,
+        IntegrityCheckFailed = 5,
+        DeserializeFailed = 6,
+        SerializationFailed = 7,
+        WriteFailed = 8,
+        DeleteFailed = 9,
+        Cancelled = 10
     }
 
     public enum PersistenceLoadStatus
@@ -36,9 +32,6 @@ namespace CycloneGames.Persistence
         Failed = 2
     }
 
-    /// <summary>
-    /// Result returned by a storage adapter. Found transfers ownership of Content to the caller.
-    /// </summary>
     public readonly struct PersistenceStorageReadResult
     {
         private PersistenceStorageReadResult(bool isMissing, byte[] content)
@@ -85,9 +78,6 @@ namespace CycloneGames.Persistence
 
         public PersistenceErrorCode ErrorCode { get; }
 
-        /// <summary>
-        /// Diagnostic exception. Sanitize paths and messages before telemetry or player-facing output.
-        /// </summary>
         public Exception Exception { get; }
 
         public static PersistenceOperationResult Success()
@@ -120,13 +110,11 @@ namespace CycloneGames.Persistence
         private PersistenceLoadResult(
             PersistenceLoadStatus status,
             T value,
-            int contentVersion,
             PersistenceErrorCode errorCode,
             Exception exception)
         {
             Status = status;
             Value = value;
-            ContentVersion = contentVersion;
             ErrorCode = errorCode;
             Exception = exception;
         }
@@ -139,26 +127,15 @@ namespace CycloneGames.Persistence
 
         public T Value { get; }
 
-        public int ContentVersion { get; }
-
         public PersistenceErrorCode ErrorCode { get; }
 
-        /// <summary>
-        /// Diagnostic exception. Sanitize paths and messages before telemetry or player-facing output.
-        /// </summary>
         public Exception Exception { get; }
 
-        public static PersistenceLoadResult<T> Loaded(T value, int contentVersion)
+        public static PersistenceLoadResult<T> Loaded(T value)
         {
-            if (contentVersion < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(contentVersion));
-            }
-
             return new PersistenceLoadResult<T>(
                 PersistenceLoadStatus.Loaded,
                 value,
-                contentVersion,
                 PersistenceErrorCode.None,
                 null);
         }
@@ -168,7 +145,6 @@ namespace CycloneGames.Persistence
             return new PersistenceLoadResult<T>(
                 PersistenceLoadStatus.Missing,
                 default,
-                0,
                 PersistenceErrorCode.None,
                 null);
         }
@@ -186,7 +162,6 @@ namespace CycloneGames.Persistence
             return new PersistenceLoadResult<T>(
                 PersistenceLoadStatus.Failed,
                 default,
-                0,
                 errorCode,
                 exception);
         }

@@ -1,6 +1,6 @@
 {
     "name": "CycloneGames.BehaviorTree.Editor",
-    "rootNamespace": "",
+    "rootNamespace": "CycloneGames.BehaviorTree.Editor",
     "references": [
         "CycloneGames.Logging.Core",
         "CycloneGames.BehaviorTree.Runtime",

@@ -3,16 +3,12 @@ using System.Threading;
 
 namespace CycloneGames.Settings
 {
-    /// <summary>
-    /// Owns one validated settings value. Concurrent and reentrant operations are rejected.
-    /// </summary>
     public sealed class SettingsState<T>
     {
         private static readonly SettingsChangedHandler<T>[] EmptyObservers =
             new SettingsChangedHandler<T>[0];
 
         private readonly ISettingsSchema<T> _schema;
-        private readonly int _currentVersion;
         private SettingsChangedHandler<T>[] _observers;
         private T _value;
         private long _revision;
@@ -21,26 +17,12 @@ namespace CycloneGames.Settings
         public SettingsState(ISettingsSchema<T> schema)
         {
             _schema = schema ?? throw new ArgumentNullException(nameof(schema));
-            _currentVersion = schema.CurrentVersion;
-
-            if (_currentVersion < 0)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(schema),
-                    "The current settings version cannot be negative.");
-            }
-
             _observers = EmptyObservers;
             _value = CreateValidatedDefaultOrThrow();
         }
 
-        public int CurrentVersion => _currentVersion;
-
         public ISettingsSchema<T> Schema => _schema;
 
-        /// <summary>
-        /// Monotonic commit revision used to reject stale asynchronous candidates.
-        /// </summary>
         public long Revision => Interlocked.Read(ref _revision);
 
         public event SettingsChangedHandler<T> Changed
@@ -194,9 +176,6 @@ namespace CycloneGames.Settings
             }
         }
 
-        /// <summary>
-        /// Validates and commits a value decoded by an external persistence boundary.
-        /// </summary>
         public SettingsUpdateResult TryApplyLoaded(in T value, long expectedRevision)
         {
             if (expectedRevision < 0)

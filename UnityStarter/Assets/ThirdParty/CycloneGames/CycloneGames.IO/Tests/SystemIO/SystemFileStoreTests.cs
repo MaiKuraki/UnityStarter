@@ -82,7 +82,7 @@ namespace CycloneGames.IO.Tests.SystemIO
                 string path = directory.GetPath("cancelled.bin");
                 byte[] original = Encoding.UTF8.GetBytes("original");
                 File.WriteAllBytes(path, original);
-                var payload = new byte[SystemFileStoreOptions.MIN_BUFFER_SIZE * 3];
+                var payload = new byte[SystemFileStore.Default.Options.BufferSize * 3];
 
                 using (var source = new GatedSecondReadStream(payload))
                 {

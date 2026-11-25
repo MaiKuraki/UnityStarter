@@ -7,9 +7,6 @@ using System.Threading.Tasks;
 
 namespace CycloneGames.IO
 {
-    /// <summary>
-    /// Production file-system storage with bounded whole-file reads, streaming, and strict atomic commits.
-    /// </summary>
     public sealed class SystemFileStore : IFileStore, IAtomicFileStore, IStreamFileStore
     {
         public static readonly SystemFileStore Default = new SystemFileStore();
@@ -18,7 +15,7 @@ namespace CycloneGames.IO
         private readonly BoundedFileReader _boundedReader;
 
         public SystemFileStore(SystemFileStoreOptions options = null)
-            : this(options ?? SystemFileStoreOptions.Default, SystemAtomicFileOperations.Instance)
+            : this(options ?? SystemFileStoreOptions.Default, new SystemAtomicFileOperations())
         {
         }
 
@@ -401,7 +398,8 @@ namespace CycloneGames.IO
 
         private static void ValidateCopyBehavior(FileCopyBehavior behavior)
         {
-            if (!Enum.IsDefined(typeof(FileCopyBehavior), behavior))
+            if (behavior != FileCopyBehavior.Replace
+                && behavior != FileCopyBehavior.SkipIfIdentical)
             {
                 throw new ArgumentOutOfRangeException(nameof(behavior));
             }

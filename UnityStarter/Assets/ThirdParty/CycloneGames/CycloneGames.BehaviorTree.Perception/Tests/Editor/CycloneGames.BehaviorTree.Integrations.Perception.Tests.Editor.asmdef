@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.BehaviorTree.Integrations.Perception.Tests.Editor",
     "references": [
         "CycloneGames.BehaviorTree.Core",
-        "CycloneGames.BehaviorTree.Runtime.Integrations.Perception",
+        "CycloneGames.BehaviorTree.Integrations.Perception",
         "CycloneGames.AIPerception",
         "Unity.Collections",
         "Unity.Mathematics"

@@ -12,7 +12,7 @@
 
 | Assembly | 作用 | 使用方引用方式 |
 | --- | --- | --- |
-| `CycloneGames.BehaviorTree.Runtime.Integrations.Spatial` | 基于 `ISpatialReadOnlyIndex<TItem>` 实现「查询 → 黑板」发布器。 | 显式引用 |
+| `CycloneGames.BehaviorTree.Integrations.Spatial` | 基于 `ISpatialReadOnlyIndex<TItem>` 实现「查询 → 黑板」发布器。 | 显式引用 |
 | `CycloneGames.BehaviorTree.Integrations.Spatial.Tests.Editor` | 验证绑定、层过滤、结果上限与分配。 | 仅 Test Runner |
 
 包在 `package.json` 中直接声明 BehaviorTree 与 Spatial 依赖。运行时 assembly 不依赖引擎（`noEngineReferences: true`），且 `autoReferenced: false`。

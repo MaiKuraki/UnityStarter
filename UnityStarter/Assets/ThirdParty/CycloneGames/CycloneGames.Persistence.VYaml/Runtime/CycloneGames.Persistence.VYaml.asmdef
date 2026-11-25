@@ -11,7 +11,15 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": false,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_VYAML"
+    ],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vyaml",
+            "expression": "[1.4.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_VYAML"
+        }
+    ],
     "noEngineReferences": true
 }

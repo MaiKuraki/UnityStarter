@@ -15,13 +15,9 @@ namespace CycloneGames.Settings.Persistence
     {
         None = 0,
         PersistenceFailed = 1,
-        MigrationFailed = 2,
-        StateCommitFailed = 3
+        StateCommitFailed = 2
     }
 
-    /// <summary>
-    /// Describes settings orchestration without replacing Persistence diagnostic details.
-    /// </summary>
     public readonly struct PersistentSettingsLoadResult
     {
         private readonly string _message;
@@ -29,10 +25,7 @@ namespace CycloneGames.Settings.Persistence
         private PersistentSettingsLoadResult(
             PersistentSettingsLoadStatus status,
             PersistentSettingsLoadError error,
-            bool requiresSave,
-            bool migrationApplied,
             PersistenceErrorCode persistenceError,
-            SettingsMigrationError migrationError,
             SettingsUpdateError stateError,
             string message,
             Exception exception,
@@ -41,10 +34,7 @@ namespace CycloneGames.Settings.Persistence
         {
             Status = status;
             Error = error;
-            RequiresSave = requiresSave;
-            MigrationApplied = migrationApplied;
             PersistenceError = persistenceError;
-            MigrationError = migrationError;
             StateError = stateError;
             _message = message ?? string.Empty;
             Exception = exception;
@@ -63,13 +53,7 @@ namespace CycloneGames.Settings.Persistence
 
         public bool IsMissing => Status == PersistentSettingsLoadStatus.Missing;
 
-        public bool RequiresSave { get; }
-
-        public bool MigrationApplied { get; }
-
         public PersistenceErrorCode PersistenceError { get; }
-
-        public SettingsMigrationError MigrationError { get; }
 
         public SettingsUpdateError StateError { get; }
 
@@ -88,11 +72,8 @@ namespace CycloneGames.Settings.Persistence
             return new PersistentSettingsLoadResult(
                 PersistentSettingsLoadStatus.Missing,
                 PersistentSettingsLoadError.None,
-                true,
-                false,
                 PersistenceErrorCode.None,
-                SettingsMigrationError.None,
-                SettingsUpdateError.None,
+                SettingsUpdateError.Uninitialized,
                 string.Empty,
                 null,
                 0,
@@ -100,18 +81,14 @@ namespace CycloneGames.Settings.Persistence
         }
 
         internal static PersistentSettingsLoadResult Loaded(
-            bool migrationApplied,
             int observerFailureCount,
             Exception firstObserverException)
         {
             return new PersistentSettingsLoadResult(
                 PersistentSettingsLoadStatus.Loaded,
                 PersistentSettingsLoadError.None,
-                migrationApplied,
-                migrationApplied,
                 PersistenceErrorCode.None,
-                SettingsMigrationError.None,
-                SettingsUpdateError.None,
+                SettingsUpdateError.Uninitialized,
                 string.Empty,
                 null,
                 observerFailureCount,
@@ -125,30 +102,10 @@ namespace CycloneGames.Settings.Persistence
             return new PersistentSettingsLoadResult(
                 PersistentSettingsLoadStatus.Failed,
                 PersistentSettingsLoadError.PersistenceFailed,
-                false,
-                false,
                 error,
-                SettingsMigrationError.None,
-                SettingsUpdateError.None,
+                SettingsUpdateError.Uninitialized,
                 string.Empty,
                 exception,
-                0,
-                null);
-        }
-
-        internal static PersistentSettingsLoadResult MigrationFailure(
-            in SettingsMigrationPipelineResult result)
-        {
-            return new PersistentSettingsLoadResult(
-                PersistentSettingsLoadStatus.Failed,
-                PersistentSettingsLoadError.MigrationFailed,
-                false,
-                result.MigrationApplied,
-                PersistenceErrorCode.None,
-                result.Error,
-                SettingsUpdateError.None,
-                result.Message,
-                result.Exception,
                 0,
                 null);
         }
@@ -159,10 +116,7 @@ namespace CycloneGames.Settings.Persistence
             return new PersistentSettingsLoadResult(
                 PersistentSettingsLoadStatus.Failed,
                 PersistentSettingsLoadError.StateCommitFailed,
-                false,
-                false,
                 PersistenceErrorCode.None,
-                SettingsMigrationError.None,
                 result.Error,
                 result.Message,
                 result.Exception,

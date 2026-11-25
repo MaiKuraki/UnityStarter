@@ -180,18 +180,12 @@ namespace CycloneGames.Hash.Core
             }
         }
 
-        /// <summary>
-        /// Writes the canonical XXH64 representation in big-endian order.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryWriteHash(Span<byte> destination)
         {
             return TryWriteHashBigEndian(destination);
         }
 
-        /// <summary>
-        /// Writes the canonical XXH64 representation in big-endian order.
-        /// </summary>
         public bool TryWriteHashBigEndian(Span<byte> destination)
         {
             if (destination.Length < HashSizeInBytes)

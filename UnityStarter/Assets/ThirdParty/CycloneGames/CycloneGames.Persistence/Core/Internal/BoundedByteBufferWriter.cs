@@ -3,8 +3,12 @@ using System.Buffers;
 
 namespace CycloneGames.Persistence
 {
+    // Pooled, budget-capped IBufferWriter<byte>. One Store reuses one instance: Reset acquires a
+    // buffer for the operation and Release returns it to the shared pool. Buffers are cleared on
+    // growth and on return so serialized payload bytes never remain in the pool.
     internal sealed class BoundedByteBufferWriter : IBufferWriter<byte>, IDisposable
     {
+        private readonly int _initialBytes;
         private readonly int _maximumBytes;
         private byte[] _buffer;
         private int _writtenCount;
@@ -17,9 +21,8 @@ namespace CycloneGames.Persistence
                 throw new ArgumentOutOfRangeException(nameof(initialBytes));
             }
 
+            _initialBytes = initialBytes;
             _maximumBytes = maximumBytes;
-            _buffer = ArrayPool<byte>.Shared.Rent(initialBytes);
-            Array.Clear(_buffer, 0, _buffer.Length);
         }
 
         internal int WrittenCount => _writtenCount;
@@ -33,6 +36,33 @@ namespace CycloneGames.Persistence
             }
         }
 
+        internal void Reset()
+        {
+            if (_buffer == null)
+            {
+                _buffer = ArrayPool<byte>.Shared.Rent(_initialBytes);
+            }
+
+            Array.Clear(_buffer, 0, _buffer.Length);
+            _writtenCount = 0;
+            _lastGrantedLength = 0;
+        }
+
+        internal void Release()
+        {
+            byte[] buffer = _buffer;
+            if (buffer == null)
+            {
+                return;
+            }
+
+            _buffer = null;
+            _writtenCount = 0;
+            _lastGrantedLength = 0;
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
+
+        // IBufferWriter contract: count must not exceed the most recent GetSpan/GetMemory grant.
         public void Advance(int count)
         {
             ThrowIfDisposed();
@@ -61,18 +91,11 @@ namespace CycloneGames.Persistence
 
         public void Dispose()
         {
-            byte[] buffer = _buffer;
-            if (buffer == null)
-            {
-                return;
-            }
-
-            _buffer = null;
-            _writtenCount = 0;
-            _lastGrantedLength = 0;
-            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+            Release();
         }
 
+        // Growth doubles up to the configured maximum. A sizeHint beyond the remaining budget
+        // throws before the codec can write past the payload limit.
         private void EnsureCapacity(int sizeHint)
         {
             ThrowIfDisposed();

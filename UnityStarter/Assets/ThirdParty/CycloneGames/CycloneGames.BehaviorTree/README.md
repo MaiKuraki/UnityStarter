@@ -120,6 +120,8 @@ The project opens at `<repo-root>/UnityStarter`. The runtime is split into an en
 
 Dependencies point one way: `Runtime -> Core`. The core references `CycloneGames.Hash.Core` and `CycloneGames.Logging.Core` only, so a server that references the core needs no engine assembly.
 
+The package layout follows the CycloneGames convention: `Core/` is the engine-free assembly, `Runtime/` owns the Unity authoring and component layer, `Editor/` owns the graph tooling, `Tests/` holds the Editor, PlayMode, Support and Benchmarks suites, `Runtime/Integrations/` holds optional bridges that depend on two modules, and `Samples/` holds the authored asset. A feature assembly stays inside its owning layer, for example `Runtime/DOD/` and `Tests/Editor/DOD/`.
+
 Three optional assemblies are `autoReferenced: false` and must be referenced explicitly by a consumer asmdef:
 
 - `CycloneGames.BehaviorTree.Runtime.DOD` is gated by `versionDefines` on `com.unity.burst`, `com.unity.collections`, and `com.unity.mathematics` and by matching `defineConstraints`. It references Unity.Burst, Unity.Collections, Unity.Mathematics, and Unity.Jobs.

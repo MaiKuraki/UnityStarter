@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.BehaviorTree.Integrations.Spatial.Tests.Editor",
     "references": [
         "CycloneGames.BehaviorTree.Core",
-        "CycloneGames.BehaviorTree.Runtime.Integrations.Spatial",
+        "CycloneGames.BehaviorTree.Integrations.Spatial",
         "CycloneGames.Spatial.Core"
     ],
     "includePlatforms": [

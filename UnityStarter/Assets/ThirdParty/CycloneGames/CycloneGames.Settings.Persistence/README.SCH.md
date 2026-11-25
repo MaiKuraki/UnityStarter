@@ -1,214 +1,93 @@
 # CycloneGames.Settings.Persistence
 
-[English | 简体中文](README.md)
+[English](README.md) | 简体中文
 
-CycloneGames.Settings.Persistence 在经验证的设置状态（`CycloneGames.Settings`）与有界持久化记录（`CycloneGames.Persistence`）之间协调。`PersistentSettings<T>` 处理加载、迁移、提交、保存与删除。
+`CycloneGames.Settings.Persistence` 把经过校验的 settings state 与一个持久化 store 连接起来。`PersistentSettings<T>` 加载 record、校验解码后的值，并通过 revision 检查提交；保存时写入隔离的 state 快照。Integration 不持有任何一个依赖的所有权。
 
 ## 目录
 
 - [概述](#概述)
-- [架构](#架构)
+- [Assembly](#assembly)
 - [快速上手](#快速上手)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [进阶主题](#进阶主题)
-- [常见场景](#常见场景)
-- [性能与内存](#性能与内存)
-- [故障排查](#故障排查)
+- [Load 流程](#load-流程)
+- [公共 API](#公共-api)
+- [并发与取消](#并发与取消)
+- [诊断](#诊断)
+- [测试](#测试)
+- [问题排查](#问题排查)
 
 ## 概述
 
-`PersistentSettings<T>` 借用构造时注入的三个依赖：
+`PersistentSettings<T>` 接收两个依赖：
 
-- `SettingsState<T>` —— 权威的内存状态。
-- `SettingsMigrationPipeline<T>` —— 从任意受支持版本的前向迁移。
-- `PersistenceStore<T>` —— 带字节预算与原子写入行为的版本化存储。
+- `SettingsState<T>` 持有内存中的权威值。
+- `PersistenceStore<T>` 读写一条有上界的 record。
 
-调用方保留所有三者的所有权。
+调用方构造并持有全部三个对象。由其他格式 token 写出的 record 会被 store 以 `RecordFormatMismatch` 拒绝。
 
-### 主要特性
+## Assembly
 
-- **显式组合**——调用方创建并保留所有依赖；无隐式 DI。
-- **带迁移的加载**——解码、逐版本迁移、校验、提交。
-- **Compare-and-commit**——I/O 前捕获 `Revision`；过期的候选值以 `RevisionConflict` 拒绝。
-- **支持缺失记录**——已校验默认值已在 state 中；需要显式保存。
-- **迁移感知的保存**——`RequiresSave` 标记迁移已执行但未隐式写盘。
-- **单请求串行**——重叠操作抛出 `InvalidOperationException`。
+| Assembly | 引用 | `autoReferenced` | `noEngineReferences` |
+| --- | --- | --- | --- |
+| `CycloneGames.Settings.Persistence` | `CycloneGames.Settings.Core`、`CycloneGames.Persistence.Core` | `false` | `true` |
+| `CycloneGames.Settings.Persistence.Tests.Core` | integration、Settings.Core、Persistence.Core | `false` | `true` |
 
-## 架构
+Settings Core 不引用 Persistence，Persistence Core 也不引用 Settings。Codec 与 storage provider 类型不出现在这个 integration 的 public API 中。
 
 ```mermaid
-flowchart TD
-    Integration["CycloneGames.Settings.Persistence"] --> Settings["CycloneGames.Settings.Core"]
-    Integration --> Persistence["CycloneGames.Persistence.Core"]
-    Provider["选定的 codec/storage provider"] --> Persistence
-    Game["游戏 composition root"] --> Integration
-    Game --> Provider
+flowchart LR
+    App["应用 composition root"] --> Bridge["Settings.Persistence"]
+    Bridge --> State["Settings.Core"]
+    Bridge --> Store["Persistence.Core"]
+    Store --> Providers["所选 codec 与 storage provider"]
+    App --> Providers
 ```
-
-| 程序集 | 路径 | 用途 |
-| --- | --- | --- |
-| `CycloneGames.Settings.Persistence` | `Runtime/` | `PersistentSettings<T>` 桥梁。引用 `CycloneGames.Settings.Core` 和 `CycloneGames.Persistence.Core`。`autoReferenced: false`，`noEngineReferences: true`。 |
-| `CycloneGames.Settings.Persistence.Tests.Core` | `Tests/Core/` | 集成测试。 |
-
-Settings Core 不引用 Persistence。Persistence Core 不引用 Settings。Codec 和 storage provider 的 concrete type 不出现在本 integration 的 public API 中。
 
 ## 快速上手
 
-启动时组合全部依赖：
+### 第 1 步：组装依赖
 
 ```csharp
 var schema = new GameSettingsSchema();
-var migrations = new SettingsMigrationPipeline<GameSettings>(
-    schema,
-    1,
-    new GameSettingsV1ToV2());
+var state = new SettingsState<GameSettings>(schema);
 
-var codec = new VYamlPersistenceCodec<GameSettings>(GeneratedResolver.Instance);
+IPersistenceCodec<GameSettings> codec =
+    new VYamlPersistenceCodec<GameSettings>(GeneratedResolver.Instance);
+
 IPersistenceStorage storage =
     UnityPersistentStorage.Create("Settings/game-settings.cgp");
 
-var state = new SettingsState<GameSettings>(schema);
 var store = new PersistenceStore<GameSettings>(
     storage,
     new PersistenceProfile<GameSettings>(codec));
-var settings = new PersistentSettings<GameSettings>(state, migrations, store);
 
-// 启动时加载。
-PersistentSettingsLoadResult load = await settings.LoadAsync(ct);
-
-if (load.IsMissing)
-{
-    await settings.SaveAsync(ct);
-}
-else if (load.RequiresSave)
-{
-    await settings.SaveAsync(ct);
-}
+var settings = new PersistentSettings<GameSettings>(state, store);
 ```
 
-保留 `state` 用于更新和 snapshot，保留 `settings` 用于存储操作。VYaml resolver 必须为 IL2CPP/AOT 显式支持设置模型。本 integration 不执行 resolver discovery。
+保留 `state` 用于更新与快照，保留 `settings` 用于存储操作。VYaml resolver 必须显式支持该设置模型以用于 IL2CPP；本 integration 不做 resolver 发现。
 
-## 核心概念
-
-### Load 工作流
-
-```mermaid
-flowchart TD
-    Revision["捕获 SettingsState.Revision"] --> Read["PersistenceStore.LoadAsync"]
-    Read --> Missing{"Record 是否缺失？"}
-    Missing -->|是| Keep["保留已校验当前值或默认值"]
-    Keep --> MissingResult["Missing + RequiresSave"]
-    Missing -->|否| Decode["解码值 + content version"]
-    Decode --> Migrate["前向 migration pipeline"]
-    Migrate --> Validate["最终 schema validation"]
-    Validate --> Compare{"Revision 是否未变化？"}
-    Compare -->|是| Commit["克隆并提交 SettingsState"]
-    Compare -->|否| Conflict["RevisionConflict；保留较新 state"]
-    Commit --> Notify["Changed 通知"]
-```
-
-### Load result 语义
-
-| 状态 | 对 state 的影响 | `RequiresSave` | 说明 |
-| --- | --- | --- | --- |
-| `Missing` | 不修改 | `true` | 已校验默认值已在 state 中 |
-| 当前版本 `Loaded` | 提交已校验克隆 | `false` | Observer 在提交后执行 |
-| 迁移后 `Loaded` | 提交迁移值 | `true` | Load 不隐式写盘 |
-| Persistence 失败或取消 | 不修改 | `false` | 保留原始 `PersistenceErrorCode` |
-| Migration 或 validation 失败 | 不修改 | `false` | 现有 state 保持权威 |
-| Load 期间 state 已变化 | 不修改 | `false` | `RevisionConflict`；不覆盖较新 state |
-
-Observer 失败作为成功 loaded result 上的 `ObserverFailureCount` 和 `FirstObserverException` 返回，不会变成 persistence failure，也不会回滚提交。
-
-### Save 与 delete
-
-```csharp
-PersistenceOperationResult save = await settings.SaveAsync(ct);
-PersistenceOperationResult delete = await settings.DeleteStoredValueAsync(ct);
-```
-
-`SaveAsync` 捕获隔离 state snapshot 并以 `SettingsState<T>.CurrentVersion` 保存。`DeleteStoredValueAsync` 仅删除存储记录，不重置内存 state。
-
-## 使用指南
-
-### 单请求串行策略
-
-同一个 `PersistentSettings<T>` 实例同一时间只允许一个 load、save 或 delete。重叠同步抛出 `InvalidOperationException`，不会排队。其依赖也各自拥有 overlap guard。
-
-### State 与 schema 一致性
-
-构造时校验 `state` 与 `migrations` 共享同一个 schema 实例和 `CurrentVersion`。不匹配抛出 `ArgumentException`。
-
-### 取消行为
-
-Migration step 之前和 state compare-and-commit 之前检查取消。Commit 前取消不修改 state。已完成 state commit 不会重新报告为取消。
-
-### 线程
-
-Integration 使用 `Task` 和 `CancellationToken`；内部 await 使用 `ConfigureAwait(false)`。Migration、state commit 和 loaded-state 通知可能在 worker continuation 执行。Core observer 必须能在该线程安全运行。Unity observer 必须先把 snapshot 投递到主线程 dispatcher。
-
-## 进阶主题
-
-### Provider 与平台选择
-
-平台行为由注入的 `IPersistenceStorage` 决定：
-
-| 环境 | 预期 provider |
-| --- | --- |
-| Windows、Linux、macOS 桌面 | Sandboxed System.IO provider |
-| iOS 与 Android | Unity path adapter + 已验证的平台备份/生命周期策略 |
-| Dedicated server 或 CLI | 显式 trusted root 的 System.IO provider |
-| WebGL | 独立异步 IndexedDB/JavaScript provider |
-| 主机平台 | 平台 SDK save-data provider + 认证特定生命周期 |
-
-非 Unity 进程：`SystemFilePersistenceStorage.CreateSandboxed(trustedRoot, relativePath)`。Unity 环境：`UnityPersistentStorage.Create(relativePath)`。
-
-### Codec 互换
-
-MessagePack provider 源码存在但未激活（缺少外部依赖）。启用时仅替换 codec：
-
-```csharp
-IPersistenceCodec<GameSettings> codec = messagePackCodec;
-```
-
-`PersistentSettings<T>`、schema、migration 和 storage contract 保持不变。
-
-## 常见场景
-
-### 启动加载模式
+### 第 2 步：启动时加载
 
 ```csharp
 PersistentSettingsLoadResult load = await settings.LoadAsync(ct);
 
 if (load.IsMissing)
 {
-    // State 持有已校验默认值。显式保存。
+    // State already holds validated defaults. Write them explicitly.
     await settings.SaveAsync(ct);
 }
 else if (!load.Completed)
 {
-    ReportLoadFailure(load.Error, load.PersistenceError, load.Message, load.Exception);
-}
-else if (load.RequiresSave)
-{
-    // 已完成迁移。在安全时机持久化。
-    await settings.SaveAsync(ct);
-}
-```
-
-### 处理 RevisionConflict
-
-```csharp
-PersistentSettingsLoadResult load = await settings.LoadAsync(ct);
-
-if (!load.Completed && load.Error == PersistentSettingsLoadError.StateCommitFailed)
-{
-    // Load 期间另一个 commit 抢先。保留较新 state。
+    ReportLoadFailure(
+        load.Error,
+        load.PersistenceError,
+        load.StateError,
+        load.Message,
+        load.Exception);
 }
 ```
 
-### 用户触发变更后显式保存
+### 第 3 步：用户触发变更后保存
 
 ```csharp
 SettingsUpdateResult update = state.Update(
@@ -216,44 +95,85 @@ SettingsUpdateResult update = state.Update(
 
 if (update.Succeeded)
 {
-    await settings.SaveAsync(ct);
+    PersistenceOperationResult saved = await settings.SaveAsync(ct);
 }
 ```
 
-## 性能与内存
+## Load 流程
 
-Load 和 save 属于冷路径。
-
-- Load 在不同阶段持有 decoded model、migration clone 和 state commit clone。
-- Save 在序列化前捕获一个 state snapshot。
-- `PersistenceStore<T>` 负责 byte budget；schema clone 成本取决于具体模型。
-- Migration 执行复杂度与版本步骤数线性相关。
-- 不引入反射、Service Locator、全局缓存、轮询或逐帧回调。
-
-## 故障排查
-
-| 现象 | 检查项 |
-| --- | --- |
-| 构造拒绝 composition | State 与 migration pipeline 必须共享同一个 schema 实例和 `CurrentVersion` |
-| Load 返回 `Missing` | 检查 provider location 和平台可用性；state 仍有效 |
-| Load 返回 migration failure | 检查 `MinimumSupportedVersion`、完整 `v -> v + 1` 链和最终 validation |
-| Load 返回 future-version error | 不要保存 defaults；更新应用或提供显式兼容 reader |
-| 出现 observer warning | 独立修复 observer；提交状态已成为权威 |
-| Load 返回 `RevisionConflict` | I/O 期间另一个 state commit 抢先；保留较新 state |
-| Overlap 抛异常 | 在 composition owner 中串行化生命周期操作 |
-
-## 验证
-
-运行集成测试：
-
-```text
-<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Settings.Persistence.Tests.Core -testResults <result-path> -quit
+```mermaid
+flowchart TD
+    Revision["记录 SettingsState.Revision"] --> Read["PersistenceStore.LoadAsync"]
+    Read --> Missing{"Record 不存在？"}
+    Missing -->|是| Miss["Missing 结果；state 不变"]
+    Missing -->|否| Failed{"加载失败或取消？"}
+    Failed -->|是| PersistFail["Persistence 失败，保留原始错误码"]
+    Failed -->|否| Compare["TryApplyLoaded 带 expected revision"]
+    Compare --> Conflict{"Revision 未变？"}
+    Conflict -->|否| Stale["StateCommitFailed；较新 state 保持权威"]
+    Conflict -->|是| Validate["Schema 校验与 clone"]
+    Validate --> Valid{"校验通过？"}
+    Valid -->|否| Invalid["StateCommitFailed；state 不变"]
+    Valid -->|是| Commit["提交并通知 observer"]
 ```
 
-测试覆盖：missing/default 行为、当前版本与迁移后的 load、不隐式写盘的显式 `RequiresSave`、future-version 拒绝、load 前/中取消、validation failure 的状态保护、过期 revision 保护、提交后 observer warning、使用当前版本 metadata 保存、delete 不 reset、operation overlap 与构造 schema/version 不一致拒绝。
+| 状态 | 对 state 的影响 | 说明 |
+| --- | --- | --- |
+| `Missing` | 不修改 | State 保留经过校验的默认值 |
+| `Loaded` | 提交经过校验的 clone | Observer 在提交后执行 |
+| Persistence 失败或取消 | 不修改 | 保留原始 `PersistenceErrorCode` |
+| 校验失败 | 不修改 | `StateError` 报告 `ValidationFailed` |
+| 加载期间 state 已变更 | 不修改 | `StateCommitFailed` 且为 `RevisionConflict` |
 
-## 内存诊断
+Observer 失败会作为成功加载结果上的 `ObserverFailureCount` 与 `FirstObserverException` 返回，不会变成 persistence 失败，也不回滚提交。
 
-`PersistentSettings<T>.GetMemorySnapshot()` 报告 bridge operation state、settings revision、底层 persistence operation/limit、已启动 load/save/delete 次数、overlap rejection 与最近/峰值 record bytes。这个 O(1) snapshot 不会 clone 或检查 settings value，也不会公开 storage content。
+## 公共 API
 
-`PersistentSettings<T>.GetMemorySnapshot()` 暴露 owner-local operation 与 retained-record counter。该类型负责协调 operation，但在 operation 结束后既不拥有权威 settings value，也不拥有 persistence buffer。Persistence record schema 与 migration 行为保持不变。
+| 成员 | 说明 |
+| --- | --- |
+| `PersistentSettings(SettingsState<T>, PersistenceStore<T>)` | null 参数抛 `ArgumentNullException`。 |
+| `LoadAsync(CancellationToken = default)` | 读取、校验，并通过 revision 检查提交。 |
+| `SaveAsync(CancellationToken = default)` | 捕获隔离快照并写入一条 record。 |
+| `DeleteStoredValueAsync(CancellationToken = default)` | 只删除存储 record；内存 state 不变。 |
+| `GetMemorySnapshot()` | owner-local operation 计数与底层 store 的 limits。 |
+
+| 结果成员 | 含义 |
+| --- | --- |
+| `Status` | `Uninitialized`、`Failed`、`Missing`、`Loaded` |
+| `Completed` | `Missing` 与 `Loaded` 时为 true |
+| `IsLoaded`、`IsMissing` | 状态快捷判断 |
+| `Error` | `None`、`PersistenceFailed`、`StateCommitFailed` |
+| `PersistenceError` | Store 返回的原始 `PersistenceErrorCode` |
+| `StateError` | State commit 返回的原始 `SettingsUpdateError` |
+| `Message`、`Exception` | 失败阶段的诊断信息 |
+| `ObserverFailureCount`、`FirstObserverException`、`HasObserverWarnings` | 提交后的 observer 诊断 |
+
+默认构造的结果 struct 是 `Uninitialized`，`Message` 为空字符串。
+
+## 并发与取消
+
+一个 `PersistentSettings<T>` 实例同时只允许一个 load、save 或 delete。Overlap 会同步抛 `InvalidOperationException`，操作不会排队。`SettingsState<T>` 与 `PersistenceStore<T>` 各自保留 guard，因此共享实例仍受自身的重叠策略保护。
+
+取消在加载前、state compare-and-commit 前，以及 save 快照 state 前检查。Commit 前取消不修改 state；已经完成的 state commit 不会重新归类为取消。
+
+Integration 使用 `Task` 与 `CancellationToken`，内部 await 使用 `ConfigureAwait(false)`。State commit 与加载后的通知可能运行在 worker continuation 上。需要访问 Unity API 的 observer 必须把快照送入主线程 dispatcher。
+
+## 诊断
+
+`GetMemorySnapshot()` 返回 `PersistentSettingsMemorySnapshot`，包含 `IsOperationActive`、`StateRevision`、`PersistenceOperationActive`、配置的 payload 与 record 上限、单调递增的 load/save/delete 计数、overlap 拒绝次数，以及最近与峰值 record bytes。快照只读取计数器，不 clone 也不检查设置值，不暴露存储内容。
+
+## 测试
+
+`CycloneGames.Settings.Persistence.Tests.Core` 是由 `UNITY_INCLUDE_TESTS` 门控的 EditMode assembly。`PersistentSettingsTests.cs` 使用内存 storage 与测试 codec，覆盖 missing 与 loaded 结果、损坏与未知格式的 record、校验失败、revision 冲突、observer warning、显式 save 与 delete、预取消操作、overlap 拒绝以及内存快照。
+
+## 问题排查
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| Load 返回 `Missing` | 该 location 下没有 record | State 已持有经过校验的默认值；需要时显式保存。 |
+| Load 返回 `RecordFormatMismatch` | Record 由其他格式 token 写入 | 绑定写入它的 codec，或用当前 profile 重新写入。 |
+| Load 返回 `IntegrityCheckFailed` | Record 被修改或损坏 | 从已知良好的副本恢复；不要绕过 checksum。 |
+| Load 返回 `StateCommitFailed` 且为 `ValidationFailed` | 解码值违反 schema | 检查 record 与 schema；state 保持不变。 |
+| Load 返回 `RevisionConflict` | 异步读取期间另一次提交胜出 | 保留较新的 state。 |
+| Overlap 抛异常 | 同一 integration 实例上两个生命周期操作 | 在 composition owner 中串行化调用。 |
+| Observer warning | 已注册的 observer 抛了可恢复异常 | 单独修正 observer；提交已经是权威结果。 |

@@ -4,9 +4,7 @@ namespace CycloneGames.IO
 {
     internal sealed class SystemAtomicFileOperations : IAtomicFileOperations
     {
-        internal static readonly SystemAtomicFileOperations Instance = new SystemAtomicFileOperations();
-
-        private SystemAtomicFileOperations()
+        internal SystemAtomicFileOperations()
         {
         }
 

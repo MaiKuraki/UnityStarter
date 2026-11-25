@@ -12,7 +12,7 @@ Use the package when behavior depends on proximity: nearest target, count inside
 
 | Assembly | Purpose | Consumer reference |
 | --- | --- | --- |
-| `CycloneGames.BehaviorTree.Runtime.Integrations.Spatial` | Implements the query-to-blackboard publisher over `ISpatialReadOnlyIndex<TItem>`. | Explicit |
+| `CycloneGames.BehaviorTree.Integrations.Spatial` | Implements the query-to-blackboard publisher over `ISpatialReadOnlyIndex<TItem>`. | Explicit |
 | `CycloneGames.BehaviorTree.Integrations.Spatial.Tests.Editor` | Verifies binding, layer filtering, result limits and allocation. | Test Runner only |
 
 The package declares direct UPM dependencies on BehaviorTree and Spatial. The runtime assembly is engine-free (`noEngineReferences: true`) and `autoReferenced: false`.

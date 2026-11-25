@@ -21,7 +21,7 @@
 
 | Assembly | 作用 | 使用方引用方式 |
 | --- | --- | --- |
-| `CycloneGames.BehaviorTree.Runtime.Integrations.EnvQuery` | 执行查询并发布最优候选。 | 显式引用 |
+| `CycloneGames.BehaviorTree.Integrations.EnvQuery` | 执行查询并发布最优候选。 | 显式引用 |
 | `CycloneGames.BehaviorTree.Integrations.EnvQuery.Tests.Editor` | 契约、随机、分配与长稳测试。 | 仅 Test Runner |
 
 两个程序集均为 `noEngineReferences: true`。查询核心与黑板都不依赖引擎，因此同一份适配器既可跑在客户端，也可跑在无头进程。

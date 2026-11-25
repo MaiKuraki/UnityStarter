@@ -2,96 +2,148 @@
 
 [English | 简体中文](README.SCH.md)
 
-File-system storage provider for `CycloneGames.Persistence`. Binds one fully qualified file path to the asynchronous persistence storage contract, delegates bounded reads and atomic writes to `CycloneGames.IO`, and ships a separate Unity assembly that resolves relative paths below `Application.persistentDataPath`.
+`CycloneGames.Persistence.SystemIO` implements `IPersistenceStorage` for [CycloneGames.Persistence](../CycloneGames.Persistence/README.md) with one file per record. Bounded reads and atomic replacement are delegated to `CycloneGames.IO`. A second assembly, `CycloneGames.Persistence.Unity`, resolves portable relative paths below `Application.persistentDataPath`.
 
-## Table of Contents
+Neither assembly chooses a codec or handles settings, save slots, encryption, or game state.
+
+## Contents
 
 - [Overview](#overview)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
+- [Assembly and dependencies](#assembly-and-dependencies)
+- [Getting started](#getting-started)
+- [Public API](#public-api)
+- [Storage contract](#storage-contract)
+- [Path binding](#path-binding)
+- [Atomic write and cancellation](#atomic-write-and-cancellation)
+- [Platform guard](#platform-guard)
+- [Application ownership](#application-ownership)
+- [Tests](#tests)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
 
-`SystemFilePersistenceStorage` implements `IPersistenceStorage` for desktop, mobile, and dedicated-server environments. It performs missing detection and bounded reads in one operation, borrows caller buffers for atomic writes, and treats an already-absent record as success for deletion. The provider owns no worker, cache, queue, retry loop, or timer.
-
-`UnityPersistentStorage` is a separate static factory in the `CycloneGames.Persistence.Unity` assembly that maps portable relative paths (e.g. `"Settings/audio.cgp"`) to `SystemFilePersistenceStorage.CreateSandboxed` below `Application.persistentDataPath`. Call it on the Unity main thread; the returned storage no longer touches Unity APIs.
-
-Neither assembly selects a codec or understands settings, save slots, migrations, encryption, or game state.
-
-### Key Features
-
-- **`IPersistenceStorage` contract** — bounded read with missing detection, atomic borrow-write, idempotent delete
-- **Atomic replacement** — writes use a same-directory temporary file (`WriteBytesAtomicallyAsync` from `CycloneGames.IO`), then replace the destination
-- **Sandboxed path binding** — `CreateSandboxed` rejects traversal, rooted paths, empty segments, reserved device names, and lexical root escape
-- **Platform guard** — WebGL and unqualified console targets throw `PlatformNotSupportedException`; desktop, mobile, and server are pass-through
-- **Unity path adapter** — `UnityPersistentStorage.Create` resolves below `Application.persistentDataPath`; requires Unity main thread at construction only
-
-## Architecture
-
-| Assembly | References | `autoReferenced` |
+| Class | Assembly | Role |
 | --- | --- | --- |
-| `CycloneGames.Persistence.SystemIO` | `CycloneGames.Persistence.Core`, `CycloneGames.IO.Core`, `CycloneGames.IO.SystemIO` | `false` |
-| `CycloneGames.Persistence.Unity` | `CycloneGames.Persistence.Core`, `CycloneGames.Persistence.SystemIO` | `false` |
+| `SystemFilePersistenceStorage` | `CycloneGames.Persistence.SystemIO` | Binds one fully qualified path to the storage contract |
+| `UnityPersistentStorage` | `CycloneGames.Persistence.Unity` | Static factory that resolves a relative path below `Application.persistentDataPath` |
 
-The SystemIO assembly has `noEngineReferences: true`. The Unity assembly has `noEngineReferences: false` (it references `UnityEngine` for `Application.persistentDataPath`). Consumers reference only the assembly their composition root uses.
+The provider owns no worker thread, cache, queue, retry loop, or timer. It holds one normalized path and delegates every file operation to `SystemFileStore`.
 
-The package has no VYaml, MessagePack, Settings, AssetManagement, DI-container, or PlayerPrefs dependency.
+## Assembly and dependencies
 
-## Quick Start
+| Assembly | References | `autoReferenced` | `noEngineReferences` |
+| --- | --- | --- | --- |
+| `CycloneGames.Persistence.SystemIO` | `CycloneGames.Persistence.Core`, `CycloneGames.IO.Core`, `CycloneGames.IO.SystemIO` | `false` | `true` |
+| `CycloneGames.Persistence.Unity` | `CycloneGames.Persistence.Core`, `CycloneGames.Persistence.SystemIO` | `false` | `false` |
 
-Reference from the composition root that owns the record:
+`package.json` declares `com.cyclone-games.persistence` `1.0.0` and `com.cyclone-games.io` `1.0.0`. The Unity assembly references `UnityEngine` for `Application.persistentDataPath`. A consumer references only the assembly its composition root uses.
+
+```mermaid
+flowchart LR
+    App["Application composition root"] --> Unity["CycloneGames.Persistence.Unity"]
+    App --> SysIO["CycloneGames.Persistence.SystemIO"]
+    Unity --> SysIO
+    SysIO --> Core["CycloneGames.Persistence.Core"]
+    SysIO --> IO["CycloneGames.IO.Core / IO.SystemIO"]
+    IO --> FS["Local file system"]
+```
+
+The package has no VYaml, MessagePack, Settings, DI-container, or PlayerPrefs dependency.
+
+## Getting started
+
+### Step 1: bind a path in a Unity host
 
 ```csharp
 using CycloneGames.Persistence;
 using CycloneGames.Persistence.Unity;
 
-IPersistenceStorage storage = UnityPersistentStorage.Create(
-    "Settings/audio.cgp");
+// Call on the Unity main thread (Awake or Start).
+IPersistenceStorage storage =
+    UnityPersistentStorage.Create("Settings/audio.cgp");
 ```
 
-For a pure C# host, supply a fully qualified path:
+`Create` reads `Application.persistentDataPath` once. The returned object is a `SystemFilePersistenceStorage` and no longer calls Unity APIs, so it can be passed to code running off the main thread.
+
+### Step 2: bind a path in a pure C# host
 
 ```csharp
 using System.IO;
-using CycloneGames.Persistence;
 using CycloneGames.Persistence.SystemIO;
 
-IPersistenceStorage storage = new SystemFilePersistenceStorage(
-    Path.GetFullPath("./Data/player.cgp"));
-```
-
-Pass the storage to a `PersistenceStore<T>`. One storage instance represents one record. Use a different trusted path for each independent record or save slot.
-
-## Core Concepts
-
-### Storage contract
-
-| Method | Behavior |
-| --- | --- |
-| `ReadAsync(int maxByteCount, CancellationToken)` | Missing detection + bounded read in one operation. Returns `PersistenceStorageReadResult.Found(byte[])` or `Missing()`. |
-| `WriteAtomicallyAsync(byte[] content, CancellationToken)` | Borrows caller array until task completes. Provider does not retain or mutate the buffer. |
-| `DeleteAsync(CancellationToken)` | Idempotent. Already-missing record is treated as success. |
-| `Location` | Diagnostic metadata. Redact the absolute path before telemetry or player-facing output. |
-
-```csharp
-await storage.WriteAtomicallyAsync(recordBytes, cancellationToken);
-// The array is safe to clear after the task completes.
-```
-
-### Path binding
-
-The direct constructor accepts only fully qualified paths:
-
-```csharp
 var storage = new SystemFilePersistenceStorage(
     Path.GetFullPath("./Data/player.cgp"));
 ```
 
-`CreateSandboxed` accepts a portable relative path under a trusted root:
+The direct constructor accepts fully qualified paths only. `Path.IsPathFullyQualified` is checked before `Path.GetFullPath` normalizes the value into `Location`.
+
+### Step 3: compose the store
+
+```csharp
+using CycloneGames.Persistence;
+using CycloneGames.Persistence.VYaml;
+
+var codec = new VYamlPersistenceCodec<AudioSettings>(
+    GeneratedResolver.Instance);
+
+var profile = new PersistenceProfile<AudioSettings>(
+    codec,
+    new PersistenceLimits(256 * 1024));
+
+var store = new PersistenceStore<AudioSettings>(storage, profile);
+```
+
+One storage instance represents one record. Use a separate trusted path for each independent record or save slot. The parent directory must exist before the first write; the provider does not create directories.
+
+## Public API
+
+### `SystemFilePersistenceStorage`
+
+| Member | Description |
+| --- | --- |
+| `SystemFilePersistenceStorage(string absolutePath)` | Uses `SystemFileStore.Default`; throws `ArgumentException` for a blank or relative path. |
+| `Location` | Normalized absolute path. Diagnostic metadata; redact before telemetry or player-facing output. |
+| `static CreateSandboxed(string trustedRootPath, string relativePath)` | Normalizes a portable relative path and resolves it below the trusted root. |
+| `ReadAsync(int maxByteCount, CancellationToken = default)` | Bounded read with missing detection. Returns `Found(byte[])` or `Missing()`. |
+| `WriteAtomicallyAsync(byte[] content, CancellationToken = default)` | Borrows the array until the task completes. Throws `ArgumentNullException` for null. |
+| `DeleteAsync(CancellationToken = default)` | Idempotent deletion. |
+
+An internal constructor accepts a `SystemFileStore` instance for tests. `EnsurePlatformSupported()` is internal and runs on construction and on every operation.
+
+### `UnityPersistentStorage`
+
+| Member | Description |
+| --- | --- |
+| `static IPersistenceStorage Create(string relativePath)` | Calls `SystemFilePersistenceStorage.CreateSandboxed(Application.persistentDataPath, relativePath)`. |
+
+`Create` must run on the Unity main thread. Path validation is performed by `FilePathSandbox.NormalizeRelativePath`.
+
+## Storage contract
+
+| Method | Behavior |
+| --- | --- |
+| `ReadAsync` | Calls `SystemFileStore.ReadBytesAsync(Location, maxByteCount, token)`. `FileNotFoundException` and `DirectoryNotFoundException` become `Missing()`; other I/O errors propagate. |
+| `WriteAtomicallyAsync` | Calls `SystemFileStore.WriteBytesAtomicallyAsync(Location, content, token)`. The provider does not retain or mutate `content`. |
+| `DeleteAsync` | Checks cancellation, calls `SystemFileStore.Delete(Location)`, and treats a missing entry as success. |
+
+```csharp
+await storage.WriteAtomicallyAsync(recordBytes, cancellationToken);
+// The array is safe to clear once the task completes.
+
+PersistenceStorageReadResult result =
+    await storage.ReadAsync(maxByteCount: 1024, cancellationToken);
+
+if (!result.IsMissing)
+{
+    byte[] record = result.Content; // Ownership transfers to this caller.
+}
+```
+
+When the store calls `ReadAsync`, it passes `PersistenceLimits.MaximumRecordBytes` as `maxByteCount` and takes ownership of the returned array. A direct caller of the storage contract owns the array itself.
+
+## Path binding
+
+`CreateSandboxed` normalizes the relative path before resolving it:
 
 ```csharp
 var storage = SystemFilePersistenceStorage.CreateSandboxed(
@@ -99,66 +151,94 @@ var storage = SystemFilePersistenceStorage.CreateSandboxed(
     "profiles/user.cgp");
 ```
 
-The sandbox rejects: `../..` traversal, rooted paths, empty segments, reserved device names (`CON`, `NUL`, etc.), and lexical root escape.
+`FilePathSandbox.NormalizeRelativePath` rejects:
 
-## Usage Guide
+| Input | Reason |
+| --- | --- |
+| `../outside.save` | Traversal segment `..` |
+| A rooted path such as `Path.GetFullPath(...)` | Not a portable relative path |
+| `Saves//slot.save` | Empty path segment |
+| `CON.save`, `NUL.save` | Reserved Windows device name |
+| A path that lexically escapes the root | Root escape |
 
-### Atomic write and cancellation
+The check is lexical. It does not cover a directory being replaced by a symlink or reparse point between binding and an operation.
 
-Writes create a temporary file in the destination directory. The temp file is written and flushed before replacement. If the platform supplies the atomic primitive, a failed replacement preserves the previous complete destination.
+```mermaid
+flowchart TD
+    Rel["relativePath"] --> Norm["FilePathSandbox.NormalizeRelativePath"]
+    Norm --> Valid{"Portable and inside root?"}
+    Valid -->|no| Throw["ArgumentException"]
+    Valid -->|yes| Resolve["FilePathSandbox.Resolve below trustedRootPath"]
+    Resolve --> Full["Path.IsPathFullyQualified + Path.GetFullPath"]
+    Full --> Location["Bound Location"]
+```
 
-Cancellation is observed during asynchronous transfer. A cancellation request while another writer owns the per-path commit coordinator is observed immediately after this writer enters the coordinator; waiting for the monitor is not cancellable. Once the final cancellation check succeeds inside the coordinator, replacement is the non-cancellable commit point. The operation reports the actual commit outcome — not cancellation after a successful replacement.
+## Atomic write and cancellation
 
-Atomic replacement is not backup rotation and does not guarantee survival of every power-loss or storage-controller failure.
+`WriteBytesAtomicallyAsync` creates a temporary file in the destination directory, writes and flushes it, then replaces the destination. A failed replacement leaves the previous complete record in place when the platform supplies the atomic primitive.
 
-### Temp file cleanup
+```mermaid
+flowchart TD
+    W["WriteAtomicallyAsync"] --> Guard["EnsurePlatformSupported"]
+    Guard --> Args["Validate content array and token"]
+    Args --> Temp["Write .cyclone-*.tmp in the destination directory"]
+    Temp --> Flush["Flush temporary file"]
+    Flush --> Coord["Enter per-path commit coordinator"]
+    Coord --> Check["Final cancellation check"]
+    Check --> Commit["Atomic replace (non-cancellable)"]
+    Commit --> Done["Report actual commit outcome"]
+```
 
-Abrupt process termination can leave a completed `.cyclone-*.tmp` file before commit or cleanup. This provider does not scan or delete temp files at startup. Any cleanup policy must have an explicit owner and validate directory scope, filename pattern, age, and active-writer exclusion before deletion.
+Cancellation is observed during asynchronous transfer. Waiting for the per-path commit coordinator is not cancellable; a cancellation request raised during that wait is observed immediately after this writer enters the coordinator. Once the final check inside the coordinator passes, replacement is the non-cancellable commit point. A successful replacement reports success even if the token is cancelled afterwards.
 
-### Application ownership
+The temporary file uses the `.cyclone-*.tmp` pattern. Abrupt process termination can leave a completed temporary file before commit or cleanup. This provider does not scan or delete temporary files at startup. A cleanup policy needs an explicit owner and must validate directory scope, filename pattern, age, and active-writer exclusion before deleting anything.
 
-The application owns:
-- the trusted root and relative record name
-- the storage and `PersistenceStore<T>` lifetime
-- serialization, migration, validation, and save timing
-- error reporting and user-facing recovery policy
+Atomic replacement is not backup rotation and does not cover every power-loss or storage-controller failure mode.
 
-The provider never deletes a damaged record automatically and uses only its normalized bound path.
-
-## Advanced Topics
-
-### Platform behavior
-
-The System.IO provider targets Windows, Linux, macOS, iOS, Android, and dedicated-server environments after the target Player has verified file-system and atomic-replacement behavior.
-
-WebGL and unqualified console targets fail closed via the `UNITY_SERVER`-based preprocessor guard in `EnsurePlatformSupported()`:
+## Platform guard
 
 ```csharp
 #if UNITY_5_3_OR_NEWER && !UNITY_EDITOR && !UNITY_STANDALONE \
     && !UNITY_IOS && !UNITY_ANDROID && !UNITY_SERVER
-    throw new PlatformNotSupportedException("...");
+    throw new PlatformNotSupportedException(
+        "The System.IO persistence adapter is not enabled for this player platform. " +
+        "Bind a platform save-data implementation to IPersistenceStorage instead.");
 #endif
 ```
 
-They require separate asynchronous providers for IndexedDB or the platform save-data SDK.
+`EnsurePlatformSupported()` throws on WebGL and console targets that are not `UNITY_STANDALONE`, `UNITY_IOS`, `UNITY_ANDROID`, or `UNITY_SERVER`. Editor, desktop, mobile, and dedicated-server builds pass through. Those platforms use a local file system; WebGL needs an IndexedDB-backed `IPersistenceStorage`, and console targets need an adapter built on the platform save-data SDK.
 
-### Path security
+Reads allocate one bounded record array plus bounded adapter overhead. Writes borrow the already materialized record array without a provider-level content clone. Work is O(record bytes).
 
-The lexical path check assumes a trusted local filesystem where another actor cannot replace a directory with a symlink or reparse point between binding and an operation. It is not a hostile-filesystem sandbox boundary. Products with adversarial local writers require a platform provider built around directory handles or equivalent no-follow primitives.
+## Application ownership
 
-### Performance
+The application owns:
 
-The provider is a cold-path buffered implementation. Reads allocate one primary bounded record array plus bounded adapter overhead. Writes borrow an already-materialized record array — no provider-level content clone. Work is O(record bytes). Do not call persistence from a frame loop or input callback.
+- the trusted root and the relative record name;
+- the storage and `PersistenceStore<T>` lifetime;
+- serialization, validation, schema decisions, and save timing;
+- error reporting and the recovery policy shown to the player.
+
+The provider uses only its normalized bound path, never deletes a damaged record on its own, and does not add a retry or quota policy.
+
+## Tests
+
+| Assembly | Coverage |
+| --- | --- |
+| `CycloneGames.Persistence.Tests.SystemIO` | `CreateSandboxed` path rejection, bounded read, atomic write, idempotent delete, missing round trip, and pre-cancelled operations. Tests use a temporary directory created in `SetUp` and removed in `TearDown`. |
+| `CycloneGames.Persistence.Tests.Unity` | Rejection of non-portable relative paths and a successful `Create` that returns an `IPersistenceStorage`. |
+
+Both are EditMode assemblies gated by `UNITY_INCLUDE_TESTS`.
 
 ## Troubleshooting
 
-| Symptom | Cause | Solution |
+| Symptom | Cause | Action |
 | --- | --- | --- |
-| `ArgumentNullException` on write | Passed `null` content array | Always pass the exact record array from `PersistenceStore`. |
-| `ArgumentException` on construction | Path is not fully qualified | Use `Path.GetFullPath` or `CreateSandboxed`. |
-| `ArgumentException` on `CreateSandboxed` | Relative path contains `..` or root escape | Use a portable relative path without traversal. |
-| `PlatformNotSupportedException` on WebGL | SystemIO provider is not compiled for WebGL | Inject an IndexedDB-backed `IPersistenceStorage` adapter. |
-| Write succeeds but old file remains | Atomic replace failed on platform missing the primitive | Verify platform file-system capabilities; test on target hardware. |
-| `FileNotFoundException` wrapping a valid path | Parent directory does not exist | Create directory structure before first write; the provider does not create directories. |
-| `.cyclone-*.tmp` files accumulate | Process terminated during write | Implement a startup cleanup policy with directory scope, pattern, age, and active-writer exclusion checks. |
-| `UnityPersistentStorage.Create` throws on background thread | `Application.persistentDataPath` requires main thread | Call from `Awake` or `Start`; pass the constructed storage as a dependency. |
+| `ArgumentNullException` on write | A null content array was passed | Pass the exact record array produced by `PersistenceStore`. |
+| `ArgumentException` in the constructor | The path is not fully qualified | Use `Path.GetFullPath` or `CreateSandboxed`. |
+| `ArgumentException` in `CreateSandboxed` | The relative path contains `..`, a rooted path, an empty segment, or a reserved device name | Use a portable relative path without traversal. |
+| `PlatformNotSupportedException` on WebGL | The provider throws on that player platform | Inject an IndexedDB-backed `IPersistenceStorage` adapter. |
+| `FileNotFoundException` for a valid path | The parent directory does not exist | Create the directory structure before the first write. |
+| Write succeeds but the old file remains | The platform lacks the atomic replacement primitive | Check the target file-system capabilities on the target hardware. |
+| `.cyclone-*.tmp` files accumulate | The process terminated during a write | Implement a startup cleanup policy with directory scope, pattern, age, and active-writer exclusion checks. |
+| `UnityPersistentStorage.Create` throws on a background thread | `Application.persistentDataPath` requires the main thread | Call it from `Awake` or `Start` and pass the constructed storage as a dependency. |
