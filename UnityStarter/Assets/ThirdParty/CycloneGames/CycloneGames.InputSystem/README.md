@@ -130,7 +130,7 @@ public sealed class PlayerInputBootstrap : MonoBehaviour
 }
 ```
 
-`InitializeWithResult` returns a typed result. Check `IsSuccess` before joining a player. A disposed manager cannot be initialized again, so construct a new one. `InputManager.Instance` exists as a global entry point; explicit construction makes shutdown and tests visible.
+`InitializeWithResult` returns a typed result. Check `IsSuccess` before joining a player. A disposed manager cannot be initialized again, so construct a new one. The manager has no process-wide instance: the composition root constructs it, passes it to loaders and UI components, and disposes it.
 
 The configuration declares which contexts exist. It does not push them. Create and push `InputContext` objects when the matching product state begins.
 
@@ -686,7 +686,7 @@ Subsystem registration invalidates every still-active manager, so play sessions 
 
 ### Optional integrations
 
-**UGUI.** Add an asmdef reference to `CycloneGames.InputSystem.Runtime.Integrations.UGUI` for `InputDeviceIconSet`, `InputDeviceIconSwitcher` and horizontal or vertical menu-navigation components. The assembly owns presentation adapters only.
+**UGUI.** Add an asmdef reference to `CycloneGames.InputSystem.Runtime.Integrations.UGUI` for `InputDeviceIconSet`, `InputDeviceIconSwitcher` and horizontal or vertical menu-navigation components. `InputDeviceIconSwitcher` reads the manager from a scene `InputManagerProvider`; assign it in the inspector. The assembly owns presentation adapters only.
 
 **VContainer.** The integration registers a container-owned `InputManager`, `IInputPlayerResolver`, `IInputSystemInitializer` and diagnostics. The composition root supplies an immutable `InputSystemVContainerOptions`. An entry point is registered only with `registerEntryPoint: true`, and a failed bootstrap is escalated only with `throwOnStartupFailure: true`. Otherwise the result stays in `IInputSystemInitializerDiagnostics.LastResult`. Every consumer in that scope must resolve the same manager.
 

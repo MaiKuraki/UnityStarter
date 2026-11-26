@@ -36,28 +36,14 @@ namespace CycloneGames.InputSystem.Runtime
         private ulong _cachedPreflightContentHash;
         private bool _hasCachedPreflightSuccess;
 
-        private static InputManager _compatibilityInstance;
-        private static int _listeningManagerCount;
         private static bool _isSubsystemResetting;
-        private static readonly HashSet<InputManager> ActiveManagers = new HashSet<InputManager>();
+        private static readonly HashSet<InputManager> _activeManagers = new HashSet<InputManager>();
 
-        public static InputManager Instance
-        {
-            get
-            {
-                EnsureMainThread();
-                return _compatibilityInstance ??= new InputManager();
-            }
-        }
+        /// <summary>Managers constructed and not yet disposed. Used by the teardown hook and by tests.</summary>
+        internal static int ActiveManagerCount => _activeManagers.Count;
 
-        public static bool IsListeningForPlayers
-        {
-            get
-            {
-                EnsureMainThread();
-                return _listeningManagerCount > 0;
-            }
-        }
+        /// <summary>True while this manager is listening for join input.</summary>
+        public bool IsListeningForPlayers => _isListening;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetOnSubsystemRegistration()
@@ -80,16 +66,14 @@ namespace CycloneGames.InputSystem.Runtime
             _isSubsystemResetting = true;
             try
             {
-                if (ActiveManagers.Count > 0)
+                if (_activeManagers.Count > 0)
                 {
-                    var snapshot = new InputManager[ActiveManagers.Count];
-                    ActiveManagers.CopyTo(snapshot);
+                    var snapshot = new InputManager[_activeManagers.Count];
+                    _activeManagers.CopyTo(snapshot);
                     for (int i = 0; i < snapshot.Length; i++) snapshot[i]?.DisposeCore();
                 }
 
-                ActiveManagers.Clear();
-                _compatibilityInstance = null;
-                _listeningManagerCount = 0;
+                _activeManagers.Clear();
             }
             finally
             {
@@ -113,6 +97,7 @@ namespace CycloneGames.InputSystem.Runtime
         private InputConfiguration _configuration;
         private RuntimeInputConfiguration _runtimeConfiguration;
         private InputAction _joinAction;
+        private long _joinActionRevision = -1;
         private CancellationTokenSource _shutdown = new CancellationTokenSource();
         private bool _isInitialized;
         private bool _isDisposed;
@@ -136,7 +121,7 @@ namespace CycloneGames.InputSystem.Runtime
             _limits = limits ?? InputConfigurationLimits.Default;
             UnityEngine.InputSystem.InputSystem.onDeviceChange += OnDeviceTopologyChanged;
             _deviceChangeSubscribed = true;
-            ActiveManagers.Add(this);
+            _activeManagers.Add(this);
         }
 
         public bool IsInitialized
@@ -730,6 +715,15 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (!_isInitialized || !ValidateMainThread(nameof(StartListeningForPlayers))) return;
             if (_isDisposed || _isConfigurationTransitioning) return;
+
+            _isDeviceLockingOnJoinEnabled = lockDeviceOnJoin;
+            if (_joinAction != null && _joinActionRevision == _configurationRevision)
+            {
+                if (!_joinAction.enabled) _joinAction.Enable();
+                _isListening = true;
+                return;
+            }
+
             long configurationRevision = _configurationRevision;
             RuntimeInputConfiguration configuration = _runtimeConfiguration;
             InputAction replacement;
@@ -753,7 +747,6 @@ namespace CycloneGames.InputSystem.Runtime
                 return;
             }
 
-            _isDeviceLockingOnJoinEnabled = lockDeviceOnJoin;
             ReplaceJoinAction(replacement);
         }
 
@@ -761,7 +754,8 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (!ValidateMainThread(nameof(StopListeningForPlayers))) return;
             if (_isConfigurationTransitioning) return;
-            ReplaceJoinAction(null);
+            if (_joinAction != null && _joinAction.enabled) _joinAction.Disable();
+            _isListening = false;
         }
 
         private InputAction CreatePreparedJoinAction(RuntimeInputConfiguration configuration)
@@ -796,19 +790,8 @@ namespace CycloneGames.InputSystem.Runtime
         {
             InputAction previous = _joinAction;
             _joinAction = replacement;
-            bool isListening = replacement != null;
-            if (_isListening != isListening)
-            {
-                _isListening = isListening;
-                if (isListening)
-                {
-                    _listeningManagerCount++;
-                }
-                else if (_listeningManagerCount > 0)
-                {
-                    _listeningManagerCount--;
-                }
-            }
+            _joinActionRevision = replacement != null ? _configurationRevision : -1;
+            _isListening = replacement != null;
 
             if (previous != null && !ReferenceEquals(previous, replacement))
             {
@@ -1720,7 +1703,7 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (_isDisposed) return;
             _isDisposed = true;
-            ActiveManagers.Remove(this);
+            _activeManagers.Remove(this);
             _isInitialized = false;
             _isConfigurationTransitioning = true;
             if (_deviceChangeSubscribed)
@@ -1751,7 +1734,6 @@ namespace CycloneGames.InputSystem.Runtime
                 }
             }
             CleanupSafely(_shutdown.Dispose, "dispose the manager cancellation source");
-            if (ReferenceEquals(_compatibilityInstance, this)) _compatibilityInstance = null;
         }
 
         private static bool ValidateMainThread(string operation)

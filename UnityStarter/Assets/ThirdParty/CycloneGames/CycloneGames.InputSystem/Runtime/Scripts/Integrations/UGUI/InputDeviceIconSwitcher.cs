@@ -18,6 +18,7 @@ namespace CycloneGames.InputSystem.Runtime
         private static readonly LogChannel Log = InputSystemUguiLog.Channel;
 
         [SerializeField] private InputDeviceIconSet iconSet;
+        [SerializeField] private InputManagerProvider managerProvider;
 
         private Image _image;
         private IDisposable _subscription;
@@ -44,8 +45,16 @@ namespace CycloneGames.InputSystem.Runtime
                 return;
             }
 
-            InputManager inputManager = InputManager.Instance;
-            IInputPlayer player = inputManager.GetInputPlayer(0);
+            if (managerProvider == null || managerProvider.Manager == null)
+            {
+#if DEBUG
+                Log.Warning($"[InputDeviceIconSwitcher] {name}: ManagerProvider is not assigned.");
+#endif
+                enabled = false;
+                return;
+            }
+
+            IInputPlayer player = managerProvider.Manager.GetInputPlayer(0);
             if (player == null)
             {
                 return;
