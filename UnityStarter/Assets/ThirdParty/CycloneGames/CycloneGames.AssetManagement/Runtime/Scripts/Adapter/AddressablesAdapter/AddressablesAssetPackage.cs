@@ -19,7 +19,7 @@ using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class AddressablesAssetPackage : IAssetPackage, IAssetBulkLoader, IAssetSceneLoader,
+    internal sealed class AddressablesAssetPackage : IAssetPackage, IMultiAssetLoader, IAssetSceneLoader,
         IAddressablesCatalogMaintenance, IAssetCatalogQuery, IAssetCacheMaintenanceOwner, IAssetStoragePreflight
     {
         private static readonly LogChannel Log = AssetManagementAddressablesLog.Channel;
@@ -49,6 +49,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly Dictionary<long, AddressableSceneHandle> _sceneHandles =
             new Dictionary<long, AddressableSceneHandle>();
         private readonly List<long> _sceneUnloadScratchIds = new List<long>(4);
+        private readonly HashSet<object> _multiAssetResultScratch = AddressablesMultiAssetResult.CreateScratch();
         private readonly object _sceneOwnerToken = new object();
         private readonly Action<long> _onInstantiateDisposed;
         private readonly Action<AddressableDownloader> _onDownloaderDisposed;
@@ -609,7 +610,7 @@ namespace CycloneGames.AssetManagement.Runtime
             return AssetHandleLeases.Create(backend, cancellationToken);
         }
 
-        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(
+        public IMultiAssetHandle<TAsset> LoadMultipleAssetsAsync<TAsset>(
             string location,
             string bucket = null,
             string tag = null,
@@ -625,27 +626,28 @@ namespace CycloneGames.AssetManagement.Runtime
             Cache.AssetCacheKey cacheKey = Cache.AssetCacheService.BuildCacheKey(
                 location,
                 typeof(TAsset),
-                AssetCacheEntryKind.AllAssets);
+                AssetCacheEntryKind.MultipleAssets);
             IReferenceCounted cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null)
             {
-                return AssetHandleLeases.Create((IAllAssetsHandle<TAsset>)cached, cancellationToken);
+                return AssetHandleLeases.Create((IMultiAssetHandle<TAsset>)cached, cancellationToken);
             }
 
             EnsureProviderOperationTailCapacity();
             AsyncOperationHandle<IList<TAsset>> raw = Addressables.LoadAssetsAsync<TAsset>(location, null);
             long id = AssetRuntimeGuard.NextHandleId();
-            var backend = AddressableAllAssetsHandle<TAsset>.Create(
+            var backend = AddressableMultiAssetHandle<TAsset>.Create(
                 id,
                 cacheKey,
                 raw,
+                _multiAssetResultScratch,
                 _cacheService.OnHandleReleased,
                 _operationTails);
             if (HandleTracker.Enabled)
             {
-                HandleTracker.Register(id, _packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
+                HandleTracker.Register(id, _packageName, $"MultipleAssets {typeof(TAsset).Name} : {location}");
             }
-            backend = (AddressableAllAssetsHandle<TAsset>)_cacheService.RegisterNew(
+            backend = (AddressableMultiAssetHandle<TAsset>)_cacheService.RegisterNew(
                 cacheKey,
                 bucket,
                 tag,

@@ -19,8 +19,8 @@ AssetManagement 提供三个 provider（Resources、Addressables、YooAsset）�
 ### 主要特性
 
 - **Resources**：始终可用，适合 bootstrap，仅加载。
-- **Addressables**：catalog 维护、Tags/Locations downloader、scene 加载、bulk 加载。
-- **YooAsset**：manifest 激活、All/Tags/Locations downloader、raw-file 访问、scene 加载、bulk 加载。
+- **Addressables**：catalog 维护、Tags/Locations downloader、scene 加载、多资产加载。
+- **YooAsset**：manifest 激活、All/Tags/Locations downloader、raw-file 访问、scene 加载、多资产加载。
 - **Navigathena**：基于 `IAssetSceneLoader` 的显式 scene 导航。
 - **VContainer**：module 与 retention scheduler 的 DI installer。
 
@@ -30,7 +30,7 @@ AssetManagement 提供三个 provider（Resources、Addressables、YooAsset）�
 | --- | ---: | ---: | ---: |
 | 异步资产加载与 prefab instance | yes | yes | yes |
 | 同步资产加载 | yes | no | yes |
-| Bulk/sub-asset 加载 | no | yes | yes |
+| 多资产加载 | no | yes | yes |
 | Raw-file 访问 | no | no | yes |
 | 异步 scene 加载 | no | yes | yes |
 | 远程 downloader | no | Tags、Locations | All、Tags、Locations |
@@ -117,7 +117,7 @@ public sealed class ResourcesAssetOwner
 }
 ```
 
-Resources 暴露异步与同步单资产加载、runtime 诊断，以及可选的 `IUnityUnusedAssetCollector` 能力。它不暴露 bulk、raw-file、scene、catalog、downloader、storage-preflight 或 provider-maintenance 能力。释放 handle 释放 AssetManagement 所有权，但 Unity 可能保留 native Resources 数据。只在经过测量的阶段边界调度进程全局回收：
+Resources 暴露异步与同步单资产加载、runtime 诊断，以及可选的 `IUnityUnusedAssetCollector` 能力。它不暴露多资产、raw-file、scene、catalog、downloader、storage-preflight 或 provider-maintenance 能力。释放 handle 释放 AssetManagement 所有权，但 Unity 可能保留 native Resources 数据。只在经过测量的阶段边界调度进程全局回收：
 
 ```csharp
 if (package is IUnityUnusedAssetCollector collector)
@@ -164,13 +164,13 @@ Addressables Tags/Locations downloader 使用 provider 全局调度；不暴露 
 
 Addressables 会在 provider destruction 完成前先递减 operation 的 provider 引用计数。如果 `Addressables.Release` 在该 mutation 可能已开始后抛出，adapter 会把 release 结果标记为 indeterminate，保留 handle 与诊断，并绝不重发同一 release 请求。Package shutdown 的每次重试都会保持失败，而不是冒险再次递减或报告虚假成功。应把该 package generation 视为 terminally unhealthy，并为产品外层恢复或进程重启 policy 保留异常证据。
 
-Pending Addressables 操作在每个平台拒绝 `WaitForAsyncComplete`。应 await `Task`。
+Pending Addressables 操作在每个平台拒绝 `WaitForAsyncComplete`。应 await `Task`。adapter 在结果交给调用方前校验它；见 [多资产加载](#多资产加载)。
 
 ### YooAsset 组合
 
 YooAsset provider 目标为 `[3.0.6,4.0.0)` 范围内的稳定版 `com.tuyoogame.yooasset`。asmdef 范围是 compilation envelope；由于 SemVer prerelease 排在对应正式版之前，范围内的 prerelease 可能进入编译，但 activation test 会把它拒绝为不受支持。`YooAssetModule` 独占进程全局 Yoo runtime。每个需要隔离可写缓存的 client instance，都必须通过 file-system parameters 传入各自独立且显式的 `PackageRoot`。
 
-Pending asset、all-assets、raw-file、instance 与 scene 操作会以 `NotSupportedException` 拒绝 `WaitForAsyncComplete`。应 await wrapper 的 `Task`；terminal 状态下的同步等待调用是 no-op。`IAssetSyncOperations` 是提供同步单资产访问的独立能力。
+Pending asset、multi-asset、raw-file、instance 与 scene 操作会以 `NotSupportedException` 拒绝 `WaitForAsyncComplete`。应 await wrapper 的 `Task`；terminal 状态下的同步等待调用是 no-op。`IAssetSyncOperations` 是提供同步单资产访问的独立能力。
 
 ```csharp
 using YooAsset;
@@ -214,12 +214,12 @@ WebGL 上通过 `WebPlayModeOptions` 使用 `WebServerFileSystem` 和/或 `WebNe
 ### 消费者中的能力协商
 
 ```csharp
-if (package is IAssetBulkLoader bulkLoader)
+if (package is IMultiAssetLoader multiAssetLoader)
 {
-    using IAllAssetsHandle<UnityEngine.Sprite> handle =
-        bulkLoader.LoadAllAssetsAsync<UnityEngine.Sprite>("UI/Icons");
+    using IMultiAssetHandle<UnityEngine.AudioClip> handle =
+        multiAssetLoader.LoadMultipleAssetsAsync<UnityEngine.AudioClip>("Audio/Ambient");
     await handle.Task;
-    UseSprites(handle.Assets);
+    PlayAll(handle.Assets);
 }
 
 if (package is IAssetRawFileLoader rawLoader)
@@ -232,7 +232,64 @@ if (package is IAssetRawFileLoader rawLoader)
 }
 ```
 
-Resources 与 Addressables 不实现 `IAssetRawFileLoader`；需要可移植数据加载的产品可以通过普通资产契约编写 `TextAsset` 路径。
+Resources 与 Addressables 不实现 `IAssetRawFileLoader`；需要可移植数据加载的产品可以通过普通资产契约编写 `TextAsset` 路径。按 Multiple Sprite 导入的贴图不是多资产加载的目标；见 [多资产加载](#多资产加载)。
+
+### 多资产加载
+
+`IMultiAssetLoader.LoadMultipleAssetsAsync<T>(location)` 加载该 location 解析到的全部资产，返回一个 `IMultiAssetHandle<T>`。
+
+- 只有 `Assets` 中没有条目重复同一个对象引用时 handle 才成功；出现重复引用时 handle 失败，列表既不被缩短也不被去重。
+- `Assets` 只在 `Task` 成功后填充。pending、faulted 或 canceled 的 handle 读到空列表。
+- 失败的 handle 不进入 idle retention。最后一个 lease 释放时随之释放 provider handle。
+
+Addressables 会为按 Multiple Sprite 导入的贴图的每个子资产建立独立的 catalog location。在 Editor 的 asset-database provider 下，这些 location 加载到的都是第一张 Sprite，所以 `LoadAssetsAsync<Sprite>(texturePath)` 返回的列表里所有元素指向同一个 Sprite。把同一张贴图按 `UnityEngine.Object` 加载，得到的是主贴图，加上为每个子资产重复的那一张 Sprite。adapter 在 provider 操作完成时检查结果，两种形态都会让 handle 失败。
+
+```mermaid
+flowchart TD
+    Call["LoadMultipleAssetsAsync&lt;T&gt;(location)"] --> Cache{"缓存命中"}
+    Cache -- 是 --> Lease["返回调用方 lease"]
+    Cache -- 否 --> Load["Addressables.LoadAssetsAsync"]
+    Load --> Await["等待 provider 操作"]
+    Await -- 失败 --> Fault["以 provider 消息失败"]
+    Await -- 成功 --> Inspect["检查结果引用"]
+    Inspect -- "全部不同" --> Succeed["以 provider 列表完成"]
+    Inspect -- "出现重复引用" --> Reject["失败：N 个条目解析为 D 个不同对象"]
+    Fault --> Retire["最后一个 lease 释放 provider handle"]
+    Reject --> Retire
+    Succeed --> Idle["可进入 idle retention"]
+```
+
+这类贴图的 Sprite 要逐张加载。子资产名是 importer 分配的 Sprite 名称。运行时无法从 catalog 取得：`LoadResourceLocationsAsync(texturePath, typeof(Sprite))` 对每个 location 上报的 `PrimaryKey` 都是贴图路径。把名称保存在产品数据里。
+
+```csharp
+if (package is not IMultiAssetLoader multiAssetLoader)
+{
+    throw new System.NotSupportedException("Multi-asset loading is unavailable.");
+}
+
+// Multiple Sprite 贴图解析出 N 个 location，加载到的都是第一张 Sprite。
+// IMultiAssetHandle<UnityEngine.Sprite> sheet = multiAssetLoader.LoadMultipleAssetsAsync<UnityEngine.Sprite>(promptSheet);
+
+// 改为逐张使用各自的地址。
+string location = promptSheet + "[keyboard_arrow_up]";
+using IAssetHandle<UnityEngine.Sprite> icon = package.LoadAssetAsync<UnityEngine.Sprite>(
+    location, cancellationToken: cancellationToken);
+await icon.Task;
+```
+
+多资产加载适合解析到多个独立资产的 location，例如 label 或文件夹：
+
+```csharp
+using IMultiAssetHandle<UnityEngine.AudioClip> clips =
+    multiAssetLoader.LoadMultipleAssetsAsync<UnityEngine.AudioClip>("Audio/Ambient", cancellationToken: cancellationToken);
+await clips.Task;
+for (int i = 0; i < clips.Assets.Count; i++)
+{
+    PlayOneShot(clips.Assets[i]);
+}
+```
+
+引用检查线性遍历一次；identity set 扩容到已校验过的最大结果后不再分配，容量保留到 package 生命周期结束。
 
 ## 进阶主题
 
@@ -291,6 +348,7 @@ Navigathena 1.1.0 `StandardSceneNavigator` 在 `ISceneHandle.Load` 返回后、`
 | Addressables catalog 更新分裂 authority | 直接调用 `Addressables.UpdateCatalogs` | 所有 catalog mutation 通过 owning package adapter |
 | Downloader 并发无效 | Provider 全局调度 | Addressables：并发由 provider 管理；YooAsset：每个 downloader 显式 1-32，但多个 downloader 与按需 I/O 会叠加 |
 | `WaitForAsyncComplete` 抛出 | Pending Addressables 或 YooAsset 操作 | 改为 await `Task` |
+| 多资产加载失败，消息为 `resolved N entries of ... to D distinct object(s)` | Addressables 为多个子资产 location 返回了同一个对象，通常是 Multiple Sprite 贴图 | 用 `LoadAssetAsync<T>(location[subAssetName])` 逐个加载子资产；多资产加载适合解析到独立资产的 location |
 | YooAsset raw `FilePath` 为空 | 该 API 不返回物理路径 | `FilePath` 为空；await `Task` 并使用 `ReadText`/`ReadBytes` |
 | Scene unload 被拒 | 不同 package 或重建 generation | 使用 originating package generation；重建的 generation 被拒 |
 | VContainer shutdown 不 await | Scope dispose 是同步的 | Dispose `LifetimeScope` 前显式 await `module.DestroyAsync()` |
@@ -301,7 +359,7 @@ Navigathena 1.1.0 `StandardSceneNavigator` 在 `ISceneHandle.Load` 返回后、`
 
 1. 锁定确切 SDK 版本并确认条件 assembly 激活。
 2. 编译 provider 及其 consumer composition asmdef。
-3. 验证成功、失败、取消、重复 await、dispose、每个状态读取的主线程拒绝、跨 package 拒绝与 shutdown。对 YooAsset 的 asset、all-assets、raw-file、instance 与 scene wrapper，确认 pending 同步等待会抛出且不调用 provider wait API、所有 terminal 状态都是 no-op，并且 Dispose、迟到 completion 与 source release 保持 exactly-once。Scene 还需覆盖 `None`/`Physics2D`/`Physics3D` world、非法 enum、重复/并发 activation 与 unload、mutation 前取消与 commit 后 join、失败 load/unload 恢复、Single/外部 unload 与 exactly-once provider 释放。
-4. 演练干净 Player 缓存与内容 build，不仅是 Editor 模拟。
+3. 验证成功、失败、取消、重复 await、dispose、每个状态读取的主线程拒绝、跨 package 拒绝与 shutdown。对 YooAsset 的 asset、multi-asset、raw-file、instance 与 scene wrapper，确认 pending 同步等待会抛出且不调用 provider wait API、所有 terminal 状态都是 no-op，并且 Dispose、迟到 completion 与 source release 保持 exactly-once。Scene 还需覆盖 `None`/`Physics2D`/`Physics3D` world、非法 enum、重复/并发 activation 与 unload、mutation 前取消与 commit 后 join、失败 load/unload 恢复、Single/外部 unload 与 exactly-once provider 释放。对 multi-asset handle，确认重复同一个对象引用的结果会让 handle 失败、`Assets` 读到空列表且永不进入 idle retention，并确认各不相同的结果原样暴露。
+4. 演练干净 Player 缓存与内容 build，以及 Editor 模拟。
 5. 测试 Mono 与 IL2CPP、stripping、禁用 domain reload、网络丢失、存储满、低内存、suspend/resume 与进程终止。
 6. 记录 workload、设备、内容 build 与原始性能证据；不要把 Editor 结果推广到其他平台。

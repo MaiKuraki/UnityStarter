@@ -134,7 +134,7 @@ Application lifetime
 
 ### Handle、取消与线程模型
 
-Asset、all-assets 与 raw-file load 调用返回非池化的调用方 lease。Lease 会钉住一个共享 provider handle，直到 Lease 被 Dispose。成功的 Lease Dispose 幂等，之后访问会抛出 `ObjectDisposedException`。如果后端 Dispose 抛出异常，Lease 会保留该确切后端所有权边，并要求调用方在主线程重试 `Dispose()`；不会先清空引用，再把清理失败静默转化为泄漏。`IOperation.Task` 是 memoized 的，可安全重复或并发 await。第一次终态转换胜出：provider 与 adapter 后处理成功会完成它，真实 provider 或 adapter 失败会使其 fault；调用方等待取消、provider 取消，或 pending 时权威 owner 退役会使其 canceled。`Error` 是诊断文本，不能替代 await `Task`。
+Asset、multi-asset 与 raw-file load 调用返回非池化的调用方 lease。Lease 会钉住一个共享 provider handle，直到 Lease 被 Dispose。成功的 Lease Dispose 幂等，之后访问会抛出 `ObjectDisposedException`。如果后端 Dispose 抛出异常，Lease 会保留该确切后端所有权边，并要求调用方在主线程重试 `Dispose()`；不会先清空引用，再把清理失败静默转化为泄漏。`IOperation.Task` 是 memoized 的，可安全重复或并发 await。第一次终态转换胜出：provider 与 adapter 后处理成功会完成它，真实 provider 或 adapter 失败会使其 fault；调用方等待取消、provider 取消，或 pending 时权威 owner 退役会使其 canceled。`Error` 是诊断文本，不能替代 await `Task`。
 
 `WaitForAsyncComplete` 不是 async flow 的可移植替代品。Addressables 与 YooAsset 对每个 pending 操作都拒绝它；terminal 调用是 no-op。应 await `Task`。同步单资产加载仍是可选的 `IAssetSyncOperations` 能力；scene 只暴露异步生命周期。
 
@@ -165,7 +165,7 @@ bool activated = await maintenance.UpdatePackageManifestAsync(
 | --- | ---: | ---: | ---: |
 | 异步单资产加载与 instance handle | yes | yes | yes |
 | `IAssetSyncOperations` | yes | no | yes |
-| `IAssetBulkLoader` | no | yes | yes |
+| `IMultiAssetLoader` | no | yes | yes |
 | `IAssetRawFileLoader` | no | no | yes |
 | `IAssetSceneLoader` | no | yes | yes |
 | `IAssetCatalogQuery` | no | yes | yes |
@@ -262,6 +262,26 @@ finally
     prefab.Dispose();
 }
 ```
+
+### 多资产加载
+
+暴露 `IMultiAssetLoader` 的 provider 把一个 location 背后的全部资产放进同一个 lease：
+
+```csharp
+if (package is not IMultiAssetLoader multiAssetLoader)
+{
+    throw new NotSupportedException("Multi-asset loading is unavailable.");
+}
+
+using IMultiAssetHandle<AudioClip> clips = multiAssetLoader.LoadMultipleAssetsAsync<AudioClip>(
+    "Audio/Ambient",
+    bucket: "Audio.Ambient",
+    owner: nameof(AmbientAudioPlayer),
+    cancellationToken: cancellationToken);
+await clips.Task;
+```
+
+成功的 handle 列出的对象互不相同。provider 把多个条目映射到同一个对象时，handle 以 `InvalidOperationException` 失败，`Assets` 保持为空。按 Multiple Sprite 导入的贴图会走到这里：用 `LoadAssetAsync<Sprite>(texturePath[subSpriteName])` 逐张加载 Sprite。[Provider 与集成](Documents~/Providers.SCH.md#多资产加载) 说明检查方式和缓存行为。
 
 ### Scene 生命周期
 
@@ -566,6 +586,7 @@ Handle tracking 默认关闭，且有 runtime 成本。Handle registry 默认 16
 | 所有调用方 Dispose 后资产仍在内存 | Idle 缓存条目由 retention policy 保留 | 检查 Cache Debugger，调用定向 bucket clear 或 retention policy，与 Memory Profiler 证据对比 |
 | Handle 看起来泄漏 | 某条路径未 Dispose lease | 启用 handle tracking，确认每条成功/异常/取消路径都 Dispose 调用方 lease；取消 `handle.Task` 不会 Dispose 它 |
 | YooAsset raw 读取返回空值 | Provider load 未完成或失败 | await `IRawFileHandle.Task`；检查 `Error`；保留 `ReadBytes()` 结果而非反复调用 |
+| 多资产加载失败，消息为 `resolved N entries of ... to D distinct object(s)` | Addressables 为多个子资产 location 返回了同一个对象，通常是 Multiple Sprite 贴图 | 用 `LoadAssetAsync<T>(location[subAssetName])` 逐个加载子资产 |
 | Scene 卸载被取消 | 取消只在 mutation 开始前接受 | 加入不可取消的 provider completion；失败的 unload 仍可重试 |
 | 可选集成类型不可用 | 依赖未安装或版本不匹配 | 确认依赖在 `manifest.json`/`packages-lock.json` 中、满足 `versionDefines`、被 composition asmdef 引用 |
 
@@ -575,8 +596,8 @@ Handle tracking 默认关闭，且有 runtime 成本。Handle registry 默认 16
 
 1. 从 Unity 生成的工程构建 `CycloneGames.AssetManagement.Runtime` 与 `CycloneGames.AssetManagement.Runtime.CacheRetention`。
 2. 运行全部 `CycloneGames.AssetManagement.Tests.Editor` EditMode test、`CycloneGames.AssetManagement.Tests.PlayMode` PlayMode test 与两个 `AssetCachePerformanceTests` harness。
-3. Play Mode 下演练 package initialize/load/cancel/dispose、Resources deferred-destruction 屏障、重复 await memoized task、provider-fault 传播、owner 退役取消及迟到 provider 成功/失败与尾任务排空、跨 package 拒绝、手动 activation/unload、低内存 idle 清理、downloader prepare/start 失败与取消、泄漏操作的 shutdown 清理与 shutdown 重试。
-4. 对每个可选 provider，安装确切锁定的依赖，编译 provider assembly，运行 provider 专属测试，演练干净 Player 缓存。对 YooAsset 的 asset、all-assets、raw-file、instance 与 scene wrapper，验证 pending 同步等待会抛出且不调用 provider wait API；succeeded、faulted 与 canceled 终态调用都是 no-op；Dispose、迟到 completion 与 source release 保持 exactly-once。验证 `PrepareAsync` 不执行 payload 写入、total 只在 prepare 后才权威、Dispose 幂等。
+3. Play Mode 下演练 package initialize/load/cancel/dispose、Resources deferred-destruction 屏障、重复 await memoized task、provider-fault 传播、owner 退役取消及迟到 provider 成功/失败与尾任务排空、跨 package 拒绝、手动 activation/unload、低内存 idle 清理、downloader prepare/start 失败与取消、泄漏操作的 shutdown 清理与 shutdown 重试。重复同一个对象引用的多资产结果必须让 handle 失败，且不得进入 idle retention。
+4. 对每个可选 provider，安装确切锁定的依赖，编译 provider assembly，运行 provider 专属测试，演练干净 Player 缓存。对 YooAsset 的 asset、multi-asset、raw-file、instance 与 scene wrapper，验证 pending 同步等待会抛出且不调用 provider wait API；succeeded、faulted 与 canceled 终态调用都是 no-op；Dispose、迟到 completion 与 source release 保持 exactly-once。验证 `PrepareAsync` 不执行 payload 写入、total 只在 prepare 后才权威、Dispose 幂等。
 5. 对每个声明的 Windows、Linux、macOS、iOS、Android、WebGL、Dedicated Server 与批准的主机配置运行 clean-clone CI 与目标 Player build。在 Mono 与 IL2CPP、低存储、磁盘满、权限拒绝、网络丢失、suspend/resume 与禁用 domain reload 下重复关键场景。
 
 Editor 或 CLI assembly 结果不能证明 Player、IL2CPP、长期会话、存储设备或跨平台正确性。在发布验证记录中显式记录每个未执行的验证维度。

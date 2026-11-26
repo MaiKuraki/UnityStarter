@@ -125,7 +125,7 @@ flowchart TD
 
 | 操作 | 调用方 token 取消什么 | 共享/provider 工作 |
 | --- | --- | --- |
-| Asset、bulk、raw load | 该调用方 lease 的等待 | 可能为其他调用方/缓存继续 |
+| Asset、multi-asset、raw load | 该调用方 lease 的等待 | 可能为其他调用方/缓存继续 |
 | Scene load | 核心 scene-load 方法无 token | provider 拥有 load completion |
 | Scene activation/unload | mutation 开始前接受 | 开始后确定性共享 completion |
 | Addressables downloader `PrepareAsync`/`StartAsync` | 该调用方等待 | `Cancel`/`Dispose` 取消每个加入的等待；pending provider 工作排空到 terminal 后才释放 handle |
@@ -302,7 +302,7 @@ var packageOptions = new AssetPackageInitOptions(
 
 显式限制允许每个 idle 段 1-131,072 个条目，`IdleByteBudget` 至少 1 MiB。这些是安全边界。Active 内存不在驱逐权威内。
 
-每次 Active 到 idle 转换时，缓存使用 Unity runtime-size 查询与已知 texture、mesh、audio 类型的无分配 fallback 估算当前值。未知估算绕过 idle retention。bulk 结果的每个成员必须可测量；一个未知成员让聚合绕过。大于完整 idle 预算的候选在准入前被拒绝。
+每次 Active 到 idle 转换时，缓存使用 Unity runtime-size 查询与已知 texture、mesh、audio 类型的无分配 fallback 估算当前值。未知估算绕过 idle retention。多资产结果的每个成员必须可测量；一个未知成员让聚合绕过。大于完整 idle 预算的候选在准入前被拒绝。重复同一个对象引用的多资产结果到不了这一步：adapter 已让 handle 失败，缓存在最后一次释放时直接销毁它。
 
 估算可能误报传递性 bundle、共享依赖、native allocator overhead、GPU/driver 内存、mip streaming 与 provider metadata。`IdleByteBudget` 不是进程内存限制。使用 Memory Profiler、平台 GPU 工具、resident-set 测量与低内存测试。
 
@@ -346,7 +346,8 @@ Handle tracking 默认关闭。启用 stack capture 时，可恢复捕获失败�
 | Addressables shutdown 重复同一个 indeterminate-release 失败 | Provider cleanup 在引用计数 mutation 可能开始后抛出 | 不要再次调用 `Addressables.Release`；保留诊断，并使用产品外层 teardown 或进程重启恢复 policy |
 | Scene unload 被取消 | 取消只在 mutation 开始前接受 | 加入不可取消的 provider completion；失败 unload 仍可重试 |
 | 失败后 `_pendingScene` 仍保留 | unload 完成前清理失败 | 用 `UnloadSceneAsync(_pendingScene, CancellationToken.None)` 重试或通过 package shutdown 收敛；只在成功 unload 后清空字段 |
-| Bulk handle 绕过 idle retention | 某个成员无正估算 | 确保每个成员类型可测量，或接受绕过 |
+| 多资产 handle 绕过 idle retention | 某个成员无正估算 | 确保每个成员类型可测量，或接受绕过 |
+| Addressables 报告成功但多资产加载失败 | Provider 把多个条目映射到同一个对象，通常是 Multiple Sprite 贴图 | 用 `LoadAssetAsync<T>(location[subAssetName])` 逐个加载子资产 |
 | 单个候选超过 idle 预算 | 候选大于完整预算 | 预处理内容尺寸或提高测量预算；候选在准入前被拒 |
 | Detached handle 仍计为 Active | lease 仍有效时 generation 推进 | 现有调用方 lease 仍有效；Dispose 它们以释放；后续 load 解析当前 generation |
 | Scene 阻塞后续 scene 操作 | 手动激活屏障未解决 | 在开始新 unload 阶段前按创建顺序解决每个 manual scene |
