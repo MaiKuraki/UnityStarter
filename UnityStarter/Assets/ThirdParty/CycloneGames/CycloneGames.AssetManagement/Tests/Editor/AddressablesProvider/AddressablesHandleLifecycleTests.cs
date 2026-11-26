@@ -135,8 +135,8 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         {
             AssetRuntime.AddressableAssetHandle<Texture2D> asset =
                 CreateUninitialized<AssetRuntime.AddressableAssetHandle<Texture2D>>();
-            AssetRuntime.AddressableAllAssetsHandle<Texture2D> allAssets =
-                CreateUninitialized<AssetRuntime.AddressableAllAssetsHandle<Texture2D>>();
+            AssetRuntime.AddressableMultiAssetHandle<Texture2D> multiAsset =
+                CreateUninitialized<AssetRuntime.AddressableMultiAssetHandle<Texture2D>>();
             AssetRuntime.AddressableInstantiateHandle instance =
                 CreateUninitialized<AssetRuntime.AddressableInstantiateHandle>();
 
@@ -144,9 +144,9 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             AssertRequiresMainThread(() => { _ = asset.Error; });
             AssertRequiresMainThread(() => { _ = asset.Asset; });
             AssertRequiresMainThread(() => { _ = asset.AssetObject; });
-            AssertRequiresMainThread(() => { _ = allAssets.Progress; });
-            AssertRequiresMainThread(() => { _ = allAssets.Error; });
-            AssertRequiresMainThread(() => { _ = allAssets.Assets; });
+            AssertRequiresMainThread(() => { _ = multiAsset.Progress; });
+            AssertRequiresMainThread(() => { _ = multiAsset.Error; });
+            AssertRequiresMainThread(() => { _ = multiAsset.Assets; });
             AssertRequiresMainThread(() => { _ = instance.Progress; });
             AssertRequiresMainThread(() => { _ = instance.Error; });
             AssertRequiresMainThread(() => { _ = instance.Instance; });

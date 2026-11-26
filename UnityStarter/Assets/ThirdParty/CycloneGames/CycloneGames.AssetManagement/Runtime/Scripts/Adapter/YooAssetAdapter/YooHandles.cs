@@ -201,7 +201,7 @@ namespace CycloneGames.AssetManagement.Runtime
         long IAssetMemoryFootprint.EstimateRuntimeBytes() => Cache.AssetMemoryEstimator.Estimate(AssetObject);
     }
 
-    internal sealed class YooAllAssetsHandle<TAsset> : IAllAssetsHandle<TAsset>, IReferenceCounted,
+    internal sealed class YooMultiAssetHandle<TAsset> : IMultiAssetHandle<TAsset>, IReferenceCounted,
         IInternalCacheable, IAssetMemoryFootprint, IAssetBackendLifetime, ITrackedAssetHandle
         where TAsset : UnityEngine.Object
     {
@@ -242,7 +242,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private int _refCount;
         private int _releaseState;
 
-        private YooAllAssetsHandle(
+        private YooMultiAssetHandle(
             long id,
             Cache.AssetCacheKey cacheKey,
             AllAssetsHandle raw,
@@ -260,13 +260,13 @@ namespace CycloneGames.AssetManagement.Runtime
             _refCount = 1;
         }
 
-        public static YooAllAssetsHandle<TAsset> Create(
+        public static YooMultiAssetHandle<TAsset> Create(
             long id,
             Cache.AssetCacheKey cacheKey,
             AllAssetsHandle raw,
             Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
             AssetOperationTailTracker operationTails) =>
-            new YooAllAssetsHandle<TAsset>(id, cacheKey, raw, onReleaseToCache, operationTails);
+            new YooMultiAssetHandle<TAsset>(id, cacheKey, raw, onReleaseToCache, operationTails);
 
         public bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
         public float Progress => _raw?.Progress ?? 0f;
@@ -293,7 +293,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
-                Log.Error("[YooAllAssetsHandle] Retain called on a disposed handle.");
+                Log.Error("[YooMultiAssetHandle] Retain called on a disposed handle.");
                 return;
             }
 
@@ -311,7 +311,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (count < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                Log.Error("[YooAllAssetsHandle] Release called more times than Retain.");
+                Log.Error("[YooMultiAssetHandle] Release called more times than Retain.");
                 return;
             }
 

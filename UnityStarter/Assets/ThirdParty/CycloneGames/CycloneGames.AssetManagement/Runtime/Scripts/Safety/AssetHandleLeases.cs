@@ -27,12 +27,12 @@ namespace CycloneGames.AssetManagement.Runtime
             return new AssetHandleLease<TAsset>(handle, cancellationToken);
         }
 
-        public static IAllAssetsHandle<TAsset> Create<TAsset>(
-            IAllAssetsHandle<TAsset> handle,
+        public static IMultiAssetHandle<TAsset> Create<TAsset>(
+            IMultiAssetHandle<TAsset> handle,
             CancellationToken cancellationToken = default)
             where TAsset : UnityEngine.Object
         {
-            return new AllAssetsHandleLease<TAsset>(handle, cancellationToken);
+            return new MultiAssetHandleLease<TAsset>(handle, cancellationToken);
         }
 
         public static IRawFileHandle Create(
@@ -108,14 +108,14 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
-        private sealed class AllAssetsHandleLease<TAsset> : IAllAssetsHandle<TAsset>
+        private sealed class MultiAssetHandleLease<TAsset> : IMultiAssetHandle<TAsset>
             where TAsset : UnityEngine.Object
         {
-            private IAllAssetsHandle<TAsset> _handle;
+            private IMultiAssetHandle<TAsset> _handle;
             private readonly UniTask _task;
             private int _disposeState;
 
-            public AllAssetsHandleLease(IAllAssetsHandle<TAsset> handle, CancellationToken cancellationToken)
+            public MultiAssetHandleLease(IMultiAssetHandle<TAsset> handle, CancellationToken cancellationToken)
             {
                 _handle = handle ?? throw new ArgumentNullException(nameof(handle));
                 _task = CreateWaitTask(handle, cancellationToken);
@@ -152,11 +152,11 @@ namespace CycloneGames.AssetManagement.Runtime
                 DisposeRetainingOnFailure(ref _handle, ref _disposeState);
             }
 
-            private IAllAssetsHandle<TAsset> GetHandle()
+            private IMultiAssetHandle<TAsset> GetHandle()
             {
-                IAllAssetsHandle<TAsset> handle = _handle ?? throw new ObjectDisposedException(
-                    nameof(AllAssetsHandleLease<TAsset>));
-                ThrowIfBackendDisposed(handle, nameof(AllAssetsHandleLease<TAsset>));
+                IMultiAssetHandle<TAsset> handle = _handle ?? throw new ObjectDisposedException(
+                    nameof(MultiAssetHandleLease<TAsset>));
+                ThrowIfBackendDisposed(handle, nameof(MultiAssetHandleLease<TAsset>));
                 return handle;
             }
         }

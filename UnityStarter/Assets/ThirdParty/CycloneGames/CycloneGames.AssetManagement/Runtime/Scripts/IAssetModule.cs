@@ -204,10 +204,16 @@ namespace CycloneGames.AssetManagement.Runtime
 		IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string bucket = null, string tag = null, string owner = null) where TAsset : UnityEngine.Object;
 	}
 
-	/// <summary>Optional asynchronous bulk/sub-asset loading capability.</summary>
-	public interface IAssetBulkLoader
+	/// <summary>Optional capability for loading every asset a location resolves to.</summary>
+	/// <remarks>
+	/// A successful <see cref="IMultiAssetHandle{TAsset}"/> lists distinct objects. If the provider maps several
+	/// entries to one object, the handle faults; the list is neither shortened nor deduplicated. Textures
+	/// imported as Multiple Sprite produce this shape, so load their sprites one at a time with
+	/// <c>LoadAssetAsync&lt;Sprite&gt;(texturePath[subSpriteName])</c>.
+	/// </remarks>
+	public interface IMultiAssetLoader
 	{
-		IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object;
+		IMultiAssetHandle<TAsset> LoadMultipleAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object;
 	}
 
 	/// <summary>Optional raw-file loading capability for provider-owned file content.</summary>
@@ -330,10 +336,11 @@ namespace CycloneGames.AssetManagement.Runtime
 	}
 
 	/// <summary>
-	/// Caller-owned bulk-asset lease with the same retryable disposal contract as
-	/// <see cref="IAssetHandle{TAsset}"/>.
+	/// Caller-owned multi-asset lease with the same retryable disposal contract as
+	/// <see cref="IAssetHandle{TAsset}"/>. <see cref="Assets"/> is populated only after
+	/// <see cref="IOperation.Task"/> succeeds; a pending, faulted, or canceled handle reads as empty.
 	/// </summary>
-	public interface IAllAssetsHandle<out TAsset> : IOperation, IDisposable where TAsset : UnityEngine.Object
+	public interface IMultiAssetHandle<out TAsset> : IOperation, IDisposable where TAsset : UnityEngine.Object
 	{
 		IReadOnlyList<TAsset> Assets { get; }
 	}

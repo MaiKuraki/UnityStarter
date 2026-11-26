@@ -404,7 +404,7 @@ public sealed class AssetTelemetryOwner
 | 每个 Addressables/Yoo package 的保留 downloader scope 值 | 262,144 |
 | Addressables catalog-label query | tag：4,096 字符；唯一 location：65,536；结果文本：8 Mi 字符 |
 | 每个 package 的 Addressables pending catalog-label query | 32 |
-| Addressables pending asset/all-assets/instantiate/catalog-query tail | 16,384 |
+| Addressables pending asset/multi-asset/instantiate/catalog-query tail | 16,384 |
 | Yoo downloader 并发 | 1-32 |
 | Yoo 重试次数 | 0-16 |
 | Yoo 维护超时 | 1-3,600 秒 |

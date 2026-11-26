@@ -224,6 +224,15 @@ namespace CycloneGames.InputSystem.Runtime
         /// <summary>Resolved device fallback sprites, resolved on demand.</summary>
         public Sprite ResolvedTouchIcon => _resolvedTouchIcon;
 
+        /// <summary>Key of the keyboard and mouse fallback icon.</summary>
+        public InputPromptKey KeyboardMouseKey => keyboardMouseIcon.Key;
+
+        /// <summary>Key of the gamepad fallback icon.</summary>
+        public InputPromptKey GamepadKey => gamepadIcon.Key;
+
+        /// <summary>Key of the touch fallback icon.</summary>
+        public InputPromptKey TouchKey => touchIcon.Key;
+
         /// <summary>Source used by every prompt entry.</summary>
         public InputPromptIconSource Source => iconSource;
 
@@ -249,7 +258,7 @@ namespace CycloneGames.InputSystem.Runtime
             ClearCache();
         }
 
-        /// <summary>Drops cached sprites but keeps the provider, so a disabled asset resumes without reconfiguration.</summary>
+        /// <summary>Drops cached sprites when the asset is disabled or unloaded.</summary>
         private void OnDisable()
         {
             ClearCache();

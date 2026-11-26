@@ -16,12 +16,12 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             const string location = "Assets/Test/Icon.png";
 
             AssetCacheKey assetKey = AssetCacheService.BuildCacheKey(location, typeof(Texture2D), AssetCacheEntryKind.Asset);
-            AssetCacheKey allAssetsKey = AssetCacheService.BuildCacheKey(location, typeof(Texture2D), AssetCacheEntryKind.AllAssets);
+            AssetCacheKey multiAssetKey = AssetCacheService.BuildCacheKey(location, typeof(Texture2D), AssetCacheEntryKind.MultipleAssets);
             AssetCacheKey rawKey = AssetCacheService.BuildCacheKey(location, null, AssetCacheEntryKind.RawFile);
 
-            Assert.AreNotEqual(assetKey, allAssetsKey);
+            Assert.AreNotEqual(assetKey, multiAssetKey);
             Assert.AreNotEqual(assetKey, rawKey);
-            Assert.AreNotEqual(allAssetsKey, rawKey);
+            Assert.AreNotEqual(multiAssetKey, rawKey);
         }
 
         [Test]
@@ -74,19 +74,19 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
-        public void Cache_Does_Not_Return_Asset_For_AllAssets_Key()
+        public void Cache_Does_Not_Return_Asset_For_MultipleAssets_Key()
         {
             const string location = "Assets/Test/Icon.png";
             var package = new RecordingAssetPackage();
             using var cache = new AssetCacheService(package, maxTrialEntries: 1, maxMainEntries: 1);
 
             AssetCacheKey assetKey = AssetCacheService.BuildCacheKey(location, typeof(Texture2D), AssetCacheEntryKind.Asset);
-            AssetCacheKey allAssetsKey = AssetCacheService.BuildCacheKey(location, typeof(Texture2D), AssetCacheEntryKind.AllAssets);
+            AssetCacheKey multiAssetKey = AssetCacheService.BuildCacheKey(location, typeof(Texture2D), AssetCacheEntryKind.MultipleAssets);
             var handle = new TestAssetHandle<Texture2D>();
 
             cache.RegisterNew(assetKey, bucket: null, tag: null, owner: null, handle);
 
-            Assert.IsNull(cache.Get(allAssetsKey, bucket: null, tag: null, owner: null));
+            Assert.IsNull(cache.Get(multiAssetKey, bucket: null, tag: null, owner: null));
         }
 
         [Test]
