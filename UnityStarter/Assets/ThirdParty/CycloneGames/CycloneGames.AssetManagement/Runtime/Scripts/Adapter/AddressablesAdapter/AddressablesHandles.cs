@@ -341,8 +341,8 @@ namespace CycloneGames.AssetManagement.Runtime
             Raw.IsValid() ? Cache.AssetMemoryEstimator.Estimate(Raw.Result) : 0L;
     }
 
-    internal sealed class AddressableAllAssetsHandle<TAsset> : AddressablesOperationHandle,
-        IAllAssetsHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint,
+    internal sealed class AddressableMultiAssetHandle<TAsset> : AddressablesOperationHandle,
+        IMultiAssetHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint,
         IAssetBackendLifetime
         where TAsset : UnityEngine.Object
     {
@@ -363,10 +363,12 @@ namespace CycloneGames.AssetManagement.Runtime
         private AsyncOperationHandle<IList<TAsset>> _raw;
         private readonly ReadOnlyListAdapter _assets = new ReadOnlyListAdapter();
         private Cache.AssetCacheKey _cacheKey;
+        private HashSet<object> _multiAssetResultScratch;
         private Action<Cache.AssetCacheKey, IReferenceCounted> _onReleaseToCache;
         private AssetOperationCompletion _completion;
         private int _refCount;
         private int _releaseState;
+        private Exception _resultFailure;
         private Exception _releaseFailure;
 
         public override bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
@@ -386,10 +388,16 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 AssetRuntimeGuard.EnsureMainThread();
                 return _releaseFailure?.Message ??
+                       _resultFailure?.Message ??
                        (_raw.IsValid() ? _raw.OperationException?.Message ?? string.Empty : string.Empty);
             }
         }
         public override UniTask Task => _completion.Task;
+
+        /// <summary>
+        /// The provider list, exposed only while the handle has completed successfully. A rejected or failed
+        /// result reads as an empty list so no caller can consume entries that were never mapped to its request.
+        /// </summary>
         public IReadOnlyList<TAsset> Assets
         {
             get
@@ -398,7 +406,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 _assets.SetSource(
                     !AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) &&
                     _raw.IsValid() &&
-                    _raw.IsDone
+                    _completion.Task.Status == UniTaskStatus.Succeeded
                         ? _raw.Result
                         : null);
                 return _assets;
@@ -406,26 +414,41 @@ namespace CycloneGames.AssetManagement.Runtime
         }
         public int RefCount => Volatile.Read(ref _refCount);
 
-        public static AddressableAllAssetsHandle<TAsset> Create(
+        public static AddressableMultiAssetHandle<TAsset> Create(
             long id,
             Cache.AssetCacheKey cacheKey,
             AsyncOperationHandle<IList<TAsset>> raw,
+            HashSet<object> multiAssetResultScratch,
             Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
             AssetOperationTailTracker operationTails)
         {
-            var handle = new AddressableAllAssetsHandle<TAsset>
+            var handle = new AddressableMultiAssetHandle<TAsset>
             {
                 Id = id,
                 _cacheKey = cacheKey,
                 _raw = raw,
+                _multiAssetResultScratch = multiAssetResultScratch ?? throw new ArgumentNullException(nameof(multiAssetResultScratch)),
                 _onReleaseToCache = onReleaseToCache,
                 _refCount = 1,
             };
-            handle._completion = AssetOperationCompletion.Start(AddressablesOperationTask.CompleteAsync(
-                raw,
-                "Addressables failed to load the requested asset collection."),
-                operationTails);
+            handle._completion = AssetOperationCompletion.Start(handle.CompleteAsync(), operationTails);
             return handle;
+        }
+
+        private async UniTask CompleteAsync()
+        {
+            await AddressablesOperationTask.CompleteAsync(
+                _raw,
+                $"Addressables failed to load the asset collection '{_cacheKey.Location}'.");
+
+            // Several entries that resolve to one object describe none of the requested content;
+            // the handle fails instead of publishing them.
+            Exception failure = AddressablesMultiAssetResult.Inspect(_raw.Result, _cacheKey.Location, _multiAssetResultScratch);
+            if (failure != null)
+            {
+                _resultFailure = failure;
+                throw failure;
+            }
         }
 
         public override void WaitForAsyncComplete()
@@ -438,7 +461,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
-                Log.Error("[AddressableAllAssetsHandle] Retain called on a disposed handle.");
+                Log.Error("[AddressableMultiAssetHandle] Retain called on a disposed handle.");
                 return;
             }
 
@@ -456,7 +479,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (newCount < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                Log.Error("[AddressableAllAssetsHandle] Release called more times than Retain.");
+                Log.Error("[AddressableMultiAssetHandle] Release called more times than Retain.");
                 return;
             }
 
@@ -501,7 +524,7 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 _releaseFailure = AssetRuntimeGuard.IsRecoverableException(exception)
                     ? AddressablesProviderReleaseStateMachine.CreateIndeterminateFailure(
-                        nameof(AddressableAllAssetsHandle<TAsset>),
+                        nameof(AddressableMultiAssetHandle<TAsset>),
                         exception)
                     : exception;
                 AddressablesProviderReleaseStateMachine.MarkOutcomeIndeterminate(ref _releaseState);
@@ -516,6 +539,8 @@ namespace CycloneGames.AssetManagement.Runtime
             _raw = default;
             _assets.Clear();
             _cacheKey = default;
+            _multiAssetResultScratch = null;
+            _resultFailure = null;
             _onReleaseToCache = null;
             AddressablesProviderReleaseStateMachine.MarkReleased(ref _releaseState);
             HandleTracker.Unregister(Id);

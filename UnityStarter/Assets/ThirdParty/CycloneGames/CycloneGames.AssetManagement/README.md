@@ -134,7 +134,7 @@ The application owner constructs and shuts down the module. The module owns name
 
 ### Handle, cancellation, and thread model
 
-Asset, all-assets, and raw-file load calls return non-pooled caller leases. A lease pins a shared provider handle until the lease is disposed. Successful lease disposal is idempotent, and access afterwards throws `ObjectDisposedException`. If backend disposal throws, the lease retains that exact backend ownership edge and the caller must retry `Dispose()` on the main thread; it never clears the reference first and silently converts a cleanup failure into a leak. `IOperation.Task` is memoized and safe for repeated or concurrent awaiters. Its first terminal transition wins: provider plus adapter post-processing success completes it, a real provider or adapter failure faults it, and caller-wait cancellation, provider cancellation, or authoritative owner retirement while pending cancels it. `Error` is diagnostic text that never replaces awaiting `Task`.
+Asset, multi-asset, and raw-file load calls return non-pooled caller leases. A lease pins a shared provider handle until the lease is disposed. Successful lease disposal is idempotent, and access afterwards throws `ObjectDisposedException`. If backend disposal throws, the lease retains that exact backend ownership edge and the caller must retry `Dispose()` on the main thread; it never clears the reference first and silently converts a cleanup failure into a leak. `IOperation.Task` is memoized and safe for repeated or concurrent awaiters. Its first terminal transition wins: provider plus adapter post-processing success completes it, a real provider or adapter failure faults it, and caller-wait cancellation, provider cancellation, or authoritative owner retirement while pending cancels it. `Error` is diagnostic text that never replaces awaiting `Task`.
 
 `WaitForAsyncComplete` is not a portable replacement for async flow. Addressables and YooAsset reject it for every pending operation; terminal calls are no-ops. Await `Task`. Synchronous single-asset access is an optional `IAssetSyncOperations` capability; scenes only expose the asynchronous lifecycle.
 
@@ -165,7 +165,7 @@ bool activated = await maintenance.UpdatePackageManifestAsync(
 | --- | ---: | ---: | ---: |
 | Async single-asset load and instance handle | yes | yes | yes |
 | `IAssetSyncOperations` | yes | no | yes |
-| `IAssetBulkLoader` | no | yes | yes |
+| `IMultiAssetLoader` | no | yes | yes |
 | `IAssetRawFileLoader` | no | no | yes |
 | `IAssetSceneLoader` | no | yes | yes |
 | `IAssetCatalogQuery` | no | yes | yes |
@@ -262,6 +262,26 @@ finally
     prefab.Dispose();
 }
 ```
+
+### Multi-asset loading
+
+Providers that expose `IMultiAssetLoader` return every asset behind one location through a single lease:
+
+```csharp
+if (package is not IMultiAssetLoader multiAssetLoader)
+{
+    throw new NotSupportedException("Multi-asset loading is unavailable.");
+}
+
+using IMultiAssetHandle<AudioClip> clips = multiAssetLoader.LoadMultipleAssetsAsync<AudioClip>(
+    "Audio/Ambient",
+    bucket: "Audio.Ambient",
+    owner: nameof(AmbientAudioPlayer),
+    cancellationToken: cancellationToken);
+await clips.Task;
+```
+
+A successful handle lists distinct objects. If the provider maps several entries to one object, the handle faults with `InvalidOperationException` and `Assets` stays empty. Textures imported as Multiple Sprite take this path: load their sprites one at a time with `LoadAssetAsync<Sprite>(texturePath[subSpriteName])`. [Providers and integrations](Documents~/Providers.md#multi-asset-loading) covers the check and cache behavior.
 
 ### Scene lifecycle
 
@@ -566,6 +586,7 @@ Operational warnings, provider failures, cache-retention events, and Editor vali
 | Asset remains in memory after all callers dispose | Idle cache entry held by the retention policy | Inspect Cache Debugger, call a targeted bucket clear or retention policy, compare with Memory Profiler evidence |
 | Handle appears leaked | Lease not disposed on some path | Enable handle tracking, confirm every success/exception/cancellation path disposes the caller lease; cancelling `handle.Task` does not dispose it |
 | YooAsset raw read returns empty value | Provider load not yet complete or failed | Await `IRawFileHandle.Task`; inspect `Error`; retain `ReadBytes()` result instead of calling repeatedly |
+| Multi-asset load faults with `resolved N entries of ... to D distinct object(s)` | Addressables returned one object for several sub-asset locations, typically a Multiple Sprite texture | Load the sub-assets individually with `LoadAssetAsync<T>(location[subAssetName])` |
 | Scene unload was cancelled | Cancellation accepted only before mutation starts | Join the non-cancellable provider completion; a failed unload remains retryable |
 | Optional integration types unavailable | Dependency not installed or version mismatch | Confirm dependency in `manifest.json`/`packages-lock.json`, satisfies `versionDefines`, and is referenced by the composition asmdef |
 
@@ -575,8 +596,8 @@ Minimum validation for a runtime change:
 
 1. Build `CycloneGames.AssetManagement.Runtime` and `CycloneGames.AssetManagement.Runtime.CacheRetention` from Unity-generated projects.
 2. Run all `CycloneGames.AssetManagement.Tests.Editor` EditMode tests, `CycloneGames.AssetManagement.Tests.PlayMode` PlayMode tests, and both `AssetCachePerformanceTests` harnesses.
-3. In Play Mode, exercise package initialize/load/cancel/dispose, Resources' deferred-destruction barrier, repeated awaits of memoized tasks, provider-fault propagation, owner-retirement cancellation with late provider success/failure and tail drain, cross-package rejection, manual activation/unload, low-memory idle clearing, downloader prepare/start faults and cancellation, shutdown cleanup of leaked operations, and shutdown retry.
-4. For each optional provider, install the exact locked dependency, compile the provider assembly, run provider-specific tests, and exercise a clean Player cache. For YooAsset asset, all-assets, raw-file, instance, and scene wrappers, verify pending synchronous waits throw without invoking provider wait APIs; succeeded, faulted, and canceled terminal calls are no-ops; and disposal, late completion, and source release remain exactly-once. Verify `PrepareAsync` performs no payload writes, totals become authoritative only after preparation, and disposal is idempotent.
+3. In Play Mode, exercise package initialize/load/cancel/dispose, Resources' deferred-destruction barrier, repeated awaits of memoized tasks, provider-fault propagation, owner-retirement cancellation with late provider success/failure and tail drain, cross-package rejection, manual activation/unload, low-memory idle clearing, downloader prepare/start faults and cancellation, shutdown cleanup of leaked operations, and shutdown retry. Multi-asset results that repeat one object reference must fault the handle and stay out of idle retention.
+4. For each optional provider, install the exact locked dependency, compile the provider assembly, run provider-specific tests, and exercise a clean Player cache. For YooAsset asset, multi-asset, raw-file, instance, and scene wrappers, verify pending synchronous waits throw without invoking provider wait APIs; succeeded, faulted, and canceled terminal calls are no-ops; and disposal, late completion, and source release remain exactly-once. Verify `PrepareAsync` performs no payload writes, totals become authoritative only after preparation, and disposal is idempotent.
 5. Run clean-clone CI and target Player builds for every claimed Windows, Linux, macOS, iOS, Android, WebGL, Dedicated Server, and approved console configuration. Repeat critical scenarios under Mono and IL2CPP, low storage, disk full, denied permissions, network loss, suspend/resume, and domain reload disabled.
 
 An Editor or CLI assembly result does not establish Player, IL2CPP, long-session, storage-device, or cross-platform correctness. Record every unexecuted validation dimension explicitly in the release validation record.

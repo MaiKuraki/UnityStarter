@@ -51,7 +51,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         long IAssetMemoryFootprint.EstimateRuntimeBytes() => 1L;
     }
 
-    internal sealed class TestAllAssetsHandle<TAsset> : IAllAssetsHandle<TAsset>, IReferenceCounted,
+    internal sealed class TestMultiAssetHandle<TAsset> : IMultiAssetHandle<TAsset>, IReferenceCounted,
         IAssetMemoryFootprint where TAsset : Object
     {
         public IReadOnlyList<TAsset> Assets { get; set; } = new List<TAsset>(0);
@@ -113,7 +113,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public void WaitForAsyncComplete() { }
     }
 
-    internal sealed class RecordingAssetPackage : IAssetPackage, IAssetSyncOperations, IAssetBulkLoader,
+    internal sealed class RecordingAssetPackage : IAssetPackage, IAssetSyncOperations, IMultiAssetLoader,
         IAssetRawFileLoader, IAssetSceneLoader,
         IAssetStoragePreflight
     {
@@ -157,10 +157,10 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             return new TestAssetHandle<TAsset>();
         }
 
-        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : Object
+        public IMultiAssetHandle<TAsset> LoadMultipleAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : Object
         {
-            Record("LoadAllAssetsAsync", location, bucket, tag, owner);
-            return new TestAllAssetsHandle<TAsset>();
+            Record("LoadMultipleAssetsAsync", location, bucket, tag, owner);
+            return new TestMultiAssetHandle<TAsset>();
         }
 
         public IRawFileHandle LoadRawFileSync(string location, string bucket = null, string tag = null, string owner = null)

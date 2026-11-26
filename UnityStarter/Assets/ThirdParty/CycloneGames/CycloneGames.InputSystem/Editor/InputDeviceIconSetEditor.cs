@@ -65,7 +65,6 @@ namespace CycloneGames.InputSystem.Editor
             if (byKey)
             {
                 ValidateKeys();
-                ValidateAssets();
             }
 
             DrawDerivedFields();
@@ -91,8 +90,21 @@ namespace CycloneGames.InputSystem.Editor
         private void DrawDeviceIcon(string field, string label, bool byKey)
         {
             SerializedProperty property = serializedObject.FindProperty(field);
-            if (byKey) DrawKeyFields(property, label);
-            else EditorGUILayout.PropertyField(property.FindPropertyRelative("direct"), new GUIContent(label + " Icon"));
+            if (!byKey)
+            {
+                SerializedProperty direct = property.FindPropertyRelative("direct");
+                EditorGUI.BeginChangeCheck();
+                var sprite = (Sprite)EditorGUILayout.ObjectField(
+                    new GUIContent(label + " Icon", "Sprite stored in this asset."),
+                    direct.objectReferenceValue as Sprite, typeof(Sprite), false);
+                if (EditorGUI.EndChangeCheck()) direct.objectReferenceValue = sprite;
+                return;
+            }
+
+            EditorGUILayout.LabelField(label + " Icon", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+            DrawKeyFields(property, label);
+            EditorGUI.indentLevel--;
         }
 
         private void DrawEntries(SerializedProperty array, string title, string hint, string pathField,
@@ -139,7 +151,7 @@ namespace CycloneGames.InputSystem.Editor
         {
             SerializedProperty source = icon.FindPropertyRelative("keySource");
             EditorGUILayout.PropertyField(source, new GUIContent("Key Source",
-                "CustomKey: plain string. AssetPath/AssetGuid: resolved from a Unity asset reference."));
+                "CustomKey: plain string. Asset: a project Sprite resolved through the asset package."));
             var mode = (Runtime.InputPromptKeySource)source.enumValueIndex;
 
             if (mode == Runtime.InputPromptKeySource.CustomKey)
@@ -150,37 +162,26 @@ namespace CycloneGames.InputSystem.Editor
 
             SerializedProperty path = icon.FindPropertyRelative("assetPath");
             SerializedProperty guid = icon.FindPropertyRelative("assetGuid");
-            string currentGuid = guid.stringValue;
-            string currentPath = string.IsNullOrEmpty(currentGuid)
-                ? path.stringValue
-                : AssetDatabase.GUIDToAssetPath(currentGuid);
-            if (!string.IsNullOrEmpty(currentPath) && currentPath != path.stringValue)
-            {
-                path.stringValue = currentPath;
-            }
-            Object current = string.IsNullOrEmpty(currentPath)
-                ? null
-                : AssetDatabase.LoadAssetAtPath<Object>(currentPath);
+            SerializedProperty subAsset = icon.FindPropertyRelative("subAssetName");
 
+            Sprite current = ResolveSprite(path.stringValue, subAsset.stringValue);
             EditorGUI.BeginChangeCheck();
-            Object selected = EditorGUILayout.ObjectField(
-                new GUIContent("Asset", "Drag a project asset; the path and GUID are filled automatically."),
-                current, typeof(Object), false);
-            if (EditorGUI.EndChangeCheck())
+            var selected = (Sprite)EditorGUILayout.ObjectField(
+                new GUIContent(label + " Sprite",
+                    "Drag one Sprite. Its asset path and sub-asset name are stored automatically."),
+                current, typeof(Sprite), false);
+            if (EditorGUI.EndChangeCheck() && selected != null)
             {
-                string selectedPath = selected == null ? string.Empty : AssetDatabase.GetAssetPath(selected);
-                string selectedGuid = string.Empty;
-                long localId = 0L;
-                if (selected != null)
-                {
-                    AssetDatabase.TryGetGUIDAndLocalFileIdentifier(selected, out selectedGuid, out localId);
-                    if (string.IsNullOrEmpty(selectedPath)) selectedPath = AssetDatabase.GUIDToAssetPath(selectedGuid);
-                }
-
+                string selectedPath = AssetDatabase.GetAssetPath(selected);
                 path.stringValue = selectedPath;
-                guid.stringValue = selectedGuid;
-                icon.FindPropertyRelative("localFileId").longValue = localId;
-                icon.FindPropertyRelative("subAssetName").stringValue = selected == null ? string.Empty : selected.name;
+                guid.stringValue = AssetDatabase.AssetPathToGUID(selectedPath);
+                subAsset.stringValue = selected.name;
+            }
+
+            if (string.IsNullOrEmpty(path.stringValue))
+            {
+                EditorUiUtility.Hint("No sprite assigned.");
+                return;
             }
 
             using (new EditorGUI.DisabledScope(true))
@@ -188,55 +189,42 @@ namespace CycloneGames.InputSystem.Editor
                 EditorGUILayout.TextField(new GUIContent("Path (read-only)",
                     "Project-relative path kept in sync from the asset GUID. Use it to build the loading plan."),
                     path.stringValue);
-                EditorGUILayout.TextField(new GUIContent("Sub Asset (read-only)",
-                    "Sub-object name when the asset holds several sprites, for example one cell of a multiple-sprite texture."),
-                    icon.FindPropertyRelative("subAssetName").stringValue);
-                EditorGUILayout.LongField(new GUIContent("Local File Id (read-only)",
-                    "Unity sub-object identifier. Together with the GUID it addresses one sprite inside an asset."),
-                    icon.FindPropertyRelative("localFileId").longValue);
+
+                string fileName = System.IO.Path.GetFileNameWithoutExtension(path.stringValue);
+                if (!string.IsNullOrEmpty(subAsset.stringValue) &&
+                    !string.Equals(subAsset.stringValue, fileName, System.StringComparison.Ordinal))
+                {
+                    EditorGUILayout.TextField(new GUIContent("Sub Asset (read-only)",
+                        "Sub-object name when the asset holds several sprites."),
+                        subAsset.stringValue);
+                }
             }
 
-            if (string.IsNullOrEmpty(path.stringValue)) EditorUiUtility.Hint("No asset assigned.");
-            else if (string.IsNullOrEmpty(guid.stringValue)) EditorUiUtility.Warning("Could not resolve a GUID for " + path.stringValue);
-            else EditorUiUtility.Hint("GUID: " + guid.stringValue);
-        }
-
-        private void ValidateAssets()
-        {
-            int missing = 0;
-            missing += CountMissingInRef(serializedObject.FindProperty("keyboardMouseIcon"));
-            missing += CountMissingInRef(serializedObject.FindProperty("gamepadIcon"));
-            missing += CountMissingInRef(serializedObject.FindProperty("touchIcon"));
-            missing += CountMissingInArray(_layoutIcons);
-            missing += CountMissingInArray(_controlIcons);
-            if (missing > 0)
+            if (string.IsNullOrEmpty(guid.stringValue))
             {
-                EditorUiUtility.Warning("Missing assets: " + missing + ". Reassign or clear them.");
+                EditorUiUtility.Warning("Could not resolve a GUID for " + path.stringValue);
             }
-        }
-
-        private static int CountMissingInRef(SerializedProperty refProperty)
-        {
-            return refProperty == null ? 0 : IsMissing(refProperty) ? 1 : 0;
-        }
-
-        private static int CountMissingInArray(SerializedProperty array)
-        {
-            int missing = 0;
-            for (int i = 0; i < array.arraySize; i++)
+            else
             {
-                if (IsMissing(array.GetArrayElementAtIndex(i).FindPropertyRelative("icon"))) missing++;
+                EditorUiUtility.Hint("GUID: " + guid.stringValue);
             }
-
-            return missing;
         }
 
-        private static bool IsMissing(SerializedProperty icon)
+        private static Sprite ResolveSprite(string path, string subAssetName)
         {
-            if ((Runtime.InputPromptKeySource)icon.FindPropertyRelative("keySource").enumValueIndex !=
-                Runtime.InputPromptKeySource.Asset) return false;
-            string guid = icon.FindPropertyRelative("assetGuid").stringValue;
-            return !string.IsNullOrEmpty(guid) && string.IsNullOrEmpty(AssetDatabase.GUIDToAssetPath(guid));
+            if (string.IsNullOrEmpty(path)) return null;
+
+            UnityEngine.Object[] all = AssetDatabase.LoadAllAssetRepresentationsAtPath(path);
+            for (int i = 0; i < all.Length; i++)
+            {
+                if (all[i] is Sprite sprite &&
+                    string.Equals(sprite.name, subAssetName, System.StringComparison.Ordinal))
+                {
+                    return sprite;
+                }
+            }
+
+            return AssetDatabase.LoadAssetAtPath<Sprite>(path);
         }
 
         private void ValidateKeys()
