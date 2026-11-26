@@ -641,6 +641,7 @@ if (!load.IsBootstrapComplete)
 | 上下文变化 | 只对上一个激活集合与新的激活集合之间的差异调整 action map 和订阅。 | 状态切换时，而不是每帧。 |
 | 重绑定与档案 | 导出、导入和冲突检查时枚举绑定，分配数组或 JSON。 | 设置和存档流程。 |
 | 设备活动 | 使用动作活动和 Input System 的设备、用户通知。 | `ActiveDeviceKind` 是展示用的提示。硬件噪声大时产品 UI 自己做去抖。 |
+| manager 通知 | 订阅时复制处理函数数组，通知时只读快照，因此通知不产生分配。 | 在组合根订阅，不要每帧订阅。 |
 | Tools 录制 | 录制期间使用固定容量的列表，创建快照时复制样本。 | 查看 `WasTruncated` 和 `DroppedSampleCount`。 |
 
 初始化和玩家构造会发出 profiler marker `CycloneGames.Input.Initialize`、`CycloneGames.Input.JoinPlayer` 和 `CycloneGames.Input.BuildAsset`。上下文刷新发出 `CycloneGames.Input.RequestContextRefresh` 和 `CycloneGames.Input.ActivateTopContext`。测试程序集通过 internal 的 `InputPlayer.GetProjectionDiagnostics()` 读取 action map 与订阅复用的累计计数。

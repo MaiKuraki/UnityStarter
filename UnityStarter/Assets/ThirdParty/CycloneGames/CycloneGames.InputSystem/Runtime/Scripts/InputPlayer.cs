@@ -267,14 +267,14 @@ namespace CycloneGames.InputSystem.Runtime
 
         public event Action<string> OnContextChanged
         {
-            add { _contextChangedHandlers = Append(_contextChangedHandlers, value); }
-            remove { _contextChangedHandlers = Remove(_contextChangedHandlers, value); }
+            add { _contextChangedHandlers = HandlerList.Append(_contextChangedHandlers, value); }
+            remove { _contextChangedHandlers = HandlerList.Remove(_contextChangedHandlers, value); }
         }
 
         public event Action<InputPlayerDeviceStatus> OnDeviceStatusChanged
         {
-            add { _deviceStatusHandlers = Append(_deviceStatusHandlers, value); }
-            remove { _deviceStatusHandlers = Remove(_deviceStatusHandlers, value); }
+            add { _deviceStatusHandlers = HandlerList.Append(_deviceStatusHandlers, value); }
+            remove { _deviceStatusHandlers = HandlerList.Remove(_deviceStatusHandlers, value); }
         }
 
         public int PlayerId { get; }
@@ -2409,29 +2409,6 @@ namespace CycloneGames.InputSystem.Runtime
             _isDisposed = true;
         }
 
-        private static T[] Append<T>(T[] handlers, T handler) where T : Delegate
-        {
-            if (handler == null) return handlers;
-            T[] updated = new T[handlers.Length + 1];
-            Array.Copy(handlers, updated, handlers.Length);
-            updated[handlers.Length] = handler;
-            return updated;
-        }
-
-        private static T[] Remove<T>(T[] handlers, T handler) where T : Delegate
-        {
-            for (int i = handlers.Length - 1; i >= 0; i--)
-            {
-                if (!handlers[i].Equals(handler)) continue;
-                if (handlers.Length == 1) return Array.Empty<T>();
-                T[] updated = new T[handlers.Length - 1];
-                Array.Copy(handlers, 0, updated, 0, i);
-                Array.Copy(handlers, i + 1, updated, i, handlers.Length - i - 1);
-                return updated;
-            }
-
-            return handlers;
-        }
 
         private static void CleanupSafely(Action cleanup, string phase)
         {

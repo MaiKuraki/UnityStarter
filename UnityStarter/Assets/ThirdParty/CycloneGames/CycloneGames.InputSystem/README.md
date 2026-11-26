@@ -641,6 +641,7 @@ A valid user file is used as-is. A missing file falls back to the validated defa
 | Context changes | Maps and subscriptions change only for the difference between the previous and the new active set. | State transitions, not every frame. |
 | Rebinding and profiles | Enumerates bindings and allocates arrays or JSON during export, import and conflict checks. | Settings and save flows. |
 | Device activity | Uses action activity and Input System device and user notifications. | `ActiveDeviceKind` is a presentation hint. Debounce product UI if hardware is noisy. |
+| Manager notifications | Handler arrays are copied on subscribe and read on notify, so a notification does not allocate. | Subscribe from the composition root, not per frame. |
 | Tools recording | Fixed-capacity list while recording. Snapshot creation copies samples. | Inspect `WasTruncated` and `DroppedSampleCount`. |
 
 Initialization and player construction emit the profiler markers `CycloneGames.Input.Initialize`, `CycloneGames.Input.JoinPlayer` and `CycloneGames.Input.BuildAsset`. A context refresh emits `CycloneGames.Input.RequestContextRefresh` and `CycloneGames.Input.ActivateTopContext`. The test assembly reads cumulative map and subscription reuse counters through the internal `InputPlayer.GetProjectionDiagnostics()`.

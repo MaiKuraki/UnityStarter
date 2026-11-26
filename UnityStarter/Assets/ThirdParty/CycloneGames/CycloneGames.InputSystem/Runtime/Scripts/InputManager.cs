@@ -81,8 +81,22 @@ namespace CycloneGames.InputSystem.Runtime
             }
         }
 
-        public event Action<IInputPlayer> OnPlayerInputReady;
-        public event Action OnConfigurationReloaded;
+        private Action<IInputPlayer>[] _playerReadyHandlers = Array.Empty<Action<IInputPlayer>>();
+        private Action[] _configurationReloadedHandlers = Array.Empty<Action>();
+
+        /// <summary>Raised after a player has an action asset and can accept contexts.</summary>
+        public event Action<IInputPlayer> OnPlayerInputReady
+        {
+            add { _playerReadyHandlers = HandlerList.Append(_playerReadyHandlers, value); }
+            remove { _playerReadyHandlers = HandlerList.Remove(_playerReadyHandlers, value); }
+        }
+
+        /// <summary>Raised after a committed reinitialization replaces the configuration.</summary>
+        public event Action OnConfigurationReloaded
+        {
+            add { _configurationReloadedHandlers = HandlerList.Append(_configurationReloadedHandlers, value); }
+            remove { _configurationReloadedHandlers = HandlerList.Remove(_configurationReloadedHandlers, value); }
+        }
 
         private readonly Dictionary<int, IInputPlayer> _registeredPlayers = new Dictionary<int, IInputPlayer>();
         private readonly HashSet<int> _joinsInProgress = new HashSet<int>();
@@ -1719,8 +1733,8 @@ namespace CycloneGames.InputSystem.Runtime
             _bindingOverridesByPlayer.Clear();
             _configuration = null;
             _runtimeConfiguration = null;
-            OnPlayerInputReady = null;
-            OnConfigurationReloaded = null;
+            _playerReadyHandlers = Array.Empty<Action<IInputPlayer>>();
+            _configurationReloadedHandlers = Array.Empty<Action>();
 
             CleanupSafely(_shutdown.Cancel, "cancel manager operations");
             CleanupSafely(() => ReplaceJoinAction(null), "dispose the join listener");
@@ -1848,14 +1862,12 @@ namespace CycloneGames.InputSystem.Runtime
 
         private void NotifyConfigurationReloaded(long committedRevision)
         {
-            Action handlers = OnConfigurationReloaded;
-            if (handlers == null) return;
-            Delegate[] invocationList = handlers.GetInvocationList();
-            for (int i = 0; i < invocationList.Length; i++)
+            Action[] handlers = _configurationReloadedHandlers;
+            for (int i = 0; i < handlers.Length; i++)
             {
                 try
                 {
-                    ((Action)invocationList[i]).Invoke();
+                    handlers[i]();
                 }
                 catch (Exception exception) when (IsRecoverableException(exception))
                 {
@@ -1870,14 +1882,12 @@ namespace CycloneGames.InputSystem.Runtime
 
         private void NotifyPlayerInputReady(int playerId, IInputPlayer inputPlayer)
         {
-            Action<IInputPlayer> handlers = OnPlayerInputReady;
-            if (handlers == null) return;
-            Delegate[] invocationList = handlers.GetInvocationList();
-            for (int i = 0; i < invocationList.Length; i++)
+            Action<IInputPlayer>[] handlers = _playerReadyHandlers;
+            for (int i = 0; i < handlers.Length; i++)
             {
                 try
                 {
-                    ((Action<IInputPlayer>)invocationList[i]).Invoke(inputPlayer);
+                    handlers[i](inputPlayer);
                 }
                 catch (Exception exception) when (IsRecoverableException(exception))
                 {
