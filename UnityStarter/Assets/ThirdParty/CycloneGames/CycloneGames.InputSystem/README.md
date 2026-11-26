@@ -257,7 +257,7 @@ player.SetContextPolicy(dialog, dialogPriority, blocksLowerPriority: false);
 player.SetContextPolicy(dialog, dialogPriority, blocksLowerPriority: true);
 ```
 
-The policy is stored per player, so two players can share one `InputContext` and apply different policies to it. A changed policy triggers one refresh; setting the same values again does nothing. Contexts that enter or leave the active set rebuild their subscriptions. A button held across that change reports no press edge and no press state until it is released and pressed again; `Vector2` and `Float` actions re-deliver their current value when their map is enabled again.
+The policy is stored per player, so two players can share one `InputContext` and apply different policies to it. A changed policy triggers one refresh; setting the same values again does nothing. Contexts that enter or leave the active set rebuild their subscriptions. A button held across that change reports no press event and no press state until it is released and pressed again; `Vector2` and `Float` actions re-deliver their current value when their map is enabled again.
 
 ### Refresh outcome
 
@@ -322,9 +322,9 @@ player.GetChordObservable(confirm, cancel, windowMs: 200f)
 The module long press supports `Button` and `Float`, is enabled by `longPressMs > 0`, and is separate from a Unity `hold(...)` interaction. For a `Float` long press, `longPressValueThreshold` must be in `(0,1]`. Chords require two configured button actions. The stream resets after a release.
 
 Every subscription needs a visible lifetime. An `InputContext`, a `CompositeDisposable` or the owning component disposes it.
-### Buffering press edges
+### Buffering press events
 
-A press edge can be buffered for a few frames and consumed later, so a jump pressed a few frames before landing still counts when the feet touch the ground.
+A press can be buffered for a few frames and consumed later, so a jump pressed a few frames before landing still counts when the feet touch the ground.
 
 | Member | Purpose |
 | --- | --- |
@@ -344,7 +344,7 @@ void Update()
 }
 ```
 
-The window is measured in frames; `0` accepts only the current frame. Buffered edges are cleared when the active context set changes and around `BlockInput`, so an edge never crosses an input state. The ring is preallocated per player, 64 entries with 600 frames of retention by default, and does not allocate at runtime.
+The window is measured in frames; `0` accepts only the current frame. Buffered presses are cleared when the active context set changes and around `BlockInput`, so a press never crosses an input state. The ring is preallocated per player, 64 entries with 600 frames of retention by default, and does not allocate at runtime.
 
 
 ## 5. Local multiplayer and devices
@@ -542,6 +542,14 @@ Before VYaml materialization, runtime and Editor YAML entry points limit input t
 
 One action serializes to about twelve YAML lines, so the line budget caps a serialized configuration at about 1,300 actions across all players (`InputConfigurationLimits.ApproximateMaxSerializedTotalActions`). Preparation and validation operate on a clone and never rewrite the source file.
 
+### Version and identity
+
+`schemaVersion` is the format gate and the only field that decides compatibility. A missing, older or newer value fails validation with a message that names the direction.
+
+`schemaFingerprint` is an optional Editor stamp over the YAML key and type shape. It is written on save and compared when the file is opened, so a shape change without a version bump shows up as a warning. Player builds ignore it.
+
+A content hash is not used as a version. Hashing the authored file would reject every legitimate edit, and binding overrides already key on selectors rather than file bytes. Hashes appear where identity matters, in `CycloneGames.AssetManagement` for content integrity and `CycloneGames.AtlasPipeline` for source cache keys.
+
 ### Editor workflow
 
 Open `Tools > CycloneGames > Input System Editor`. The left panel keeps runtime and code-generation paths visible with reveal shortcuts. The right workspace keeps the serialized configuration separate from file operations.
@@ -730,7 +738,10 @@ Diagnostics use `LogChannel` categories rooted at `CycloneGames.InputSystem`. Th
 | --- | --- |
 | `InputManager` | Validate and commit configuration, join and remove players, listen for joins, aggregate profiles. |
 | `InputManagerInitializationResult` | Inspect parse, schema validation and Input System preflight through `Status`, `Validation`, `Preflight`. |
-| `IInputPlayer` | Read actions, manage contexts and their policies, observe device state, rebind, import and export overrides. |
+| `IInputPlayer` | Full player contract: the union of the three interfaces below. |
+| `IInputActionReader` | Action streams, synchronous reads, buffered presses and the active device kind. |
+| `IInputContextController` | Stack, priority and blocking policy, command bindings and the global block. |
+| `IInputRebindOperations` | Rebind, reset, list bindings, import and export overrides. |
 | `InputContext` | Bind R3 streams to commands and supply a priority and blocking policy. |
 | `InputConfigurationValidator`, `InputConfigurationLimits` | Validate untrusted DTOs under explicit budgets. |
 | `InputConfigurationYamlPreflight`, `InputConfigurationYamlCodec` | Enforce the strict YAML subset and serialize a prepared configuration. |
@@ -740,7 +751,7 @@ Diagnostics use `LogChannel` categories rooted at `CycloneGames.InputSystem`. Th
 | `InputHashUtility` | Deterministic map hashes and context-qualified action IDs. |
 | `InputBindingValidator` | Detect configured direct-binding conflicts. |
 | `InputRx` | Low-level R3 wrappers for keyboard, pointer, gamepad, touch, users, actions and `PlayerInput`. |
-| `InputActionBuffer` | Bounded ring of tick-stamped press edges with windowed consumption. |
+| `InputActionBuffer` | Bounded ring of tick-stamped press events with windowed consumption. |
 
 ### Running the tests
 

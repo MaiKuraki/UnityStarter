@@ -257,7 +257,7 @@ player.SetContextPolicy(dialog, dialogPriority, blocksLowerPriority: false);
 player.SetContextPolicy(dialog, dialogPriority, blocksLowerPriority: true);
 ```
 
-策略按玩家保存，所以两个玩家可以共享同一个 `InputContext` 并各自应用不同策略。策略变化触发一次刷新，重复设置相同的值不会触发。进入或离开激活集合的上下文会重建订阅：跨越这次变化一直按住的按钮既不产生按下边沿，也不报告按下状态，直到松开后重新按下；`Vector2` 和 `Float` 动作在 map 重新启用时再次给出当前值。
+策略按玩家保存，所以两个玩家可以共享同一个 `InputContext` 并各自应用不同策略。策略变化触发一次刷新，重复设置相同的值不会触发。进入或离开激活集合的上下文会重建订阅：跨越这次变化一直按住的按钮既不产生按下事件，也不报告按下状态，直到松开后重新按下；`Vector2` 和 `Float` 动作在 map 重新启用时再次给出当前值。
 
 ### 刷新的结果
 
@@ -322,9 +322,9 @@ player.GetChordObservable(confirm, cancel, windowMs: 200f)
 模块的长按支持 `Button` 和 `Float`，由 `longPressMs > 0` 启用，与 Unity 的 `hold(...)` interaction 相互独立。`Float` 长按要求 `longPressValueThreshold` 落在 `(0,1]`。和弦需要两个已配置的按钮动作，松开后流复位。
 
 每个订阅都要有明确的生命周期，由 `InputContext`、`CompositeDisposable` 或持有它的组件释放。
-### 缓存按下边沿
+### 缓存按下事件
 
-按下边沿可以缓存若干帧，由消费方决定何时取用：玩家在落地前几帧按下的跳跃，落地时依然算数。
+一次按下可以缓存若干帧，由消费方决定何时取用：玩家在落地前几帧按下的跳跃，落地时依然算数。
 
 | 成员 | 作用 |
 | --- | --- |
@@ -344,7 +344,7 @@ void Update()
 }
 ```
 
-窗口按帧计，`0` 只接受当帧。上下文集合变化、`BlockInput` 前后都会清空缓冲，边沿不会跨输入状态。缓冲按玩家预分配，默认 64 条、保留 600 帧，运行期不再分配。
+窗口按帧计，`0` 只接受当帧。上下文集合变化、`BlockInput` 前后都会清空缓冲，缓存的按下不会跨输入状态。缓冲按玩家预分配，默认 64 条、保留 600 帧，运行期不再分配。
 
 
 ## 5. 本地多人与设备
@@ -542,6 +542,14 @@ public sealed class InputBindingProfilePersistence
 
 一个动作大约序列化成十二行 YAML，所以行数预算把一份序列化后的配置限制在所有玩家合计约 1,300 个动作（`InputConfigurationLimits.ApproximateMaxSerializedTotalActions`）。准备与校验在克隆上进行，不会改写源文件。
 
+### 版本与身份
+
+`schemaVersion` 是格式闸门，也是唯一决定兼容性的字段。缺失、偏旧或偏新都会校验失败，错误信息会指明是哪个方向。
+
+`schemaFingerprint` 是可选的 Editor 戳，记录 YAML 键与类型的形状。保存时写入，打开文件时比对，形状变化但版本没动会给出警告。玩家构建不读它。
+
+这里不用内容哈希作为版本。对作者文件做哈希会让每一次合法修改都变成版本不符；绑定覆盖本来就按选择器寻址，而不是按文件字节。哈希用在需要身份的地方：`CycloneGames.AssetManagement` 的内容完整性、`CycloneGames.AtlasPipeline` 的源缓存键。
+
 ### Editor 工作流
 
 打开 `Tools > CycloneGames > Input System Editor`。左侧面板显示运行时路径和代码生成路径，并带定位快捷方式。右侧工作区把序列化配置和文件操作分开。
@@ -730,7 +738,10 @@ builder.Install(new InputSystemVContainerInstaller(options));
 | --- | --- |
 | `InputManager` | 校验并提交配置，加入和移除玩家，监听加入，聚合档案。 |
 | `InputManagerInitializationResult` | 通过 `Status`、`Validation`、`Preflight` 查看解析、schema 校验和 Input System 预检。 |
-| `IInputPlayer` | 读取动作，管理上下文及其策略，观察设备状态，重绑定，导入和导出覆盖。 |
+| `IInputPlayer` | 完整的玩家契约，下面是三个接口的并集。 |
+| `IInputActionReader` | 动作流、同步读取、按下缓存与当前设备类型。 |
+| `IInputContextController` | 栈、优先级与阻断策略、命令绑定、全局阻断。 |
+| `IInputRebindOperations` | 重绑定、重置、列出绑定、导入导出覆盖。 |
 | `InputContext` | 把 R3 流绑定到命令，提供优先级和阻断策略。 |
 | `InputConfigurationValidator`、`InputConfigurationLimits` | 在明确的预算下校验不受信任的 DTO。 |
 | `InputConfigurationYamlPreflight`、`InputConfigurationYamlCodec` | 执行严格的 YAML 子集，并序列化准备好的配置。 |
@@ -740,7 +751,7 @@ builder.Install(new InputSystemVContainerInstaller(options));
 | `InputHashUtility` | 确定性的 map 哈希和带上下文的 action ID。 |
 | `InputBindingValidator` | 检测已配置直接绑定的冲突。 |
 | `InputRx` | 键盘、指针、手柄、触摸、用户、动作和 `PlayerInput` 的底层 R3 封装。 |
-| `InputActionBuffer` | 按下边沿的定长环形缓冲，按 tick 记录、按窗口消费。 |
+| `InputActionBuffer` | 按下事件的定长环形缓冲，按 tick 记录、按窗口消费。 |
 
 ### 运行测试
 

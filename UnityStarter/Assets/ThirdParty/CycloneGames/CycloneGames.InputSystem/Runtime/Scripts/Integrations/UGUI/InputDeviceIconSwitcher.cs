@@ -54,7 +54,7 @@ namespace CycloneGames.InputSystem.Runtime
                 return;
             }
 
-            IInputPlayer player = managerProvider.Manager.GetInputPlayer(0);
+            IInputActionReader player = managerProvider.Manager.GetInputPlayer(0);
             if (player == null)
             {
                 return;
