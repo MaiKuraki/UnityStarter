@@ -575,14 +575,10 @@ namespace CycloneGames.InputSystem.Tests.Editor
                 SetField(iconSet, "gamepadIcon", generic);
                 SetField(iconSet, "keyboardMouseIcon", generic);
 
-                Type entryType = typeof(InputDeviceIconSet).GetNestedType(
-                    "LayoutIcon", BindingFlags.NonPublic);
-                Assert.That(entryType, Is.Not.Null);
-                Array entries = Array.CreateInstance(entryType, 1);
-                object entry = Activator.CreateInstance(entryType);
-                entryType.GetField("layout").SetValue(entry, "DualShockGamepad");
-                entryType.GetField("icon").SetValue(entry, playStation);
-                entries.SetValue(entry, 0);
+                var entries = new[]
+                {
+                    new DeviceLayoutIcon { layout = "DualShockGamepad", icon = playStation }
+                };
                 SetField(iconSet, "layoutIcons", entries);
 
                 Assert.That(iconSet.GetIcon(InputDeviceKind.Gamepad, "DualShockGamepad"),

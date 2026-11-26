@@ -721,7 +721,7 @@ Unity API 以及玩家、上下文操作都限定在 Unity 主线程。`UriInput
 
 ### 可选集成
 
-**UGUI。** 在 asmdef 中引用 `CycloneGames.InputSystem.Runtime.Integrations.UGUI`，使用 `InputDeviceIconSet`、`InputDeviceIconSwitcher` 以及横向和纵向的菜单导航组件。`InputDeviceIconSwitcher` 从场景中的 `InputManagerProvider` 取管理器，需要在 Inspector 里指定。该程序集只包含展示适配器。
+**UGUI。** 在 asmdef 中引用 `CycloneGames.InputSystem.Runtime.Integrations.UGUI`，使用 `InputDeviceIconSet`、`InputDeviceIconSwitcher` 以及横向和纵向的菜单导航组件。`InputDeviceIconSwitcher` 从场景中的 `InputManagerProvider` 取管理器，需要在 Inspector 里指定。`InputDeviceIconSet` 按控制路径、设备布局、设备类型的顺序解析图标；提示文字由产品自己的本地化系统负责。该程序集只包含展示适配器。
 
 **VContainer。** 集成注册由容器持有的 `InputManager`、`IInputPlayerResolver`、`IInputSystemInitializer` 和诊断。组合根提供一个不可变的 `InputSystemVContainerOptions`。只有 `registerEntryPoint: true` 时才登记入口，只有 `throwOnStartupFailure: true` 时启动失败才向上抛出，否则结果留在 `IInputSystemInitializerDiagnostics.LastResult`。该作用域内的所有消费者必须解析到同一个 manager。
 
