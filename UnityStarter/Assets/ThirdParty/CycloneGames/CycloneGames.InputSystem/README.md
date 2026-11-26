@@ -723,7 +723,7 @@ Subsystem registration invalidates every still-active manager, so play sessions 
 
 **UGUI.** Add an asmdef reference to `CycloneGames.InputSystem.Runtime.Integrations.UGUI` for `InputDeviceIconSet`, `InputDeviceIconSwitcher` and horizontal or vertical menu-navigation components. `InputDeviceIconSwitcher` reads the manager from a scene `InputManagerProvider`; assign it in the inspector. `InputDeviceIconSet` resolves sprites by control path, then device layout, then device kind; display text belongs to the product's localization system. The assembly owns presentation adapters only.
 
-`InputDeviceIconSet` has two sources. `Direct` stores sprites in the asset and needs no setup. `ProviderKey` stores keys and resolves them through a product-owned `IInputPromptIconProvider`, so Addressables or bundle systems stay out of the input package. Lookups resolve lazily and cache the result; `WarmupAll` pins every entry when a screen must not load on open.
+`InputDeviceIconSet` has two sources. `Direct` stores sprites in the asset and needs no setup. `ProviderKey` stores keys and resolves them through a product-owned `IInputPromptIconProvider`, so Addressables or bundle systems stay out of the input package. Lookups resolve lazily and cache the result; `WarmupAll` pins every entry when a screen must not load on open. Cached sprites are Unity asset references and keep bundles loaded: call `Release()` before releasing provider handles, then set the provider again when the screen reopens.
 
 ```csharp
 iconSet.SetProvider(myProvider);   // one call, optional

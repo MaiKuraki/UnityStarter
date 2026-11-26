@@ -186,6 +186,41 @@ namespace CycloneGames.InputSystem.Tests.Editor
             Assert.That(provider.Calls, Is.EqualTo(2));
         }
 
+        [Test]
+        public void Release_DropsProviderAndCachesAndIsIdempotent()
+        {
+            var set = ScriptableObject.CreateInstance<InputDeviceIconSet>();
+            try
+            {
+                var provider = new FakeProvider(new Dictionary<string, Sprite>());
+                set.SetProvider(provider);
+                Assert.That(set.Provider, Is.SameAs(provider));
+
+                set.Release();
+                Assert.That(set.Provider, Is.Null);
+                Assert.That(set.HasCachedSprites, Is.False);
+
+                set.Release();
+                Assert.That(set.Provider, Is.Null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(set);
+            }
+        }
+
+        [Test]
+        public void DestroyedCachedSprite_IsTreatedAsMissing()
+        {
+            var controls = new[] { new DeviceControlIcon { controlPath = "<Gamepad>/buttonSouth", icon = new InputPromptIconRef { direct = _south } } };
+            var cached = new[] { _south };
+            Destroy(_south);
+
+            Assert.That(InputIconResolver.TryResolve("<Gamepad>/buttonSouth", InputDeviceKind.Gamepad, null,
+                controls, cached, null, null, _keyboard, _gamepad, _touch, out Sprite icon), Is.True);
+            Assert.That(icon, Is.SameAs(_gamepad), "a destroyed sprite must fall through to the kind fallback");
+        }
+
         private static Sprite[] ResolveSprites(DeviceControlIcon[] entries, InputPromptIconSource source, IInputPromptIconProvider provider)
         {
             if (entries == null) return null;

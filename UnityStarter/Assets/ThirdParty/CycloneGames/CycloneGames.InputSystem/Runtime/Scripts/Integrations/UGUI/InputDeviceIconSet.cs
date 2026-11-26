@@ -199,6 +199,12 @@ namespace CycloneGames.InputSystem.Runtime
         [SerializeField] private DeviceControlIcon[] controlIcons = Array.Empty<DeviceControlIcon>();
 
         private IInputPromptIconProvider _provider;
+
+        /// <summary>Provider currently attached, exposed for tests.</summary>
+        internal IInputPromptIconProvider Provider => _provider;
+
+        /// <summary>True when resolved sprites are cached, exposed for tests.</summary>
+        internal bool HasCachedSprites => _resolvedControlSprites != null || _resolvedLayoutSprites != null;
         private Sprite[] _resolvedLayoutSprites;
         private Sprite[] _resolvedControlSprites;
         private Sprite _resolvedKeyboardMouseIcon;
@@ -226,6 +232,31 @@ namespace CycloneGames.InputSystem.Runtime
         public void SetProvider(IInputPromptIconProvider provider)
         {
             _provider = provider;
+            _resolvedControlSprites = null;
+            _resolvedLayoutSprites = null;
+            _resolvedKeyboardMouseIcon = null;
+            _resolvedGamepadIcon = null;
+            _resolvedTouchIcon = null;
+        }
+
+        /// <summary>
+        /// Drops every cached sprite and the provider reference. Direct assets stay owned by this asset.
+        /// Call before releasing provider handles; the next lookup resolves again.
+        /// </summary>
+        public void Release()
+        {
+            _provider = null;
+            ClearCache();
+        }
+
+        /// <summary>Drops cached sprites but keeps the provider, so a disabled asset resumes without reconfiguration.</summary>
+        private void OnDisable()
+        {
+            ClearCache();
+        }
+
+        private void ClearCache()
+        {
             _resolvedControlSprites = null;
             _resolvedLayoutSprites = null;
             _resolvedKeyboardMouseIcon = null;
