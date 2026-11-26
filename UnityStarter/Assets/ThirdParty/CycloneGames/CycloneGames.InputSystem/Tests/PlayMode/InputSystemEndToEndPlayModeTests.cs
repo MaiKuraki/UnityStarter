@@ -189,6 +189,40 @@ namespace CycloneGames.InputSystem.Tests.PlayMode
             Assert.That(fired, Is.EqualTo(1), "Releasing the button must not emit another press.");
         }
 
+        // ------------------------------------------------------------------ 1b. buffered press edges
+
+        [UnityTest]
+        public IEnumerator EndToEnd_BufferedPressIsDeliveredOnceAndClearedByContextChange()
+        {
+            Gamepad pad = Inject<Gamepad>("E2E_BufferPad");
+            InputManager manager = NewManager(GamepadSlotsYaml(1));
+            InputPlayer player = Join(manager, 0, "Map0");
+            int actionId = InputHashUtility.GetActionId("Gameplay", "Map0", "Confirm");
+
+            yield return null;
+            UIS.QueueStateEvent(pad, new GamepadState { buttons = SouthButton });
+            yield return Frames(2);
+
+            Assert.That(player.TryPeekBuffered(actionId, 6), Is.True,
+                "A press edge must be recorded by the runtime wiring, not only by direct buffer calls.");
+            Assert.That(player.TryConsumeBuffered(actionId, 6), Is.True);
+            Assert.That(player.TryConsumeBuffered(actionId, 6), Is.False,
+                "One press must be delivered exactly once.");
+
+            UIS.QueueStateEvent(pad, new GamepadState());
+            yield return Frames(3);
+            UIS.QueueStateEvent(pad, new GamepadState { buttons = SouthButton });
+            yield return Frames(2);
+            Assert.That(player.TryPeekBuffered(actionId, 6), Is.True, "A second press is buffered again.");
+
+            player.PopContext();
+            Assert.That(player.TryPeekBuffered(actionId, 6), Is.False,
+                "Changing the active context set must discard edges from the previous input state.");
+
+            UIS.QueueStateEvent(pad, new GamepadState());
+            yield return Frames(2);
+        }
+
         // ------------------------------------------------------------------ 2. frame pump
 
         [UnityTest]

@@ -240,7 +240,7 @@ menu.Dispose();
 
 Bind commands before pushing a context. The context owns the command mappings. The player owns the live subscriptions while the context is active. Names are ordinal and case-sensitive. `ActiveContextName` reports the top active context.
 
-The two-argument `InputContext(actionMapName, name)` constructor reads priority and blocking from the matching YAML context. The four-argument constructor sets both values in code. Windows that belong to one layer should share one priority value, because different priorities override stack order.
+The two-argument `InputContext(actionMapName, name)` constructor reads priority and blocking from the matching YAML context. The four-argument constructor sets both values in code. A context resolves only when both name and action map match a configured context; the constructor requires both, so a map-only instance cannot be created. Windows that belong to one layer should share one priority value, because different priorities override stack order.
 
 ### Changing the policy of an active context
 
@@ -257,7 +257,7 @@ player.SetContextPolicy(dialog, dialogPriority, blocksLowerPriority: false);
 player.SetContextPolicy(dialog, dialogPriority, blocksLowerPriority: true);
 ```
 
-The policy is stored per player. Two players can share one `InputContext` object and apply different policies to it. A changed policy triggers one refresh. Setting the same values again does nothing.
+The policy is stored per player, so two players can share one `InputContext` and apply different policies to it. A changed policy triggers one refresh; setting the same values again does nothing. Contexts that enter or leave the active set rebuild their subscriptions. A button held across that change reports no press edge and no press state until it is released and pressed again; `Vector2` and `Float` actions re-deliver their current value when their map is enabled again.
 
 ### Refresh outcome
 
@@ -322,6 +322,30 @@ player.GetChordObservable(confirm, cancel, windowMs: 200f)
 The module long press supports `Button` and `Float`, is enabled by `longPressMs > 0`, and is separate from a Unity `hold(...)` interaction. For a `Float` long press, `longPressValueThreshold` must be in `(0,1]`. Chords require two configured button actions. The stream resets after a release.
 
 Every subscription needs a visible lifetime. An `InputContext`, a `CompositeDisposable` or the owning component disposes it.
+### Buffering press edges
+
+A press edge can be buffered for a few frames and consumed later, so a jump pressed a few frames before landing still counts when the feet touch the ground.
+
+| Member | Purpose |
+| --- | --- |
+| `TryConsumeBuffered(actionId, windowFrames)` | Takes the newest press inside the window. One press can be taken only once. |
+| `TryPeekBuffered(actionId, windowFrames)` | Reads without taking. |
+| `ActionBuffer` | The ring itself, for owners that record and query with their own ticks. |
+
+```csharp
+int jumpId = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Jump");
+
+void Update()
+{
+    if (isGrounded && player.TryConsumeBuffered(jumpId, windowFrames: 6))
+    {
+        Jump();
+    }
+}
+```
+
+The window is measured in frames; `0` accepts only the current frame. Buffered edges are cleared when the active context set changes and around `BlockInput`, so an edge never crosses an input state. The ring is preallocated per player, 64 entries with 600 frames of retention by default, and does not allocate at runtime.
+
 
 ## 5. Local multiplayer and devices
 
@@ -715,6 +739,7 @@ Diagnostics use `LogChannel` categories rooted at `CycloneGames.InputSystem`. Th
 | `InputHashUtility` | Deterministic map hashes and context-qualified action IDs. |
 | `InputBindingValidator` | Detect configured direct-binding conflicts. |
 | `InputRx` | Low-level R3 wrappers for keyboard, pointer, gamepad, touch, users, actions and `PlayerInput`. |
+| `InputActionBuffer` | Bounded ring of tick-stamped press edges with windowed consumption. |
 
 ### Running the tests
 

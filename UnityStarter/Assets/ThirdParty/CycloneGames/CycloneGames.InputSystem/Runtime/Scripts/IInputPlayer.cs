@@ -161,5 +161,20 @@ namespace CycloneGames.InputSystem.Runtime
         /// configured as a Button.
         /// </summary>
         Observable<Unit> GetChordObservable(int actionId1, int actionId2, float windowMs = 300f);
+
+        /// <summary>Buffered press edges, stamped with the frame they arrived in. Cleared on context and block changes.</summary>
+        InputActionBuffer ActionBuffer { get; }
+
+        /// <summary>
+        /// Takes a press edge recorded within the last <paramref name="windowFrames"/> frames. Each edge is delivered once.
+        /// </summary>
+        /// <param name="actionId">Deterministic action identity.</param>
+        /// <param name="windowFrames">Maximum accepted age in frames, inclusive. Zero accepts only this frame.</param>
+        bool TryConsumeBuffered(int actionId, int windowFrames);
+
+        /// <summary>Reads a buffered press edge without taking ownership of it.</summary>
+        /// <param name="actionId">Deterministic action identity.</param>
+        /// <param name="windowFrames">Maximum accepted age in frames, inclusive.</param>
+        bool TryPeekBuffered(int actionId, int windowFrames);
     }
 }

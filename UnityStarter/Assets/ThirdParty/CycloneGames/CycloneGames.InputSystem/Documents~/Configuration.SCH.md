@@ -49,7 +49,7 @@ flowchart TD
 
 Player ID 是配置 identity，不是 list position。只要处于配置 limit 内，也可以使用非连续 ID。
 
-锁定 slot（选中了 control scheme 的 slot）会把设备白名单和 binding mask 同时收窄到该 scheme；`pairAllMatchingDevices` slot 把设备白名单放宽到所有被引用的 layout，但保持 binding mask 开放，这正是单个 player 无需重新 join 就能同时响应键盘、鼠标和手柄的方式。本地多人场景请把 `maxDevicesPerLayout` 保持较小值，让其他 player 仍能认领剩余设备。超出上述范围的值会被钳制而不是拒绝。
+锁定 slot（选中了 control scheme 的 slot）会把设备白名单和 binding mask 同时收窄到该 scheme；`pairAllMatchingDevices` slot 把设备白名单放宽到所有被引用的 layout，但保持 binding mask 开放，所以单个 player 无需重新 join 就能同时响应键盘、鼠标和手柄。本地多人场景请把 `maxDevicesPerLayout` 保持较小值，让其他 player 仍能认领剩余设备。超出上述范围的值会被钳制而不是拒绝。
 
 ### Control scheme
 

@@ -432,12 +432,35 @@ namespace CycloneGames.InputSystem.Runtime.Tests
         [Test]
         public void InputContext_DefaultAndExplicitPoliciesAreStable()
         {
-            using var defaultPolicy = new InputContext("Player");
+            using var defaultPolicy = new InputContext("Player", "Gameplay");
             using var layered = new InputContext("UI", "Overlay", 100, false);
             Assert.That(defaultPolicy.Priority, Is.Zero);
             Assert.That(defaultPolicy.BlocksLowerPriority, Is.True);
             Assert.That(layered.Priority, Is.EqualTo(100));
             Assert.That(layered.BlocksLowerPriority, Is.False);
+        }
+
+        [Test]
+        public void PushContext_RejectsContextWhoseNameIsNotConfigured()
+        {
+            Keyboard keyboard = UnityEngine.InputSystem.InputSystem.AddDevice<Keyboard>();
+            InputPlayer player = null;
+            var unknown = new InputContext("Player", "NotConfigured");
+            try
+            {
+                InputUser user = InputUser.PerformPairingWithDevice(keyboard);
+                player = new InputPlayer(0, user, CreateValidConfiguration().PlayerSlots[0], keyboard);
+
+                // The Player map only declares the Gameplay context; the name is part of the identity.
+                Assert.Throws<ArgumentException>(() => player.PushContext(unknown));
+                Assert.That(player.ActiveContextName.CurrentValue, Is.Null);
+            }
+            finally
+            {
+                unknown.Dispose();
+                player?.Dispose();
+                UnityEngine.InputSystem.InputSystem.RemoveDevice(keyboard);
+            }
         }
 
         [Test]

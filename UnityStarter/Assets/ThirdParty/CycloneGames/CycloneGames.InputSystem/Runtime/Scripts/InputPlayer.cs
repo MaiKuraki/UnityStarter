@@ -328,10 +328,9 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly Dictionary<int, string> _actionIdToName = new Dictionary<int, string>();
         private readonly Dictionary<InputActionKey, InputActionMap> _contextMaps = new Dictionary<InputActionKey, InputActionMap>();
         private readonly Dictionary<InputActionKey, RuntimeContextDefinitionConfig> _contextDefinitions = new Dictionary<InputActionKey, RuntimeContextDefinitionConfig>();
-        private readonly Dictionary<string, InputActionKey> _uniqueContextByMap = new Dictionary<string, InputActionKey>(StringComparer.Ordinal);
-        private readonly HashSet<string> _ambiguousContextMaps = new HashSet<string>(StringComparer.Ordinal);
         private readonly List<PollingActionState> _pollingActions = new List<PollingActionState>();
         private readonly List<HoldState> _holdStates = new List<HoldState>();
+        private readonly InputActionBuffer _actionBuffer = new InputActionBuffer();
 
         private readonly Dictionary<InputContext, ContextProjectionState> _projectionStates = new Dictionary<InputContext, ContextProjectionState>();
         private readonly List<InputContext> _staleContexts = new List<InputContext>(4);
@@ -472,6 +471,7 @@ namespace CycloneGames.InputSystem.Runtime
                 _resolvedContexts.Remove(context);
             }
 
+            if (removed) InvalidateBufferedEdges();
             RequestContextRefresh();
             return removed;
         }
@@ -490,6 +490,7 @@ namespace CycloneGames.InputSystem.Runtime
             _contextStack.Push(context);
             _contextSet.Add(context);
             context.AddOwner(this);
+            InvalidateBufferedEdges();
             RequestContextRefresh();
         }
 
@@ -508,6 +509,7 @@ namespace CycloneGames.InputSystem.Runtime
             var entry = new CaptureEntry(context);
             _captureStack.Push(entry);
             if (_captureSet.Add(context)) context.AddOwner(this);
+            InvalidateBufferedEdges();
             RequestContextRefresh();
             return new InputContextCapture(this, entry);
         }
@@ -519,6 +521,7 @@ namespace CycloneGames.InputSystem.Runtime
 
             InputContext context = _contextStack.Pop();
             _contextSet.Remove(context);
+            InvalidateBufferedEdges();
             if (!_captureSet.Contains(context))
             {
                 context.RemoveOwner(this);
@@ -547,6 +550,7 @@ namespace CycloneGames.InputSystem.Runtime
             }
 
             _contextPolicyOverrides[context] = new ContextPolicy(priority, blocksLowerPriority);
+            InvalidateBufferedEdges();
             RequestContextRefresh();
             return true;
         }
@@ -557,6 +561,7 @@ namespace CycloneGames.InputSystem.Runtime
             if (context == null) return false;
             if (!_contextPolicyOverrides.Remove(context)) return false;
 
+            InvalidateBufferedEdges();
             RequestContextRefresh();
             return true;
         }
@@ -657,6 +662,7 @@ namespace CycloneGames.InputSystem.Runtime
             _inputBlockDepth++;
             if (_inputBlockDepth != 1) return;
             _isInputBlocked = true;
+            InvalidateBufferedEdges();
             RequestContextRefresh();
         }
 
@@ -678,6 +684,7 @@ namespace CycloneGames.InputSystem.Runtime
             _inputBlockDepth--;
             if (_inputBlockDepth != 0) return;
             _isInputBlocked = false;
+            InvalidateBufferedEdges();
             RequestContextRefresh();
         }
 
@@ -1184,6 +1191,34 @@ namespace CycloneGames.InputSystem.Runtime
             return false;
         }
 
+        /// <summary>
+        /// Buffered press edges recorded for this player, stamped with <see cref="Time.frameCount"/>.
+        /// </summary>
+        public InputActionBuffer ActionBuffer => _actionBuffer;
+
+        /// <summary>
+        /// Takes a press edge of the action recorded within the last <paramref name="windowFrames"/> frames. A press
+        /// is delivered once: the same edge cannot be consumed twice.
+        /// </summary>
+        /// <param name="actionId">Deterministic action identity.</param>
+        /// <param name="windowFrames">Maximum accepted age in frames, inclusive. Zero accepts only this frame.</param>
+        /// <returns>True when an edge was taken.</returns>
+        public bool TryConsumeBuffered(int actionId, int windowFrames)
+        {
+            EnsureUsable();
+            return _actionBuffer.TryConsume(actionId, Time.frameCount, windowFrames);
+        }
+
+        /// <summary>Reads a buffered press edge without taking ownership of it.</summary>
+        /// <param name="actionId">Deterministic action identity.</param>
+        /// <param name="windowFrames">Maximum accepted age in frames, inclusive.</param>
+        /// <returns>True when an edge is available.</returns>
+        public bool TryPeekBuffered(int actionId, int windowFrames)
+        {
+            EnsureUsable();
+            return _actionBuffer.TryPeek(actionId, Time.frameCount, windowFrames);
+        }
+
         public Observable<Unit> GetChordObservable(int actionId1, int actionId2, float windowMs = 300f)
         {
             Observable<bool> first = GetPressStateObservable(actionId1);
@@ -1259,7 +1294,6 @@ namespace CycloneGames.InputSystem.Runtime
                         InputActionMap map = asset.AddActionMap(internalMapName);
                         _contextMaps.Add(contextKey, map);
                         _contextDefinitions.Add(contextKey, context);
-                        RegisterContextMapLookup(contextKey);
 
                         int bindingCount = context.Bindings.Count;
                         for (int bindingIndex = 0; bindingIndex < bindingCount; bindingIndex++)
@@ -1377,11 +1411,13 @@ namespace CycloneGames.InputSystem.Runtime
             var pressState = new BehaviorSubject<bool>(false);
             _buttonSubjects.Add(key, subject);
             _pressStateSubjects.Add(key, pressState);
+            int actionId = InputHashUtility.GetActionId(key.ContextName, key.MapName, key.ActionName);
 
             action.StartedAsObservable(token).Subscribe(ctx =>
             {
                 UpdateActiveDeviceKind(TryGetControlDevice(ctx));
                 pressState.OnNext(true);
+                _actionBuffer.Record(actionId, Time.frameCount);
             }).AddTo(_actionWiringSubscriptions);
             action.PerformedAsObservable(token).Subscribe(ctx =>
             {
@@ -1457,6 +1493,12 @@ namespace CycloneGames.InputSystem.Runtime
 
             int holdCount = _holdStates.Count;
             for (int i = 0; i < holdCount; i++) _holdStates[i].Update(now);
+        }
+
+        /// <summary>Drops pending press edges. Called whenever the active context set or the block state changes.</summary>
+        private void InvalidateBufferedEdges()
+        {
+            _actionBuffer.Clear();
         }
 
         private void ActivateTopContext()
@@ -1848,10 +1890,7 @@ namespace CycloneGames.InputSystem.Runtime
         private bool TryResolveContextKey(InputContext context, out InputActionKey key)
         {
             key = new InputActionKey(context.Name, context.ActionMapName, null);
-            if (_contextDefinitions.ContainsKey(key)) return true;
-            if (!_ambiguousContextMaps.Contains(context.ActionMapName) &&
-                _uniqueContextByMap.TryGetValue(context.ActionMapName, out key)) return true;
-            return false;
+            return _contextDefinitions.ContainsKey(key);
         }
 
         private void ValidateContextForActivation(InputContext context)
@@ -1917,20 +1956,6 @@ namespace CycloneGames.InputSystem.Runtime
             _actionsByKey.Add(key, action);
             _actionLookup.Add(actionId, new ActionRegistration(key, action));
             _actionIdToName.Add(actionId, identity);
-        }
-
-        private void RegisterContextMapLookup(InputActionKey contextKey)
-        {
-            if (_ambiguousContextMaps.Contains(contextKey.MapName)) return;
-            if (_uniqueContextByMap.TryGetValue(contextKey.MapName, out InputActionKey existing) && existing != contextKey)
-            {
-                _uniqueContextByMap.Remove(contextKey.MapName);
-                _ambiguousContextMaps.Add(contextKey.MapName);
-            }
-            else
-            {
-                _uniqueContextByMap[contextKey.MapName] = contextKey;
-            }
         }
 
         private bool ApplyBindingOverride(InputAction action, string oldBinding, string newBinding)

@@ -240,7 +240,7 @@ menu.Dispose();
 
 压入上下文之前先绑定命令。上下文拥有命令映射，玩家在上下文激活期间持有活的订阅。名称区分大小写。`ActiveContextName` 报告栈顶的激活上下文。
 
-两参构造 `InputContext(actionMapName, name)` 从同名的 YAML 上下文读取优先级和阻断策略，四参构造在代码里直接指定两者。同一层的窗口应使用同一个优先级，不同的数值会覆盖入栈顺序。
+两参构造 `InputContext(actionMapName, name)` 从同名的 YAML 上下文读取优先级和阻断策略，四参构造在代码里直接指定两者。上下文只有在名称和 action map 都匹配已配置项时才会解析；构造函数要求两者都提供，无法构造只带 action map 的实例。同一层的窗口应使用同一个优先级，不同的数值会覆盖入栈顺序。
 
 ### 修改激活中上下文的策略
 
@@ -257,7 +257,7 @@ player.SetContextPolicy(dialog, dialogPriority, blocksLowerPriority: false);
 player.SetContextPolicy(dialog, dialogPriority, blocksLowerPriority: true);
 ```
 
-策略按玩家保存。两个玩家可以共享同一个 `InputContext` 对象并对其应用不同的策略。策略变化触发一次刷新，重复设置相同的值不会触发。
+策略按玩家保存，所以两个玩家可以共享同一个 `InputContext` 并各自应用不同策略。策略变化触发一次刷新，重复设置相同的值不会触发。进入或离开激活集合的上下文会重建订阅：跨越这次变化一直按住的按钮既不产生按下边沿，也不报告按下状态，直到松开后重新按下；`Vector2` 和 `Float` 动作在 map 重新启用时再次给出当前值。
 
 ### 刷新的结果
 
@@ -322,6 +322,30 @@ player.GetChordObservable(confirm, cancel, windowMs: 200f)
 模块的长按支持 `Button` 和 `Float`，由 `longPressMs > 0` 启用，与 Unity 的 `hold(...)` interaction 相互独立。`Float` 长按要求 `longPressValueThreshold` 落在 `(0,1]`。和弦需要两个已配置的按钮动作，松开后流复位。
 
 每个订阅都要有明确的生命周期，由 `InputContext`、`CompositeDisposable` 或持有它的组件释放。
+### 缓存按下边沿
+
+按下边沿可以缓存若干帧，由消费方决定何时取用：玩家在落地前几帧按下的跳跃，落地时依然算数。
+
+| 成员 | 作用 |
+| --- | --- |
+| `TryConsumeBuffered(actionId, windowFrames)` | 取走窗口内最新的一次按下。同一次按下只能被取走一次。 |
+| `TryPeekBuffered(actionId, windowFrames)` | 只看不取。 |
+| `ActionBuffer` | 底层环形缓冲，需要自定时钟时可以按自己的 tick 记录和查询。 |
+
+```csharp
+int jumpId = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Jump");
+
+void Update()
+{
+    if (isGrounded && player.TryConsumeBuffered(jumpId, windowFrames: 6))
+    {
+        Jump();
+    }
+}
+```
+
+窗口按帧计，`0` 只接受当帧。上下文集合变化、`BlockInput` 前后都会清空缓冲，边沿不会跨输入状态。缓冲按玩家预分配，默认 64 条、保留 600 帧，运行期不再分配。
+
 
 ## 5. 本地多人与设备
 
@@ -715,6 +739,7 @@ builder.Install(new InputSystemVContainerInstaller(options));
 | `InputHashUtility` | 确定性的 map 哈希和带上下文的 action ID。 |
 | `InputBindingValidator` | 检测已配置直接绑定的冲突。 |
 | `InputRx` | 键盘、指针、手柄、触摸、用户、动作和 `PlayerInput` 的底层 R3 封装。 |
+| `InputActionBuffer` | 按下边沿的定长环形缓冲，按 tick 记录、按窗口消费。 |
 
 ### 运行测试
 
