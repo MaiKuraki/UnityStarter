@@ -432,12 +432,35 @@ namespace CycloneGames.InputSystem.Runtime.Tests
         [Test]
         public void InputContext_DefaultAndExplicitPoliciesAreStable()
         {
-            using var defaultPolicy = new InputContext("Player");
+            using var defaultPolicy = new InputContext("Player", "Gameplay");
             using var layered = new InputContext("UI", "Overlay", 100, false);
             Assert.That(defaultPolicy.Priority, Is.Zero);
             Assert.That(defaultPolicy.BlocksLowerPriority, Is.True);
             Assert.That(layered.Priority, Is.EqualTo(100));
             Assert.That(layered.BlocksLowerPriority, Is.False);
+        }
+
+        [Test]
+        public void PushContext_RejectsContextWhoseNameIsNotConfigured()
+        {
+            Keyboard keyboard = UnityEngine.InputSystem.InputSystem.AddDevice<Keyboard>();
+            InputPlayer player = null;
+            var unknown = new InputContext("Player", "NotConfigured");
+            try
+            {
+                InputUser user = InputUser.PerformPairingWithDevice(keyboard);
+                player = new InputPlayer(0, user, CreateValidConfiguration().PlayerSlots[0], keyboard);
+
+                // The Player map only declares the Gameplay context; the name is part of the identity.
+                Assert.Throws<ArgumentException>(() => player.PushContext(unknown));
+                Assert.That(player.ActiveContextName.CurrentValue, Is.Null);
+            }
+            finally
+            {
+                unknown.Dispose();
+                player?.Dispose();
+                UnityEngine.InputSystem.InputSystem.RemoveDevice(keyboard);
+            }
         }
 
         [Test]
@@ -1034,45 +1057,38 @@ namespace CycloneGames.InputSystem.Runtime.Tests
         }
 
         [Test]
-        public void StopListening_DisposeCallbackCanRestartWithoutCorruptingStaticCount()
+        public void StopThenStart_ReusesThePreparedJoinAction()
         {
             InputManager.ResetGlobalStateForDomainReload();
             InputManager manager = null;
-            Action<object, InputActionChange> onActionChange = null;
             try
             {
                 manager = new InputManager();
                 InputConfiguration configuration = CreateValidConfiguration();
                 configuration.JoinAction = CreateButton("Join", "<Keyboard>/enter");
                 Assert.That(manager.InitializeWithResult(Serialize(configuration)).IsSuccess, Is.True);
+
                 manager.StartListeningForPlayers(true);
                 InputAction firstListener = GetJoinAction(manager);
-                bool reentered = false;
-                onActionChange = (changed, change) =>
-                {
-                    if (reentered || change != InputActionChange.ActionDisabled ||
-                        !ReferenceEquals(changed, firstListener)) return;
-                    reentered = true;
-                    manager.StartListeningForPlayers(false);
-                };
-                UnityEngine.InputSystem.InputSystem.onActionChange += onActionChange;
+                Assert.That(firstListener, Is.Not.Null);
 
                 manager.StopListeningForPlayers();
+                Assert.That(manager.IsListeningForPlayers, Is.False);
+                Assert.That(GetJoinAction(manager), Is.SameAs(firstListener),
+                    "Stopping the listener must keep the prepared action for reuse.");
 
-                Assert.That(reentered, Is.True);
-                Assert.That(GetJoinAction(manager), Is.Not.Null);
-                Assert.That(GetJoinAction(manager), Is.Not.SameAs(firstListener));
-                Assert.That(InputManager.IsListeningForPlayers, Is.True);
+                manager.StartListeningForPlayers(false);
+                Assert.That(manager.IsListeningForPlayers, Is.True);
+                Assert.That(GetJoinAction(manager), Is.SameAs(firstListener),
+                    "Restarting must not allocate a second listener.");
             }
             finally
             {
-                if (onActionChange != null)
-                    UnityEngine.InputSystem.InputSystem.onActionChange -= onActionChange;
                 manager?.Dispose();
                 InputManager.ResetGlobalStateForDomainReload();
             }
 
-            Assert.That(InputManager.IsListeningForPlayers, Is.False);
+            Assert.That(manager.IsListeningForPlayers, Is.False);
         }
 
         [Test]
@@ -1108,7 +1124,7 @@ namespace CycloneGames.InputSystem.Runtime.Tests
                 Assert.That(reentrantResult, Is.Not.Null);
                 Assert.That(reentrantResult.Status, Is.EqualTo(InputManagerInitializationStatus.Success));
                 Assert.That(GetJoinAction(manager), Is.Null);
-                Assert.That(InputManager.IsListeningForPlayers, Is.False);
+                Assert.That(manager.IsListeningForPlayers, Is.False);
             }
             finally
             {
@@ -1627,14 +1643,16 @@ namespace CycloneGames.InputSystem.Runtime.Tests
         }
 
         [Test]
-        public void ResetGlobalStateForDomainReload_ReplacesCompatibilityInstance()
+        public void ResetGlobalStateForDomainReload_LeavesNoActiveManager()
         {
-            InputManager before = InputManager.Instance;
             InputManager.ResetGlobalStateForDomainReload();
-            InputManager after = InputManager.Instance;
-            Assert.That(after, Is.Not.SameAs(before));
-            Assert.That(after.ActivePlayerCount, Is.Zero);
+            var manager = new InputManager();
+            Assert.That(InputManager.ActiveManagerCount, Is.EqualTo(1));
+
             InputManager.ResetGlobalStateForDomainReload();
+
+            Assert.That(manager.IsDisposed, Is.True);
+            Assert.That(InputManager.ActiveManagerCount, Is.Zero);
         }
 
         [Test]
@@ -1646,12 +1664,12 @@ namespace CycloneGames.InputSystem.Runtime.Tests
             configuration.JoinAction = CreateButton("Join", "<Keyboard>/enter");
             Assert.That(manager.InitializeWithResult(Serialize(configuration)).IsSuccess, Is.True);
             manager.StartListeningForPlayers(false);
-            Assert.That(InputManager.IsListeningForPlayers, Is.True);
+            Assert.That(manager.IsListeningForPlayers, Is.True);
 
             InputManager.ResetGlobalStateForDomainReload();
 
             Assert.That(manager.IsDisposed, Is.True);
-            Assert.That(InputManager.IsListeningForPlayers, Is.False);
+            Assert.That(manager.IsListeningForPlayers, Is.False);
         }
 
         [Test]
