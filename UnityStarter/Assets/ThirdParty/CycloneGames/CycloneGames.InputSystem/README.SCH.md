@@ -723,6 +723,19 @@ Unity API 以及玩家、上下文操作都限定在 Unity 主线程。`UriInput
 
 **UGUI。** 在 asmdef 中引用 `CycloneGames.InputSystem.Runtime.Integrations.UGUI`，使用 `InputDeviceIconSet`、`InputDeviceIconSwitcher` 以及横向和纵向的菜单导航组件。`InputDeviceIconSwitcher` 从场景中的 `InputManagerProvider` 取管理器，需要在 Inspector 里指定。`InputDeviceIconSet` 按控制路径、设备布局、设备类型的顺序解析图标；提示文字由产品自己的本地化系统负责。该程序集只包含展示适配器。
 
+`InputDeviceIconSet` 有两种来源。`Direct` 把 Sprite 存在资产里，不需要任何设置。`ProviderKey` 只存键，经产品自己实现的 `IInputPromptIconProvider` 解析，Addressables 或 bundle 系统不必进入输入包。查询时按需解析并缓存结果；界面要求打开即完整时，用 `WarmupAll` 一次性固定。
+
+```csharp
+iconSet.SetProvider(myProvider);   // 一次调用，可选
+iconSet.TryGetIcon("<Gamepad>/buttonSouth", kind, layout, out Sprite sprite);
+```
+
+Inspector 只绘制当前来源需要的字段，并提示空键与重复键。
+
+Provider 键有两种来源。`Asset` 保存资产 GUID 与项目内相对路径，Inspector 用 GUID 反查并同步路径，改名或移动后不会留下旧路径。`CustomKey` 是普通字符串。产品自己的 provider 收到路径或自定义键，自行决定如何加载 Sprite。
+
+Inspector 的分区标题、折叠与卡片来自输入 Editor 程序集里的 `EditorUiUtility`，所有输入 Inspector 共用同一套布局。派生类新增的可序列化字段显示在 `Additional Fields` 中。
+
 **VContainer。** 集成注册由容器持有的 `InputManager`、`IInputPlayerResolver`、`IInputSystemInitializer` 和诊断。组合根提供一个不可变的 `InputSystemVContainerOptions`。只有 `registerEntryPoint: true` 时才登记入口，只有 `throwOnStartupFailure: true` 时启动失败才向上抛出，否则结果留在 `IInputSystemInitializerDiagnostics.LastResult`。该作用域内的所有消费者必须解析到同一个 manager。
 
 ```csharp

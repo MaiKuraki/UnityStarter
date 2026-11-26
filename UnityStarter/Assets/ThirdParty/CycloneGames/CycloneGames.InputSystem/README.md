@@ -723,6 +723,19 @@ Subsystem registration invalidates every still-active manager, so play sessions 
 
 **UGUI.** Add an asmdef reference to `CycloneGames.InputSystem.Runtime.Integrations.UGUI` for `InputDeviceIconSet`, `InputDeviceIconSwitcher` and horizontal or vertical menu-navigation components. `InputDeviceIconSwitcher` reads the manager from a scene `InputManagerProvider`; assign it in the inspector. `InputDeviceIconSet` resolves sprites by control path, then device layout, then device kind; display text belongs to the product's localization system. The assembly owns presentation adapters only.
 
+`InputDeviceIconSet` has two sources. `Direct` stores sprites in the asset and needs no setup. `ProviderKey` stores keys and resolves them through a product-owned `IInputPromptIconProvider`, so Addressables or bundle systems stay out of the input package. Lookups resolve lazily and cache the result; `WarmupAll` pins every entry when a screen must not load on open.
+
+```csharp
+iconSet.SetProvider(myProvider);   // one call, optional
+iconSet.TryGetIcon("<Gamepad>/buttonSouth", kind, layout, out Sprite sprite);
+```
+
+The Inspector draws only the fields used by the selected source and warns about empty or duplicate keys.
+
+Provider keys have two sources. `Asset` stores the asset GUID and the project-relative path; the Inspector keeps the path in sync from the GUID, so a rename or move does not leave a stale path. `CustomKey` is a plain string. The product provider receives the path or the custom key and decides how to load the sprite.
+
+Inspector section headers, foldouts and cards come from `EditorUiUtility` in the input Editor assembly, so all input inspectors share the same layout. Derived classes can add serialized fields; those appear under `Additional Fields`.
+
 **VContainer.** The integration registers a container-owned `InputManager`, `IInputPlayerResolver`, `IInputSystemInitializer` and diagnostics. The composition root supplies an immutable `InputSystemVContainerOptions`. An entry point is registered only with `registerEntryPoint: true`, and a failed bootstrap is escalated only with `throwOnStartupFailure: true`. Otherwise the result stays in `IInputSystemInitializerDiagnostics.LastResult`. Every consumer in that scope must resolve the same manager.
 
 ```csharp

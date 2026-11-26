@@ -572,12 +572,12 @@ namespace CycloneGames.InputSystem.Tests.Editor
             var iconSet = ScriptableObject.CreateInstance<InputDeviceIconSet>();
             try
             {
-                SetField(iconSet, "gamepadIcon", generic);
-                SetField(iconSet, "keyboardMouseIcon", generic);
+                SetField(iconSet, "gamepadIcon", new InputPromptIconRef { direct = generic });
+                SetField(iconSet, "keyboardMouseIcon", new InputPromptIconRef { direct = generic });
 
                 var entries = new[]
                 {
-                    new DeviceLayoutIcon { layout = "DualShockGamepad", icon = playStation }
+                    new DeviceLayoutIcon { layout = "DualShockGamepad", icon = new InputPromptIconRef { direct = playStation } }
                 };
                 SetField(iconSet, "layoutIcons", entries);
 
