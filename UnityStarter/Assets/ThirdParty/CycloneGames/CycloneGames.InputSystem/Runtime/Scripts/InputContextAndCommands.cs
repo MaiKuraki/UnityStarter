@@ -38,11 +38,11 @@ namespace CycloneGames.InputSystem.Runtime
         private bool _isDisposed;
 
         /// <summary>
-        /// Creates a new input context.
+        /// Creates a context that binds to the configured context with the same name and action map.
         /// </summary>
-        /// <param name="actionMapName">The Unity Input System ActionMap name (required for functionality).</param>
-        /// <param name="name">Optional display name for debugging. If null, uses actionMapName.</param>
-        public InputContext(string actionMapName, string name = null)
+        /// <param name="actionMapName">Configured action-map identity.</param>
+        /// <param name="name">Configured context identity.</param>
+        public InputContext(string actionMapName, string name)
             : this(actionMapName, name, 0, true, false)
         {
         }
@@ -58,7 +58,7 @@ namespace CycloneGames.InputSystem.Runtime
         private InputContext(string actionMapName, string name, int priority, bool blocksLowerPriority, bool hasExplicitPolicy)
         {
             ActionMapName = actionMapName ?? throw new ArgumentNullException(nameof(actionMapName));
-            Name = name ?? actionMapName;
+            Name = name ?? throw new ArgumentNullException(nameof(name));
             Priority = priority;
             BlocksLowerPriority = blocksLowerPriority;
             HasExplicitPolicy = hasExplicitPolicy;

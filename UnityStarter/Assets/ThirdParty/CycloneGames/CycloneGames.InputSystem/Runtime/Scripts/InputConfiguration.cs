@@ -35,10 +35,14 @@ namespace CycloneGames.InputSystem.Runtime
     [YamlObject]
     public partial class InputConfiguration
     {
-        public const int CurrentSchemaVersion = 1;
+        /// <summary>
+        /// Format version accepted by this build. Declared <c>static readonly</c> so consumer assemblies cannot
+        /// inline a stale value across a package update.
+        /// </summary>
+        public static readonly int CurrentSchemaVersion = 1;
 
         /// <summary>
-        /// Persisted schema version. An omitted value deserializes as zero and is normalized during validation.
+        /// Persisted format version. Required: an omitted key deserializes as zero and is rejected.
         /// </summary>
         [YamlMember("schemaVersion")]
         public int SchemaVersion { get; set; }

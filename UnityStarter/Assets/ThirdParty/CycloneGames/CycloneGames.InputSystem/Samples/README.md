@@ -53,7 +53,7 @@ Regenerate `InputActions.cs` after changing a context name, action-map name, or 
 
 ## Stage 2: Load and initialize
 
-`GameInitializer_Sample` reads the authored configuration from a `TextAsset` reference and keeps user overrides in a store on `persistentDataPath`:
+`GameInitializer_Sample` reads the authored configuration from a `TextAsset` reference and keeps user overrides in a store on `persistentDataPath`. The sample constructs `_inputManager = new InputManager()` at the start of its initialization path and disposes it with the bootstrap:
 
 ```csharp
 var userStore = new FileInputConfigurationStore(
@@ -64,7 +64,7 @@ InputSystemLoadResult result = await InputSystemLoader.LoadAndInitializeAsync(
     _configuration.name,
     userStore,
     "user_input_settings.yaml",
-    InputManager.Instance,
+    _inputManager,
     false,
     cancellationToken);
 
@@ -96,7 +96,7 @@ Join failure is handled as initialization failure in the sample. A product can i
 The manager raises `OnPlayerInputReady` after a player has an action asset. The handler validates the player ID and serialized references before instantiating the prefab. The dictionary prevents duplicate ready notifications from creating duplicate player objects.
 
 ```csharp
-InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
+_inputManager.OnPlayerInputReady += HandlePlayerInputReady;
 
 private void HandlePlayerInputReady(IInputPlayer inputPlayer)
 {

@@ -53,7 +53,7 @@ InputActions.Actions.Gameplay_Confirm
 
 ## 阶段 2：加载并初始化
 
-`GameInitializer_Sample` 从 `TextAsset` 引用读取 authoring 配置，用户覆盖设置则由 `persistentDataPath` 上的 store 管理：
+`GameInitializer_Sample` 从 `TextAsset` 引用读取 authoring 配置，用户覆盖设置则由 `persistentDataPath` 上的 store 管理。示例在初始化路径开头创建 `_inputManager = new InputManager()`，随 bootstrap 一起释放：
 
 ```csharp
 var userStore = new FileInputConfigurationStore(
@@ -64,7 +64,7 @@ InputSystemLoadResult result = await InputSystemLoader.LoadAndInitializeAsync(
     _configuration.name,
     userStore,
     "user_input_settings.yaml",
-    InputManager.Instance,
+    _inputManager,
     false,
     cancellationToken);
 
@@ -96,7 +96,7 @@ if (!result.IsSuccess)
 player 获得 action asset 后，manager 触发 `OnPlayerInputReady`。handler 在实例化 prefab 前验证 player ID 与序列化引用。dictionary 防止重复 ready notification 产生重复 player object。
 
 ```csharp
-InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
+_inputManager.OnPlayerInputReady += HandlePlayerInputReady;
 
 private void HandlePlayerInputReady(IInputPlayer inputPlayer)
 {

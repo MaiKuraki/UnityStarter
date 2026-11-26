@@ -47,7 +47,7 @@ namespace CycloneGames.InputSystem.Sample
 
         private readonly Dictionary<int, GameObject> _spawnedPlayers = new();
         private bool _isOwner;
-        private bool _ownsInputManager;
+        private InputManager _inputManager;
         private bool _isSubscribed;
         private bool _isShuttingDown;
 
@@ -88,7 +88,7 @@ namespace CycloneGames.InputSystem.Sample
                 return;
             }
 
-            _ownsInputManager = true;
+            _inputManager = new InputManager();
             try
             {
                 TextAsset configurationAsset = UsesMixedConfiguration()
@@ -113,7 +113,7 @@ namespace CycloneGames.InputSystem.Sample
                     persistDefaultToUser: false);
                 InputSystemLoadResult loadResult = await InputSystemLoader.LoadAndInitializeAsync(
                     options,
-                    InputManager.Instance,
+                    _inputManager,
                     false,
                     cancellationToken);
                 if (!loadResult.IsSuccess)
@@ -134,7 +134,7 @@ namespace CycloneGames.InputSystem.Sample
                 cancellationToken.ThrowIfCancellationRequested();
                 await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
 
-                InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
+                _inputManager.OnPlayerInputReady += HandlePlayerInputReady;
                 _isSubscribed = true;
 
                 await ConfigureStartupModeAsync(cancellationToken);
@@ -165,7 +165,7 @@ namespace CycloneGames.InputSystem.Sample
                 case StartupMode.AutoJoinLockedSinglePlayer:
                 case StartupMode.AutoJoinMixedDevices:
                     EnsurePlayerJoined(
-                        await InputManager.Instance.JoinSinglePlayerAsync(
+                        await _inputManager.JoinSinglePlayerAsync(
                             0,
                             5,
                             cancellationToken),
@@ -175,29 +175,29 @@ namespace CycloneGames.InputSystem.Sample
 
                 case StartupMode.AutoJoinSharedKeyboard:
                     EnsurePlayerJoined(
-                        await InputManager.Instance.JoinPlayerOnSharedDeviceAsync(0),
+                        await _inputManager.JoinPlayerOnSharedDeviceAsync(0),
                         0);
                     cancellationToken.ThrowIfCancellationRequested();
                     EnsurePlayerJoined(
-                        await InputManager.Instance.JoinPlayerOnSharedDeviceAsync(1),
+                        await _inputManager.JoinPlayerOnSharedDeviceAsync(1),
                         1);
                     cancellationToken.ThrowIfCancellationRequested();
                     break;
 
                 case StartupMode.LobbyWithDeviceLocking:
-                    InputManager.Instance.StartListeningForPlayers(true);
+                    _inputManager.StartListeningForPlayers(true);
                     break;
 
                 case StartupMode.LobbyWithSharedDevices:
-                    InputManager.Instance.StartListeningForPlayers(false);
+                    _inputManager.StartListeningForPlayers(false);
                     break;
 
                 case StartupMode.AutoJoinKeyboardMouseVsGamepad:
                     // Player 0 naturally claims keyboard/mouse with the first matching control scheme;
                     // with those devices unavailable, player 1 falls through to the Gamepad scheme.
-                    EnsurePlayerJoined(InputManager.Instance.JoinSinglePlayer(0), 0);
+                    EnsurePlayerJoined(_inputManager.JoinSinglePlayer(0), 0);
                     cancellationToken.ThrowIfCancellationRequested();
-                    IInputPlayer secondPlayer = InputManager.Instance.JoinSinglePlayer(1);
+                    IInputPlayer secondPlayer = _inputManager.JoinSinglePlayer(1);
                     if (secondPlayer == null)
                     {
                         Log.Warning(
@@ -248,7 +248,7 @@ namespace CycloneGames.InputSystem.Sample
 
         private void HandlePlayerInputReady(IInputPlayer inputPlayer)
         {
-            if (!_ownsInputManager || inputPlayer == null)
+            if (_inputManager == null || inputPlayer == null)
             {
                 return;
             }
@@ -356,17 +356,17 @@ namespace CycloneGames.InputSystem.Sample
             _isShuttingDown = true;
             if (_isSubscribed)
             {
-                InputManager.Instance.OnPlayerInputReady -= HandlePlayerInputReady;
+                _inputManager.OnPlayerInputReady -= HandlePlayerInputReady;
                 _isSubscribed = false;
             }
 
-            InputManager.Instance.StopListeningForPlayers();
+            _inputManager.StopListeningForPlayers();
             DestroySpawnedPlayers();
 
-            if (_ownsInputManager)
+            if (_inputManager != null)
             {
-                InputManager.Instance.Dispose();
-                _ownsInputManager = false;
+                _inputManager.Dispose();
+                _inputManager = null;
             }
 
             isInitialized = false;
