@@ -223,6 +223,32 @@ namespace CycloneGames.InputSystem.Tests.PlayMode
             yield return Frames(2);
         }
 
+        // ------------------------------------------------------------------ 1c. rebind capture
+
+        [UnityTest]
+        public IEnumerator EndToEnd_RebindCapturesThePressedControlAndAppliesIt()
+        {
+            Gamepad pad = Inject<Gamepad>("E2E_RebindPad");
+            InputManager manager = NewManager(GamepadSlotsYaml(1));
+            InputPlayer player = Join(manager, 0, "Map0");
+            var operation = new InputRebindOperation(player, "Gameplay", "Map0", "Confirm", "<Gamepad>/buttonSouth");
+
+            operation.Start(UnityEngine.Time.realtimeSinceStartupAsDouble);
+            yield return null;
+            UIS.QueueStateEvent(pad, new GamepadState { buttons = 1u << (int)GamepadButton.East });
+            yield return Frames(2);
+
+            Assert.That(operation.Status, Is.EqualTo(RebindStatus.Accepted),
+                "captured path: " + (operation.ControlPath ?? "<null>"));
+            Assert.That(operation.ControlPath, Does.Contain("buttonEast"));
+
+            Assert.That(operation.Apply(), Is.True);
+            Assert.That(player.GetActionBindings("Gameplay", "Map0", "Confirm"), Does.Contain("<Gamepad>/buttonEast"));
+
+            operation.Dispose();
+            UIS.QueueStateEvent(pad, new GamepadState());
+        }
+
         // ------------------------------------------------------------------ 2. frame pump
 
         [UnityTest]
