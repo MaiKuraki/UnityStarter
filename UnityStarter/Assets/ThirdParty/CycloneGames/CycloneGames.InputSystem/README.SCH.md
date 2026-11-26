@@ -480,6 +480,32 @@ public sealed class InputBindingProfilePersistence
 
 在组合根创建一次这个对象。玩家加入之前加载，在明确的设置提交或生命周期检查点保存。预算耗尽属于预期失败时，用 `TryExportBindingOverridesJson` 或 `TryExportBindingOverrideProfile`。加载失败时保持配置的默认值。
 
+### 交互式捕获
+
+`InputRebindOperation` 是捕获闭环：监听、按 `InputRebindPolicy` 校验候选、报告冲突，再通过玩家应用结果。
+
+| 成员 | 行为 |
+| --- | --- |
+| `Start(now)` | 开始监听下一次按键。一个会话只跑一次，重试要新建。 |
+| `Offer(path, layout, now)` | 产品自己过滤设备时，直接投喂候选控制。 |
+| `Status` | `Idle`、`Listening`、`Accepted`、`Conflict`、`Canceled`、`TimedOut`，终态不再变化。 |
+| `ConflictingBinding` | 同一动作的其它绑定已经占用的路径。 |
+| `Apply()` / `ResolveConflictBySwap()` | 应用接受的路径，或先把冲突绑定换到旧路径。 |
+| `Poll(now)` | 让带超时的会话过期。 |
+
+```csharp
+var rebind = new InputRebindOperation(player, "UI", "UIActions", "Confirm", "<Gamepad>/buttonSouth",
+    InputRebindPolicy.CreateDefault(), timeoutSeconds: 10d);
+rebind.Start(Time.realtimeSinceStartupAsDouble);
+
+// 之后在设置界面里：
+if (rebind.Poll(Time.realtimeSinceStartupAsDouble)) CloseAndReport("timed out");
+else if (rebind.Status == RebindStatus.Conflict) rebind.ResolveConflictBySwap();
+else if (rebind.Status == RebindStatus.Accepted) rebind.Apply();
+```
+
+捕获到的控制会转成布局路径，所以在手柄 A 上做的重绑定在手柄 B 上同样有效。Escape 默认保留；候选被拒时会话继续监听，原因记在 `LastRejection`。
+
 ## 7. 配置
 
 ### 字段参考

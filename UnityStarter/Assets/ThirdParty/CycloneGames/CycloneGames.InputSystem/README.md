@@ -480,6 +480,32 @@ public sealed class InputBindingProfilePersistence
 
 Construct this owner once at the composition root. Load before players join and save at explicit settings commits or lifecycle checkpoints. Use `TryExportBindingOverridesJson` or `TryExportBindingOverrideProfile` when budget exhaustion is an expected failure path. Keep configured defaults active when loading fails.
 
+### Interactive capture
+
+`InputRebindOperation` is the capture loop: it listens, validates the candidate against an `InputRebindPolicy`, reports conflicts, and applies the result through the player.
+
+| Member | Behavior |
+| --- | --- |
+| `Start(now)` | Listens for the next button press. A session runs once; create a new one to retry. |
+| `Offer(path, layout, now)` | Feeds a candidate directly when a product filters devices itself. |
+| `Status` | `Idle`, `Listening`, `Accepted`, `Conflict`, `Canceled`, `TimedOut`. Terminal states never change. |
+| `ConflictingBinding` | Path already bound to another binding of the same action. |
+| `Apply()` / `ResolveConflictBySwap()` | Applies the accepted path, or swaps the conflicting binding first. |
+| `Poll(now)` | Expires a session that carries a timeout. |
+
+```csharp
+var rebind = new InputRebindOperation(player, "UI", "UIActions", "Confirm", "<Gamepad>/buttonSouth",
+    InputRebindPolicy.CreateDefault(), timeoutSeconds: 10d);
+rebind.Start(Time.realtimeSinceStartupAsDouble);
+
+// Later, from the settings screen.
+if (rebind.Poll(Time.realtimeSinceStartupAsDouble)) CloseAndReport("timed out");
+else if (rebind.Status == RebindStatus.Conflict) rebind.ResolveConflictBySwap();
+else if (rebind.Status == RebindStatus.Accepted) rebind.Apply();
+```
+
+A captured control is converted to a layout path, so a rebind done on one gamepad also works on another. Escape is reserved by default; a rejected candidate keeps the session listening and reports the reason in `LastRejection`.
+
 ## 7. Configuration
 
 ### Reference
