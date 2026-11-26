@@ -404,7 +404,7 @@ These values reject unreasonable or untrusted inputs before expensive work. They
 | Retained downloader scope values per Addressables/Yoo package | 262,144 |
 | Addressables catalog-label query | tag: 4,096 characters; unique locations: 65,536; result text: 8 Mi characters |
 | Addressables pending catalog-label queries per package | 32 |
-| Addressables pending asset/all-assets/instantiate/catalog-query tails | 16,384 |
+| Addressables pending asset/multi-asset/instantiate/catalog-query tails | 16,384 |
 | Yoo downloader concurrency | 1-32 |
 | Yoo retry count | 0-16 |
 | Yoo maintenance timeout | 1-3,600 seconds |

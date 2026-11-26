@@ -64,10 +64,10 @@ namespace CycloneGames.AssetManagement.Runtime
             return _package.LoadAssetAsync<TAsset>(location, _bucket, tag ?? _tag, owner ?? _owner, cancellationToken);
         }
 
-        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string tag = null, string owner = null, CancellationToken cancellationToken = default)
+        public IMultiAssetHandle<TAsset> LoadMultipleAssetsAsync<TAsset>(string location, string tag = null, string owner = null, CancellationToken cancellationToken = default)
             where TAsset : UnityEngine.Object
         {
-            return RequireCapability<IAssetBulkLoader>().LoadAllAssetsAsync<TAsset>(
+            return RequireCapability<IMultiAssetLoader>().LoadMultipleAssetsAsync<TAsset>(
                 location,
                 _bucket,
                 tag ?? _tag,

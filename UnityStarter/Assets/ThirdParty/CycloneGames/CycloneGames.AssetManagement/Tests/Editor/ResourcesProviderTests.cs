@@ -257,16 +257,16 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
-        public async Task Bulk_Load_Capability_Is_Absent_Instead_Of_Blocking_The_Main_Thread()
+        public async Task MultiAsset_Load_Capability_Is_Absent_Instead_Of_Blocking_The_Main_Thread()
         {
             var module = new ResourcesModule();
             await module.InitializeAsync();
             try
             {
-                IAssetPackage package = module.CreatePackage("BulkLoadResourcesTests");
+                IAssetPackage package = module.CreatePackage("MultiAssetResourcesTests");
                 await package.InitializeAsync(new AssetPackageInitOptions());
 
-                Assert.IsFalse(package is IAssetBulkLoader);
+                Assert.IsFalse(package is IMultiAssetLoader);
             }
             finally
             {
