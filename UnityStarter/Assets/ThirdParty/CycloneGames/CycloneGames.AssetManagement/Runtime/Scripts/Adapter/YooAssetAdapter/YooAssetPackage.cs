@@ -14,7 +14,7 @@ using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class YooAssetPackage : IAssetPackage, IAssetSyncOperations, IAssetBulkLoader,
+    internal sealed class YooAssetPackage : IAssetPackage, IAssetSyncOperations, IMultiAssetLoader,
         IAssetRawFileLoader, IAssetBundleFileProvisioner, IAssetSceneLoader, IYooAssetPackageMaintenance,
         IAssetCatalogQuery, IAssetCacheMaintenanceOwner, IAssetReleaseRetryDriver, IAssetStoragePreflight,
         IAssetProviderMemoryReclamation
@@ -46,6 +46,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly Dictionary<long, YooSceneHandle> _sceneHandles =
             new Dictionary<long, YooSceneHandle>();
         private readonly List<long> _sceneUnloadScratchIds = new List<long>(4);
+        private readonly HashSet<object> _multiAssetResultScratch = MultiAssetResult.CreateScratch();
         private readonly object _sceneOwnerToken = new object();
         private readonly Action<long> _onInstantiateDisposed;
         private readonly Action<YooDownloader> _onDownloaderDisposed;
@@ -725,7 +726,7 @@ namespace CycloneGames.AssetManagement.Runtime
             return AssetHandleLeases.Create(backend, cancellationToken);
         }
 
-        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(
+        public IMultiAssetHandle<TAsset> LoadMultipleAssetsAsync<TAsset>(
             string location,
             string bucket = null,
             string tag = null,
@@ -740,22 +741,23 @@ namespace CycloneGames.AssetManagement.Runtime
             Cache.AssetCacheKey cacheKey = Cache.AssetCacheService.BuildCacheKey(
                 location,
                 typeof(TAsset),
-                AssetCacheEntryKind.AllAssets);
+                AssetCacheEntryKind.MultipleAssets);
             IReferenceCounted cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null)
             {
-                return AssetHandleLeases.Create((IAllAssetsHandle<TAsset>)cached, cancellationToken);
+                return AssetHandleLeases.Create((IMultiAssetHandle<TAsset>)cached, cancellationToken);
             }
 
             AllAssetsHandle raw = _rawPackage.LoadAllAssetsAsync<TAsset>(location);
             long id = AssetRuntimeGuard.NextHandleId();
-            var backend = YooAllAssetsHandle<TAsset>.Create(
-                id, cacheKey, raw, _cacheService.OnHandleReleased, _operationTails);
+            var backend = YooMultiAssetHandle<TAsset>.Create(
+                id, cacheKey, raw, _multiAssetResultScratch,
+                _cacheService.OnHandleReleased, _operationTails);
             if (HandleTracker.Enabled)
             {
-                HandleTracker.Register(id, Name, $"AllAssets {typeof(TAsset).Name} : {location}");
+                HandleTracker.Register(id, Name, $"MultipleAssets {typeof(TAsset).Name} : {location}");
             }
-            backend = (YooAllAssetsHandle<TAsset>)_cacheService.RegisterNew(
+            backend = (YooMultiAssetHandle<TAsset>)_cacheService.RegisterNew(
                 cacheKey,
                 bucket,
                 tag,

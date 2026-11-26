@@ -201,7 +201,7 @@ namespace CycloneGames.AssetManagement.Runtime
         long IAssetMemoryFootprint.EstimateRuntimeBytes() => Cache.AssetMemoryEstimator.Estimate(AssetObject);
     }
 
-    internal sealed class YooAllAssetsHandle<TAsset> : IAllAssetsHandle<TAsset>, IReferenceCounted,
+    internal sealed class YooMultiAssetHandle<TAsset> : IMultiAssetHandle<TAsset>, IReferenceCounted,
         IInternalCacheable, IAssetMemoryFootprint, IAssetBackendLifetime, ITrackedAssetHandle
         where TAsset : UnityEngine.Object
     {
@@ -239,38 +239,86 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly AssetOperationCompletion _completion;
         private Action<Cache.AssetCacheKey, IReferenceCounted> _onReleaseToCache;
         private AllAssetsHandle _raw;
+        private HashSet<object> _multiAssetResultScratch;
+        private Exception _resultFailure;
         private int _refCount;
         private int _releaseState;
 
-        private YooAllAssetsHandle(
+        private YooMultiAssetHandle(
             long id,
             Cache.AssetCacheKey cacheKey,
             AllAssetsHandle raw,
+            HashSet<object> multiAssetResultScratch,
             Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
             AssetOperationTailTracker operationTails)
         {
             _id = id;
             _cacheKey = cacheKey;
             _raw = raw;
-            _completion = AssetOperationCompletion.Start(YooOperationTask.CompleteAsync(
-                raw,
-                "YooAsset failed to load the requested asset collection."),
-                operationTails);
+            _multiAssetResultScratch = multiAssetResultScratch ??
+                throw new ArgumentNullException(nameof(multiAssetResultScratch));
             _onReleaseToCache = onReleaseToCache;
             _refCount = 1;
+            _completion = AssetOperationCompletion.Start(CompleteAsync(), operationTails);
         }
 
-        public static YooAllAssetsHandle<TAsset> Create(
+        public static YooMultiAssetHandle<TAsset> Create(
             long id,
             Cache.AssetCacheKey cacheKey,
             AllAssetsHandle raw,
+            HashSet<object> multiAssetResultScratch,
             Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
             AssetOperationTailTracker operationTails) =>
-            new YooAllAssetsHandle<TAsset>(id, cacheKey, raw, onReleaseToCache, operationTails);
+            new YooMultiAssetHandle<TAsset>(
+                id, cacheKey, raw, multiAssetResultScratch, onReleaseToCache, operationTails);
+
+        private async UniTask CompleteAsync()
+        {
+            await YooOperationTask.CompleteAsync(
+                _raw,
+                $"YooAsset failed to load the asset collection '{_cacheKey.Location}'.");
+
+            IReadOnlyList<UnityEngine.Object> items = _raw.AllAssetObjects;
+            Exception failure = ScanResult(items);
+            if (failure == null)
+            {
+                failure = MultiAssetResult.Inspect(
+                    items, "YooAsset", _cacheKey.Location, _multiAssetResultScratch);
+            }
+
+            if (failure != null)
+            {
+                _resultFailure = failure;
+                throw failure;
+            }
+        }
+
+        // Unity's == null covers destroyed instances; `is TAsset` rejects entries that cannot be cast by
+        // the caller. Both checks run on the provider's contiguous array before the identity pass.
+        private Exception ScanResult(IReadOnlyList<UnityEngine.Object> items)
+        {
+            int count = items != null ? items.Count : 0;
+            for (int i = 0; i < count; i++)
+            {
+                UnityEngine.Object item = items[i];
+                if (item == null)
+                {
+                    return MultiAssetResult.CreateDanglingFailure("YooAsset", _cacheKey.Location, i);
+                }
+
+                if (!(item is TAsset))
+                {
+                    return MultiAssetResult.CreateTypeError(
+                        "YooAsset", _cacheKey.Location, i, typeof(TAsset));
+                }
+            }
+
+            return null;
+        }
 
         public bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
         public float Progress => _raw?.Progress ?? 0f;
-        public string Error => _raw?.Error ?? string.Empty;
+        public string Error => _resultFailure?.Message ?? _raw?.Error ?? string.Empty;
         public UniTask Task => _completion.Task;
         public int RefCount => Volatile.Read(ref _refCount);
 
@@ -278,7 +326,12 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             get
             {
-                _assets.SetSource(_raw != null && _raw.IsDone ? _raw.AllAssetObjects : null);
+                _assets.SetSource(
+                    !ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) &&
+                    _raw != null &&
+                    _completion.Task.Status == UniTaskStatus.Succeeded
+                        ? _raw.AllAssetObjects
+                        : null);
                 return _assets;
             }
         }
@@ -293,7 +346,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
-                Log.Error("[YooAllAssetsHandle] Retain called on a disposed handle.");
+                Log.Error("[YooMultiAssetHandle] Retain called on a disposed handle.");
                 return;
             }
 
@@ -311,7 +364,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (count < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                Log.Error("[YooAllAssetsHandle] Release called more times than Retain.");
+                Log.Error("[YooMultiAssetHandle] Release called more times than Retain.");
                 return;
             }
 
@@ -355,6 +408,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
             _raw = null;
             _assets.Clear();
+            _multiAssetResultScratch = null;
+            _resultFailure = null;
             _onReleaseToCache = null;
             ProviderReleaseStateMachine.MarkReleased(ref _releaseState);
             HandleTracker.Unregister(_id);

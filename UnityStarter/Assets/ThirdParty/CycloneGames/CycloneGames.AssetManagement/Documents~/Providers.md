@@ -19,8 +19,8 @@ Each provider is exposed as an `IAssetModule` with a distinct capability surface
 ### Key Features
 
 - **Resources**: always available, bootstrap-friendly, loading-only.
-- **Addressables**: catalog maintenance, Tags/Locations downloaders, scene loading, bulk loading.
-- **YooAsset**: manifest activation, All/Tags/Locations downloaders, raw-file access, scene loading, bulk loading.
+- **Addressables**: catalog maintenance, Tags/Locations downloaders, scene loading, multi-asset loading.
+- **YooAsset**: manifest activation, All/Tags/Locations downloaders, raw-file access, scene loading, multi-asset loading.
 - **Navigathena**: explicit scene navigation built on `IAssetSceneLoader`.
 - **VContainer**: DI installer for module and retention scheduler.
 
@@ -30,7 +30,7 @@ Each provider is exposed as an `IAssetModule` with a distinct capability surface
 | --- | ---: | ---: | ---: |
 | Async asset load and prefab instance | yes | yes | yes |
 | Synchronous asset load | yes | no | yes |
-| Bulk/sub-asset load | no | yes | yes |
+| Multi-asset load | no | yes | yes |
 | Raw-file access | no | no | yes |
 | Async scene load | no | yes | yes |
 | Remote downloader | no | Tags, Locations | All, Tags, Locations |
@@ -117,7 +117,7 @@ public sealed class ResourcesAssetOwner
 }
 ```
 
-Resources exposes async and sync single-asset loading, runtime diagnostics, and the optional `IUnityUnusedAssetCollector` capability. It does not expose bulk, raw-file, scene, catalog, downloader, storage-preflight, or provider-maintenance capabilities. Releasing a handle releases AssetManagement ownership, but Unity may retain native Resources data. Schedule the process-wide collection only at a measured phase boundary:
+Resources exposes async and sync single-asset loading, runtime diagnostics, and the optional `IUnityUnusedAssetCollector` capability. It does not expose multi-asset, raw-file, scene, catalog, downloader, storage-preflight, or provider-maintenance capabilities. Releasing a handle releases AssetManagement ownership, but Unity may retain native Resources data. Schedule the process-wide collection only at a measured phase boundary:
 
 ```csharp
 if (package is IUnityUnusedAssetCollector collector)
@@ -164,13 +164,13 @@ Addressables Tags/Locations downloaders use provider-global scheduling; per-down
 
 Addressables decrements an operation's provider reference count before provider destruction finishes. If `Addressables.Release` throws after that mutation may have started, the adapter marks the release outcome indeterminate, retains the handle and diagnostic, and never reissues the same release request. Package shutdown remains failed on every retry instead of risking a second decrement or reporting false success. Treat that package generation as terminally unhealthy and preserve the exception for the product's outer recovery or process-restart policy.
 
-Pending Addressables operations reject `WaitForAsyncComplete` on every platform. Await `Task`.
+Pending Addressables operations reject `WaitForAsyncComplete` on every platform. Await `Task`. The adapter validates a multi-asset result before it reaches the caller; see [Multi-asset loading](#multi-asset-loading).
 
 ### YooAsset composition
 
 The YooAsset provider targets stable `com.tuyoogame.yooasset` releases in `[3.0.6,4.0.0)`. The asmdef range is the compilation envelope; SemVer prereleases sort before their final release, so a prerelease inside that envelope can enter compilation, but the activation test rejects it as unsupported. `YooAssetModule` exclusively owns the process-global Yoo runtime. Each client instance that requires an isolated writable cache must pass a distinct explicit `PackageRoot` through its file-system parameters.
 
-Pending asset, all-assets, raw-file, instance, and scene operations reject `WaitForAsyncComplete` with `NotSupportedException`. Await the wrapper `Task`; a terminal synchronous-wait call is a no-op. `IAssetSyncOperations` is a separate capability for synchronous single-asset access.
+Pending asset, multi-asset, raw-file, instance, and scene operations reject `WaitForAsyncComplete` with `NotSupportedException`. Await the wrapper `Task`; a terminal synchronous-wait call is a no-op. `IAssetSyncOperations` is a separate capability for synchronous single-asset access.
 
 ```csharp
 using YooAsset;
@@ -214,12 +214,12 @@ Use `WebServerFileSystem` and/or `WebNetworkFileSystem` through `WebPlayModeOpti
 ### Capability negotiation in consumers
 
 ```csharp
-if (package is IAssetBulkLoader bulkLoader)
+if (package is IMultiAssetLoader multiAssetLoader)
 {
-    using IAllAssetsHandle<UnityEngine.Sprite> handle =
-        bulkLoader.LoadAllAssetsAsync<UnityEngine.Sprite>("UI/Icons");
+    using IMultiAssetHandle<UnityEngine.AudioClip> handle =
+        multiAssetLoader.LoadMultipleAssetsAsync<UnityEngine.AudioClip>("Audio/Ambient");
     await handle.Task;
-    UseSprites(handle.Assets);
+    PlayAll(handle.Assets);
 }
 
 if (package is IAssetRawFileLoader rawLoader)
@@ -232,7 +232,67 @@ if (package is IAssetRawFileLoader rawLoader)
 }
 ```
 
-Resources and Addressables do not implement `IAssetRawFileLoader`; a product needing portable data loading can author a `TextAsset` path through the normal asset contract.
+Resources and Addressables do not implement `IAssetRawFileLoader`; a product needing portable data loading can author a `TextAsset` path through the normal asset contract. A texture imported as Multiple Sprite is not a multi-asset target; see [Multi-asset loading](#multi-asset-loading).
+
+### Multi-asset loading
+
+`IMultiAssetLoader.LoadMultipleAssetsAsync<T>(location)` loads every asset the location resolves to and returns one `IMultiAssetHandle<T>`.
+
+- Both adapters run the same result check in the completion path. A successful handle lists distinct, live objects of the requested type.
+- A repeated reference, a null or destroyed object, or an entry that is not a `TAsset` faults the handle. The list is neither shortened nor deduplicated.
+- `Assets` is populated only after `Task` succeeds. A pending, faulted, or canceled handle reads as empty.
+- A faulted handle never enters idle retention. Its last lease release disposes the provider handle.
+
+Addressables gives every sub-asset of a texture imported as Multiple Sprite its own catalog location. Under the Editor asset-database provider each of those locations loads the first Sprite, so `LoadAssetsAsync<Sprite>(texturePath)` returns a list whose entries all point at one Sprite. Loading the same texture as `UnityEngine.Object` returns the main texture plus that one Sprite repeated for every sub-asset. The adapter inspects the result when the provider operation completes and fails the handle for both shapes.
+
+YooAsset resolves one AssetInfo and reads a group of objects from its bundle. Editor simulation iterates the bundle's main assets with `AssetDatabase.LoadAssetAtPath`; a Player build calls `AssetBundle.LoadAllAssets`. Both paths go through the same result check. The two modes can return different counts for one location, because the simulation returns main assets while a bundle returns main assets plus sub-assets. Product data must not assume a count that is stable across modes.
+
+```mermaid
+flowchart TD
+    Call["LoadMultipleAssetsAsync&lt;T&gt;(location)"] --> Cache{"Cache hit"}
+    Cache -- yes --> Lease["Return caller lease"]
+    Cache -- no --> Load["Provider load"]
+    Load --> Await["Await provider operation"]
+    Await -- failed --> Fault["Fault with the provider message"]
+    Await -- succeeded --> Inspect["Check references, lifetime, type"]
+    Inspect -- "all valid" --> Succeed["Complete with the provider list"]
+    Inspect -- "repeated / null / wrong type" --> Reject["Fault with provider, count and index"]
+    Fault --> Retire["Provider handle released with the last lease"]
+    Reject --> Retire
+    Succeed --> Idle["Eligible for idle retention"]
+```
+
+Use sprites from such a texture one at a time. The sub-asset name is the Sprite name assigned by the importer. It is not available from the catalog at runtime: `LoadResourceLocationsAsync(texturePath, typeof(Sprite))` reports the texture path as `PrimaryKey` for every location. Keep the names in product data.
+
+```csharp
+if (package is not IMultiAssetLoader multiAssetLoader)
+{
+    throw new System.NotSupportedException("Multi-asset loading is unavailable.");
+}
+
+// A Multiple Sprite texture resolves to N locations that all yield the first Sprite.
+// IMultiAssetHandle<UnityEngine.Sprite> sheet = multiAssetLoader.LoadMultipleAssetsAsync<UnityEngine.Sprite>(promptSheet);
+
+// Each Sprite has its own address instead.
+string location = promptSheet + "[keyboard_arrow_up]";
+using IAssetHandle<UnityEngine.Sprite> icon = package.LoadAssetAsync<UnityEngine.Sprite>(
+    location, cancellationToken: cancellationToken);
+await icon.Task;
+```
+
+Multi-asset loading fits a location that resolves to several independent assets, such as a label or a folder:
+
+```csharp
+using IMultiAssetHandle<UnityEngine.AudioClip> clips =
+    multiAssetLoader.LoadMultipleAssetsAsync<UnityEngine.AudioClip>("Audio/Ambient", cancellationToken: cancellationToken);
+await clips.Task;
+for (int i = 0; i < clips.Assets.Count; i++)
+{
+    PlayOneShot(clips.Assets[i]);
+}
+```
+
+`MultiAssetResult` is a pure C# checker shared by both adapters. It reads the provider list in place, never copies it, and uses an identity set owned by the package. The pass is linear in the list length. Once that set has grown to the largest result it has validated, an accepted result allocates nothing; the set stays reserved for the package lifetime. The check is main-thread affine, matching handle completion and property access.
 
 ## Advanced Topics
 
@@ -291,6 +351,7 @@ Do not add a capability to `IAssetPackage` unless all providers can implement th
 | Addressables catalog update split authority | Direct `Addressables.UpdateCatalogs` call | Route every catalog mutation through the owning package adapter |
 | Downloader concurrency not effective | Provider-global scheduling | Addressables: concurrency is provider-managed; YooAsset: explicit 1-32 per downloader, but multiple downloaders and on-demand I/O add together |
 | `WaitForAsyncComplete` throws | Pending Addressables or YooAsset operation | Await `Task` instead |
+| Multi-asset load faults with `resolved N entries of ... to D distinct object(s)` | Addressables returned one object for several sub-asset locations, typically a Multiple Sprite texture | Load the sub-assets individually with `LoadAssetAsync<T>(location[subAssetName])`; multi-asset loading suits locations that resolve to independent assets |
 | YooAsset raw `FilePath` empty | The API does not expose a physical path | `FilePath` is empty; await `Task` and use `ReadText`/`ReadBytes` |
 | Scene unload rejected | Different package or recreated generation | Use the originating package generation; a recreated generation is rejected |
 | VContainer shutdown does not await | Scope disposal is synchronous | Explicitly await `module.DestroyAsync()` before disposing the `LifetimeScope` |
@@ -301,7 +362,7 @@ For every claimed provider/platform combination:
 
 1. Lock the exact SDK version and confirm the conditional assembly is active.
 2. Compile the provider and its consumer composition asmdef.
-3. Validate success, fault, cancellation, repeated await, disposal, main-thread rejection for every status read, cross-package rejection, and shutdown. For YooAsset asset, all-assets, raw-file, instance, and scene wrappers, confirm pending synchronous waits throw without invoking provider wait APIs, all terminal statuses are no-ops, and disposal/late completion/source release stay exactly-once. For Scene, cover `None`/`Physics2D`/`Physics3D` worlds, invalid enums, repeated/concurrent activation and unload, cancellation before mutation and join after commit, failed-load/unload recovery, Single/external unload, and exactly-once provider release.
-4. Exercise a clean Player cache and content build, not only Editor simulation.
+3. Validate success, fault, cancellation, repeated await, disposal, main-thread rejection for every status read, cross-package rejection, and shutdown. For YooAsset asset, multi-asset, raw-file, instance, and scene wrappers, confirm pending synchronous waits throw without invoking provider wait APIs, all terminal statuses are no-ops, and disposal/late completion/source release stay exactly-once. For Scene, cover `None`/`Physics2D`/`Physics3D` worlds, invalid enums, repeated/concurrent activation and unload, cancellation before mutation and join after commit, failed-load/unload recovery, Single/external unload, and exactly-once provider release. For multi-asset handles, confirm that a result repeating one object reference faults the handle, reads as an empty `Assets` list, and never enters idle retention, and that a distinct result is exposed unchanged.
+4. Exercise a clean Player cache and content build, as well as Editor simulation.
 5. Test Mono and IL2CPP, stripping, domain reload disabled, network loss, storage full, low memory, suspend/resume, and process termination.
 6. Record workload, device, content build, and raw performance evidence; do not generalize an Editor result to other platforms.

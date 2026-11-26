@@ -125,7 +125,7 @@ Cleanup retry depends on the provider boundary:
 
 | Operation | What a caller token cancels | Shared/provider work |
 | --- | --- | --- |
-| Asset, bulk, raw load | that caller lease's wait | may continue for other callers/cache |
+| Asset, multi-asset, raw load | that caller lease's wait | may continue for other callers/cache |
 | Scene load | no token in the core scene-load method | provider owns load completion |
 | Scene activation/unload | accepted before mutation starts | deterministic shared completion after start |
 | Addressables downloader `PrepareAsync` / `StartAsync` | that caller's wait | `Cancel`/`Dispose` cancels every joined wait; pending provider work drains to terminal before handle release |
@@ -302,7 +302,7 @@ var packageOptions = new AssetPackageInitOptions(
 
 Explicit limits allow 1-131,072 entries per idle segment and require at least 1 MiB for `IdleByteBudget`. These are safety bounds. Active memory is outside eviction authority.
 
-On every Active-to-idle transition, the cache estimates the current value using Unity's runtime-size query and allocation-free fallbacks for known texture, mesh, and audio types. Unknown estimates bypass idle retention. Every member of a bulk result must be measurable; one unknown member makes the aggregate bypass. A candidate larger than the complete idle budget is rejected before admission.
+On every Active-to-idle transition, the cache estimates the current value using Unity's runtime-size query and allocation-free fallbacks for known texture, mesh, and audio types. Unknown estimates bypass idle retention. Every member of a multi-asset result must be measurable; one unknown member makes the aggregate bypass. A candidate larger than the complete idle budget is rejected before admission. A multi-asset result with a repeated reference, a null or destroyed object, or a wrong type never reaches this estimate: the adapter faults the handle, and the cache disposes it on final release.
 
 The estimate can misstate transitive bundles, shared dependencies, native allocator overhead, GPU/driver memory, mip streaming, and provider metadata. `IdleByteBudget` is not a process-memory limit. Use Memory Profiler, platform GPU tools, resident-set measurements, and low-memory testing.
 
@@ -346,7 +346,8 @@ Handle tracking is disabled by default. When stack capture is enabled, a recover
 | Addressables shutdown repeats the same indeterminate-release failure | Provider cleanup threw after reference-count mutation may have started | Do not call `Addressables.Release` again; preserve diagnostics and use the product's outer teardown or process-restart recovery policy |
 | Scene unload was cancelled | Cancellation accepted only before mutation starts | Join the non-cancellable provider completion; a failed unload remains retryable |
 | `_pendingScene` retained after failure | Cleanup failed before unload completed | Retry `UnloadSceneAsync(_pendingScene, CancellationToken.None)` or converge through package shutdown; clear the field only after successful unload |
-| Bulk handle bypasses idle retention | One member has no positive estimate | Ensure every member type is measurable or accept the bypass |
+| Multi-asset handle bypasses idle retention | One member has no positive estimate | Ensure every member type is measurable or accept the bypass |
+| Multi-asset load faults although Addressables reported success | Provider mapped several entries to one object, typically a Multiple Sprite texture | Load the sub-assets individually with `LoadAssetAsync<T>(location[subAssetName])` |
 | Idle budget exceeded by single candidate | Candidate larger than complete budget | Pre-size content or raise the measured budget; the candidate is rejected before admission |
 | Detached handle still counted as Active | Generation advanced while leases remain valid | Existing caller leases remain valid; dispose them to release; a later load resolves the current generation |
 | Scene blocks subsequent scene operations | Manual activation barrier unresolved | Resolve every manual scene in creation order before starting a new unload phase |

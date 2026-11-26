@@ -6,7 +6,7 @@ namespace CycloneGames.AssetManagement.Runtime
     public enum AssetCacheEntryKind : byte
     {
         Asset = 0,
-        AllAssets = 1,
+        MultipleAssets = 1,
         RawFile = 2,
     }
 
