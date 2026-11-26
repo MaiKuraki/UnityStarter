@@ -11,22 +11,14 @@ namespace CycloneGames.InputSystem.Tests.Editor
         [Test]
         public void Constructor_Throws_WhenActionMapNameIsNull()
         {
-            Assert.Throws<ArgumentNullException>(() => new InputContext(null));
-        }
-
-        [Test]
-        public void Constructor_UsesActionMapNameAsDefaultName()
-        {
-            var context = new InputContext("UIActions");
-
-            Assert.AreEqual("UIActions", context.ActionMapName);
-            Assert.AreEqual("UIActions", context.Name);
+            Assert.Throws<ArgumentNullException>(() => new InputContext(null, "Ctx"));
+            Assert.Throws<ArgumentNullException>(() => new InputContext("UIActions", null));
         }
 
         [Test]
         public void AddBinding_Throws_WhenSourceIsNull()
         {
-            var context = new InputContext("UIActions");
+            var context = new InputContext("UIActions", "Menu");
 
             Assert.Throws<ArgumentNullException>(() => context.AddBinding((Observable<Unit>)null, new ActionCommand(() => { })));
             Assert.Throws<ArgumentNullException>(() => context.AddBinding((Observable<Vector2>)null, new MoveCommand(_ => { })));

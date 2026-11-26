@@ -10,11 +10,6 @@ namespace CycloneGames.InputSystem.Runtime
 
         private readonly int _hash;
 
-        public InputActionKey(string mapName, string actionName)
-            : this(null, mapName, actionName)
-        {
-        }
-
         public InputActionKey(string contextName, string mapName, string actionName)
         {
             ContextName = contextName;

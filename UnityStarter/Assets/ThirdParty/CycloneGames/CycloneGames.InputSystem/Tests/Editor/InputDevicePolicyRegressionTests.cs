@@ -777,14 +777,12 @@ namespace CycloneGames.InputSystem.Tests.Editor
         // Contract clarity and value-type size.
         // ------------------------------------------------------------------
         [Test]
-        public void SchemaVersion_ProfileContractIsIndependentAndAliased()
+        public void SchemaVersion_ProfileContractIsIndependentFromTheConfiguration()
         {
             Assert.That(InputConfiguration.CurrentSchemaVersion, Is.EqualTo(1));
             Assert.That(InputBindingOverrideProfile.CurrentSchemaVersion, Is.EqualTo(1));
-            Assert.That(InputBindingOverrideProfile.ProfileSchemaVersion,
-                Is.EqualTo(InputBindingOverrideProfile.CurrentSchemaVersion));
             Assert.That(new InputBindingOverrideProfile().SchemaVersion,
-                Is.EqualTo(InputBindingOverrideProfile.ProfileSchemaVersion));
+                Is.EqualTo(InputBindingOverrideProfile.CurrentSchemaVersion));
         }
 
         [Test]

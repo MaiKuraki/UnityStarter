@@ -130,7 +130,7 @@ public sealed class PlayerInputBootstrap : MonoBehaviour
 }
 ```
 
-`InitializeWithResult` returns a typed result. Check `IsSuccess` before joining a player. A disposed manager cannot be initialized again, so construct a new one. `InputManager.Instance` exists as a global entry point; explicit construction makes shutdown and tests visible.
+`InitializeWithResult` returns a typed result. Check `IsSuccess` before joining a player. A disposed manager cannot be initialized again, so construct a new one. The manager has no process-wide instance: the composition root constructs it, passes it to loaders and UI components, and disposes it.
 
 The configuration declares which contexts exist. It does not push them. Create and push `InputContext` objects when the matching product state begins.
 
@@ -240,7 +240,7 @@ menu.Dispose();
 
 Bind commands before pushing a context. The context owns the command mappings. The player owns the live subscriptions while the context is active. Names are ordinal and case-sensitive. `ActiveContextName` reports the top active context.
 
-The two-argument `InputContext(actionMapName, name)` constructor reads priority and blocking from the matching YAML context. The four-argument constructor sets both values in code. Windows that belong to one layer should share one priority value, because different priorities override stack order.
+The two-argument `InputContext(actionMapName, name)` constructor reads priority and blocking from the matching YAML context. The four-argument constructor sets both values in code. A context resolves only when both name and action map match a configured context; the constructor requires both, so a map-only instance cannot be created. Windows that belong to one layer should share one priority value, because different priorities override stack order.
 
 ### Changing the policy of an active context
 
@@ -257,7 +257,7 @@ player.SetContextPolicy(dialog, dialogPriority, blocksLowerPriority: false);
 player.SetContextPolicy(dialog, dialogPriority, blocksLowerPriority: true);
 ```
 
-The policy is stored per player. Two players can share one `InputContext` object and apply different policies to it. A changed policy triggers one refresh. Setting the same values again does nothing.
+The policy is stored per player, so two players can share one `InputContext` and apply different policies to it. A changed policy triggers one refresh; setting the same values again does nothing. Contexts that enter or leave the active set rebuild their subscriptions. A button held across that change reports no press event and no press state until it is released and pressed again; `Vector2` and `Float` actions re-deliver their current value when their map is enabled again.
 
 ### Refresh outcome
 
@@ -322,6 +322,30 @@ player.GetChordObservable(confirm, cancel, windowMs: 200f)
 The module long press supports `Button` and `Float`, is enabled by `longPressMs > 0`, and is separate from a Unity `hold(...)` interaction. For a `Float` long press, `longPressValueThreshold` must be in `(0,1]`. Chords require two configured button actions. The stream resets after a release.
 
 Every subscription needs a visible lifetime. An `InputContext`, a `CompositeDisposable` or the owning component disposes it.
+### Buffering press events
+
+A press can be buffered for a few frames and consumed later, so a jump pressed a few frames before landing still counts when the feet touch the ground.
+
+| Member | Purpose |
+| --- | --- |
+| `TryConsumeBuffered(actionId, windowFrames)` | Takes the newest press inside the window. One press can be taken only once. |
+| `TryPeekBuffered(actionId, windowFrames)` | Reads without taking. |
+| `ActionBuffer` | The ring itself, for owners that record and query with their own ticks. |
+
+```csharp
+int jumpId = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Jump");
+
+void Update()
+{
+    if (isGrounded && player.TryConsumeBuffered(jumpId, windowFrames: 6))
+    {
+        Jump();
+    }
+}
+```
+
+The window is measured in frames; `0` accepts only the current frame. Buffered presses are cleared when the active context set changes and around `BlockInput`, so a press never crosses an input state. The ring is preallocated per player, 64 entries with 600 frames of retention by default, and does not allocate at runtime.
+
 
 ## 5. Local multiplayer and devices
 
@@ -518,6 +542,14 @@ Before VYaml materialization, runtime and Editor YAML entry points limit input t
 
 One action serializes to about twelve YAML lines, so the line budget caps a serialized configuration at about 1,300 actions across all players (`InputConfigurationLimits.ApproximateMaxSerializedTotalActions`). Preparation and validation operate on a clone and never rewrite the source file.
 
+### Version and identity
+
+`schemaVersion` is the format gate and the only field that decides compatibility. A missing, older or newer value fails validation with a message that names the direction.
+
+`schemaFingerprint` is an optional Editor stamp over the YAML key and type shape. It is written on save and compared when the file is opened, so a shape change without a version bump shows up as a warning. Player builds ignore it.
+
+A content hash is not used as a version. Hashing the authored file would reject every legitimate edit, and binding overrides already key on selectors rather than file bytes. Hashes appear where identity matters, in `CycloneGames.AssetManagement` for content integrity and `CycloneGames.AtlasPipeline` for source cache keys.
+
 ### Editor workflow
 
 Open `Tools > CycloneGames > Input System Editor`. The left panel keeps runtime and code-generation paths visible with reveal shortcuts. The right workspace keeps the serialized configuration separate from file operations.
@@ -617,6 +649,7 @@ A valid user file is used as-is. A missing file falls back to the validated defa
 | Context changes | Maps and subscriptions change only for the difference between the previous and the new active set. | State transitions, not every frame. |
 | Rebinding and profiles | Enumerates bindings and allocates arrays or JSON during export, import and conflict checks. | Settings and save flows. |
 | Device activity | Uses action activity and Input System device and user notifications. | `ActiveDeviceKind` is a presentation hint. Debounce product UI if hardware is noisy. |
+| Manager notifications | Handler arrays are copied on subscribe and read on notify, so a notification does not allocate. | Subscribe from the composition root, not per frame. |
 | Tools recording | Fixed-capacity list while recording. Snapshot creation copies samples. | Inspect `WasTruncated` and `DroppedSampleCount`. |
 
 Initialization and player construction emit the profiler markers `CycloneGames.Input.Initialize`, `CycloneGames.Input.JoinPlayer` and `CycloneGames.Input.BuildAsset`. A context refresh emits `CycloneGames.Input.RequestContextRefresh` and `CycloneGames.Input.ActivateTopContext`. The test assembly reads cumulative map and subscription reuse counters through the internal `InputPlayer.GetProjectionDiagnostics()`.
@@ -662,7 +695,7 @@ Subsystem registration invalidates every still-active manager, so play sessions 
 
 ### Optional integrations
 
-**UGUI.** Add an asmdef reference to `CycloneGames.InputSystem.Runtime.Integrations.UGUI` for `InputDeviceIconSet`, `InputDeviceIconSwitcher` and horizontal or vertical menu-navigation components. The assembly owns presentation adapters only.
+**UGUI.** Add an asmdef reference to `CycloneGames.InputSystem.Runtime.Integrations.UGUI` for `InputDeviceIconSet`, `InputDeviceIconSwitcher` and horizontal or vertical menu-navigation components. `InputDeviceIconSwitcher` reads the manager from a scene `InputManagerProvider`; assign it in the inspector. The assembly owns presentation adapters only.
 
 **VContainer.** The integration registers a container-owned `InputManager`, `IInputPlayerResolver`, `IInputSystemInitializer` and diagnostics. The composition root supplies an immutable `InputSystemVContainerOptions`. An entry point is registered only with `registerEntryPoint: true`, and a failed bootstrap is escalated only with `throwOnStartupFailure: true`. Otherwise the result stays in `IInputSystemInitializerDiagnostics.LastResult`. Every consumer in that scope must resolve the same manager.
 
@@ -705,7 +738,10 @@ Diagnostics use `LogChannel` categories rooted at `CycloneGames.InputSystem`. Th
 | --- | --- |
 | `InputManager` | Validate and commit configuration, join and remove players, listen for joins, aggregate profiles. |
 | `InputManagerInitializationResult` | Inspect parse, schema validation and Input System preflight through `Status`, `Validation`, `Preflight`. |
-| `IInputPlayer` | Read actions, manage contexts and their policies, observe device state, rebind, import and export overrides. |
+| `IInputPlayer` | Full player contract: the union of the three interfaces below. |
+| `IInputActionReader` | Action streams, synchronous reads, buffered presses and the active device kind. |
+| `IInputContextController` | Stack, priority and blocking policy, command bindings and the global block. |
+| `IInputRebindOperations` | Rebind, reset, list bindings, import and export overrides. |
 | `InputContext` | Bind R3 streams to commands and supply a priority and blocking policy. |
 | `InputConfigurationValidator`, `InputConfigurationLimits` | Validate untrusted DTOs under explicit budgets. |
 | `InputConfigurationYamlPreflight`, `InputConfigurationYamlCodec` | Enforce the strict YAML subset and serialize a prepared configuration. |
@@ -715,6 +751,7 @@ Diagnostics use `LogChannel` categories rooted at `CycloneGames.InputSystem`. Th
 | `InputHashUtility` | Deterministic map hashes and context-qualified action IDs. |
 | `InputBindingValidator` | Detect configured direct-binding conflicts. |
 | `InputRx` | Low-level R3 wrappers for keyboard, pointer, gamepad, touch, users, actions and `PlayerInput`. |
+| `InputActionBuffer` | Bounded ring of tick-stamped press events with windowed consumption. |
 
 ### Running the tests
 

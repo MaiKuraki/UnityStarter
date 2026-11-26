@@ -405,7 +405,7 @@ namespace CycloneGames.InputSystem.Runtime
             if (clone.SchemaVersion != InputConfiguration.CurrentSchemaVersion)
             {
                 Add(issues, InputConfigurationIssueCode.UnsupportedSchemaVersion, "schemaVersion",
-                    $"Schema version {clone.SchemaVersion} is not supported. Current version is {InputConfiguration.CurrentSchemaVersion}.");
+                    DescribeSchemaVersion(clone.SchemaVersion));
             }
 
             ValidateConfiguration(clone, limits, issues);
@@ -634,6 +634,19 @@ namespace CycloneGames.InputSystem.Runtime
         {
             issue = new InputConfigurationIssue(InputConfigurationIssueCode.LimitExceeded, path, message);
             return false;
+        }
+
+        private static string DescribeSchemaVersion(int version)
+        {
+            int current = InputConfiguration.CurrentSchemaVersion;
+            if (version == 0)
+            {
+                return "schemaVersion is missing. Add the key and set it to " + current + ".";
+            }
+
+            return version > current
+                ? "Schema version " + version + " is newer than this package supports (" + current + "). Update the package."
+                : "Schema version " + version + " is older than this package requires (" + current + "). Re-author the file with the current editor.";
         }
 
         private static void ValidateConfiguration(
