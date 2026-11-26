@@ -2,7 +2,8 @@
     "name": "CycloneGames.InputSystem.Editor",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.InputSystem.Runtime"
+        "CycloneGames.InputSystem.Runtime",
+        "CycloneGames.InputSystem.Runtime.Integrations.UGUI"
     ],
     "includePlatforms": [
         "Editor"

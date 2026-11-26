@@ -480,6 +480,32 @@ public sealed class InputBindingProfilePersistence
 
 在组合根创建一次这个对象。玩家加入之前加载，在明确的设置提交或生命周期检查点保存。预算耗尽属于预期失败时，用 `TryExportBindingOverridesJson` 或 `TryExportBindingOverrideProfile`。加载失败时保持配置的默认值。
 
+### 交互式捕获
+
+`InputRebindOperation` 是捕获闭环：监听、按 `InputRebindPolicy` 校验候选、报告冲突，再通过玩家应用结果。
+
+| 成员 | 行为 |
+| --- | --- |
+| `Start(now)` | 开始监听下一次按键。一个会话只跑一次，重试要新建。 |
+| `Offer(path, layout, now)` | 产品自己过滤设备时，直接投喂候选控制。 |
+| `Status` | `Idle`、`Listening`、`Accepted`、`Conflict`、`Canceled`、`TimedOut`，终态不再变化。 |
+| `ConflictingBinding` | 同一动作的其它绑定已经占用的路径。 |
+| `Apply()` / `ResolveConflictBySwap()` | 应用接受的路径，或先把冲突绑定换到旧路径。 |
+| `Poll(now)` | 让带超时的会话过期。 |
+
+```csharp
+var rebind = new InputRebindOperation(player, "UI", "UIActions", "Confirm", "<Gamepad>/buttonSouth",
+    InputRebindPolicy.CreateDefault(), timeoutSeconds: 10d);
+rebind.Start(Time.realtimeSinceStartupAsDouble);
+
+// 之后在设置界面里：
+if (rebind.Poll(Time.realtimeSinceStartupAsDouble)) CloseAndReport("timed out");
+else if (rebind.Status == RebindStatus.Conflict) rebind.ResolveConflictBySwap();
+else if (rebind.Status == RebindStatus.Accepted) rebind.Apply();
+```
+
+捕获到的控制会转成布局路径，所以在手柄 A 上做的重绑定在手柄 B 上同样有效。Escape 默认保留；候选被拒时会话继续监听，原因记在 `LastRejection`。
+
 ## 7. 配置
 
 ### 字段参考
@@ -695,7 +721,20 @@ Unity API 以及玩家、上下文操作都限定在 Unity 主线程。`UriInput
 
 ### 可选集成
 
-**UGUI。** 在 asmdef 中引用 `CycloneGames.InputSystem.Runtime.Integrations.UGUI`，使用 `InputDeviceIconSet`、`InputDeviceIconSwitcher` 以及横向和纵向的菜单导航组件。`InputDeviceIconSwitcher` 从场景中的 `InputManagerProvider` 取管理器，需要在 Inspector 里指定。该程序集只包含展示适配器。
+**UGUI。** 在 asmdef 中引用 `CycloneGames.InputSystem.Runtime.Integrations.UGUI`，使用 `InputDeviceIconSet`、`InputDeviceIconSwitcher` 以及横向和纵向的菜单导航组件。`InputDeviceIconSwitcher` 从场景中的 `InputManagerProvider` 取管理器，需要在 Inspector 里指定。`InputDeviceIconSet` 按控制路径、设备布局、设备类型的顺序解析图标；提示文字由产品自己的本地化系统负责。该程序集只包含展示适配器。
+
+`InputDeviceIconSet` 有两种来源。`Direct` 把 Sprite 存在资产里，不需要任何设置。`ProviderKey` 只存键，经产品自己实现的 `IInputPromptIconProvider` 解析，Addressables 或 bundle 系统不必进入输入包。查询时按需解析并缓存结果；界面要求打开即完整时，用 `WarmupAll` 一次性固定。缓存的是 Unity 资源引用，会让 bundle 保持加载：释放 provider 的 handle 之前先调 `Release()`，界面再次打开时重新设置 provider。
+
+```csharp
+iconSet.SetProvider(myProvider);   // 一次调用，可选
+iconSet.TryGetIcon("<Gamepad>/buttonSouth", kind, layout, out Sprite sprite);
+```
+
+Inspector 只绘制当前来源需要的字段，并提示空键与重复键。
+
+Provider 键有两种来源。`Asset` 保存资产 GUID 与项目内相对路径，Inspector 用 GUID 反查并同步路径，改名或移动后不会留下旧路径。`CustomKey` 是普通字符串。产品自己的 provider 收到路径或自定义键，自行决定如何加载 Sprite。
+
+Inspector 的分区标题、折叠与卡片来自输入 Editor 程序集里的 `EditorUiUtility`，所有输入 Inspector 共用同一套布局。派生类新增的可序列化字段显示在 `Additional Fields` 中。
 
 **VContainer。** 集成注册由容器持有的 `InputManager`、`IInputPlayerResolver`、`IInputSystemInitializer` 和诊断。组合根提供一个不可变的 `InputSystemVContainerOptions`。只有 `registerEntryPoint: true` 时才登记入口，只有 `throwOnStartupFailure: true` 时启动失败才向上抛出，否则结果留在 `IInputSystemInitializerDiagnostics.LastResult`。该作用域内的所有消费者必须解析到同一个 manager。
 

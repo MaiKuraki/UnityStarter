@@ -480,6 +480,32 @@ public sealed class InputBindingProfilePersistence
 
 Construct this owner once at the composition root. Load before players join and save at explicit settings commits or lifecycle checkpoints. Use `TryExportBindingOverridesJson` or `TryExportBindingOverrideProfile` when budget exhaustion is an expected failure path. Keep configured defaults active when loading fails.
 
+### Interactive capture
+
+`InputRebindOperation` is the capture loop: it listens, validates the candidate against an `InputRebindPolicy`, reports conflicts, and applies the result through the player.
+
+| Member | Behavior |
+| --- | --- |
+| `Start(now)` | Listens for the next button press. A session runs once; create a new one to retry. |
+| `Offer(path, layout, now)` | Feeds a candidate directly when a product filters devices itself. |
+| `Status` | `Idle`, `Listening`, `Accepted`, `Conflict`, `Canceled`, `TimedOut`. Terminal states never change. |
+| `ConflictingBinding` | Path already bound to another binding of the same action. |
+| `Apply()` / `ResolveConflictBySwap()` | Applies the accepted path, or swaps the conflicting binding first. |
+| `Poll(now)` | Expires a session that carries a timeout. |
+
+```csharp
+var rebind = new InputRebindOperation(player, "UI", "UIActions", "Confirm", "<Gamepad>/buttonSouth",
+    InputRebindPolicy.CreateDefault(), timeoutSeconds: 10d);
+rebind.Start(Time.realtimeSinceStartupAsDouble);
+
+// Later, from the settings screen.
+if (rebind.Poll(Time.realtimeSinceStartupAsDouble)) CloseAndReport("timed out");
+else if (rebind.Status == RebindStatus.Conflict) rebind.ResolveConflictBySwap();
+else if (rebind.Status == RebindStatus.Accepted) rebind.Apply();
+```
+
+A captured control is converted to a layout path, so a rebind done on one gamepad also works on another. Escape is reserved by default; a rejected candidate keeps the session listening and reports the reason in `LastRejection`.
+
 ## 7. Configuration
 
 ### Reference
@@ -695,7 +721,20 @@ Subsystem registration invalidates every still-active manager, so play sessions 
 
 ### Optional integrations
 
-**UGUI.** Add an asmdef reference to `CycloneGames.InputSystem.Runtime.Integrations.UGUI` for `InputDeviceIconSet`, `InputDeviceIconSwitcher` and horizontal or vertical menu-navigation components. `InputDeviceIconSwitcher` reads the manager from a scene `InputManagerProvider`; assign it in the inspector. The assembly owns presentation adapters only.
+**UGUI.** Add an asmdef reference to `CycloneGames.InputSystem.Runtime.Integrations.UGUI` for `InputDeviceIconSet`, `InputDeviceIconSwitcher` and horizontal or vertical menu-navigation components. `InputDeviceIconSwitcher` reads the manager from a scene `InputManagerProvider`; assign it in the inspector. `InputDeviceIconSet` resolves sprites by control path, then device layout, then device kind; display text belongs to the product's localization system. The assembly owns presentation adapters only.
+
+`InputDeviceIconSet` has two sources. `Direct` stores sprites in the asset and needs no setup. `ProviderKey` stores keys and resolves them through a product-owned `IInputPromptIconProvider`, so Addressables or bundle systems stay out of the input package. Lookups resolve lazily and cache the result; `WarmupAll` pins every entry when a screen must not load on open. Cached sprites are Unity asset references and keep bundles loaded: call `Release()` before releasing provider handles, then set the provider again when the screen reopens.
+
+```csharp
+iconSet.SetProvider(myProvider);   // one call, optional
+iconSet.TryGetIcon("<Gamepad>/buttonSouth", kind, layout, out Sprite sprite);
+```
+
+The Inspector draws only the fields used by the selected source and warns about empty or duplicate keys.
+
+Provider keys have two sources. `Asset` stores the asset GUID and the project-relative path; the Inspector keeps the path in sync from the GUID, so a rename or move does not leave a stale path. `CustomKey` is a plain string. The product provider receives the path or the custom key and decides how to load the sprite.
+
+Inspector section headers, foldouts and cards come from `EditorUiUtility` in the input Editor assembly, so all input inspectors share the same layout. Derived classes can add serialized fields; those appear under `Additional Fields`.
 
 **VContainer.** The integration registers a container-owned `InputManager`, `IInputPlayerResolver`, `IInputSystemInitializer` and diagnostics. The composition root supplies an immutable `InputSystemVContainerOptions`. An entry point is registered only with `registerEntryPoint: true`, and a failed bootstrap is escalated only with `throwOnStartupFailure: true`. Otherwise the result stays in `IInputSystemInitializerDiagnostics.LastResult`. Every consumer in that scope must resolve the same manager.
 
