@@ -56,7 +56,9 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     "Inspect lifecycle and Tick state. Tick controls change only the current Play Mode session.",
                     new Color(0.42f, 0.78f, 1f, 1f));
 
-                if (Application.isPlaying)
+                // Play Mode alone is not enough: a prefab asset or a preview instance is never
+                // Awoken, so the strict owner-thread accessors below would throw on redraw.
+                if (Application.isPlaying && actor.HasLifecycleOwnerThread)
                 {
                     EditorGUI.indentLevel++;
 
