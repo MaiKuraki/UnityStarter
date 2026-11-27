@@ -249,12 +249,6 @@ namespace CycloneGames.DataTable.Unity.Editor
                     ? DataTableLubanInspectorTone.Ready
                     : DataTableLubanInspectorTone.Warning);
             DataTableLubanInspectorUi.DrawStatusRow(
-                "Source Fingerprint",
-                snapshot.Toolchain.SourceFingerprintStatus,
-                IsReadyValue(snapshot.Toolchain.SourceFingerprintStatus, "current")
-                    ? DataTableLubanInspectorTone.Ready
-                    : DataTableLubanInspectorTone.Warning);
-            DataTableLubanInspectorUi.DrawStatusRow(
                 "Published Output",
                 GetPublishedOutputDisplayValue(
                     snapshot.Output.State,
@@ -580,12 +574,6 @@ namespace CycloneGames.DataTable.Unity.Editor
                     ? DataTableLubanInspectorTone.Ready
                     : DataTableLubanInspectorTone.Warning);
             DataTableLubanInspectorUi.DrawStatusRow(
-                "Source Identity",
-                snapshot.Toolchain.SourceFingerprintStatus,
-                IsReadyValue(snapshot.Toolchain.SourceFingerprintStatus, "current")
-                    ? DataTableLubanInspectorTone.Ready
-                    : DataTableLubanInspectorTone.Warning);
-            DataTableLubanInspectorUi.DrawStatusRow(
                 "Schema SHA-256",
                 Abbreviate(snapshot.Toolchain.SchemaSha256, 20),
                 DataTableLubanInspectorTone.Neutral,
@@ -607,21 +595,16 @@ namespace CycloneGames.DataTable.Unity.Editor
                     : DataTableLubanInspectorTone.Neutral,
                 snapshot.Toolchain.ActualSha256);
             DataTableLubanInspectorUi.DrawStatusRow(
-                "Configured Source",
-                Abbreviate(snapshot.Toolchain.ConfiguredSourceFingerprint, 20),
-                DataTableLubanInspectorTone.Neutral,
-                snapshot.Toolchain.ConfiguredSourceFingerprint);
-            DataTableLubanInspectorUi.DrawStatusRow(
                 "Actual Source",
-                string.IsNullOrEmpty(snapshot.Toolchain.ActualSourceFingerprint) &&
+                string.IsNullOrEmpty(snapshot.Toolchain.SourceHash) &&
                 string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
                     ? unavailableDisplay
-                    : Abbreviate(snapshot.Toolchain.ActualSourceFingerprint, 20),
-                string.IsNullOrEmpty(snapshot.Toolchain.ActualSourceFingerprint) &&
+                    : Abbreviate(snapshot.Toolchain.SourceHash, 20),
+                string.IsNullOrEmpty(snapshot.Toolchain.SourceHash) &&
                 string.Equals(snapshot.Output.State, "unavailable", StringComparison.Ordinal)
                     ? unavailableTone
                     : DataTableLubanInspectorTone.Neutral,
-                snapshot.Toolchain.ActualSourceFingerprint);
+                snapshot.Toolchain.SourceHash);
             DataTableLubanInspectorUi.DrawStatusRow(
                 "Process Timeout",
                 snapshot.ProcessTimeoutSeconds > 0

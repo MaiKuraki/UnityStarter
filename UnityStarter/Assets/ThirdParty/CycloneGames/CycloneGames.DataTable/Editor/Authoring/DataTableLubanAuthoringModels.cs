@@ -87,9 +87,7 @@ namespace CycloneGames.DataTable.Unity.Editor
             string configuredSha256,
             string actualSha256,
             string lubanIdentityStatus,
-            string configuredSourceFingerprint,
-            string actualSourceFingerprint,
-            string sourceFingerprintStatus,
+            string sourceHash,
             string schemaSha256)
         {
             State = state ?? string.Empty;
@@ -104,9 +102,7 @@ namespace CycloneGames.DataTable.Unity.Editor
             ConfiguredSha256 = configuredSha256 ?? string.Empty;
             ActualSha256 = actualSha256 ?? string.Empty;
             LubanIdentityStatus = lubanIdentityStatus ?? string.Empty;
-            ConfiguredSourceFingerprint = configuredSourceFingerprint ?? string.Empty;
-            ActualSourceFingerprint = actualSourceFingerprint ?? string.Empty;
-            SourceFingerprintStatus = sourceFingerprintStatus ?? string.Empty;
+            SourceHash = sourceHash ?? string.Empty;
             SchemaSha256 = schemaSha256 ?? string.Empty;
         }
 
@@ -122,9 +118,7 @@ namespace CycloneGames.DataTable.Unity.Editor
         internal string ConfiguredSha256 { get; }
         internal string ActualSha256 { get; }
         internal string LubanIdentityStatus { get; }
-        internal string ConfiguredSourceFingerprint { get; }
-        internal string ActualSourceFingerprint { get; }
-        internal string SourceFingerprintStatus { get; }
+        internal string SourceHash { get; }
         internal string SchemaSha256 { get; }
     }
 

@@ -271,7 +271,6 @@ namespace CycloneGames.DataTable.Unity.Editor
             return value != null &&
                    IsToolchainState(value.state) &&
                    IsLubanIdentityStatus(value.lubanIdentityStatus) &&
-                   IsSourceFingerprintStatus(value.sourceFingerprintStatus) &&
                    Fits(value.state, 32) &&
                    Fits(value.codegenProjectPath, MaximumPathCharacters) &&
                    Fits(value.lubanConfigurationPath, MaximumPathCharacters) &&
@@ -280,9 +279,7 @@ namespace CycloneGames.DataTable.Unity.Editor
                    Fits(value.configuredSha256, 128) &&
                    Fits(value.actualSha256, 128) &&
                    Fits(value.lubanIdentityStatus, 32) &&
-                   Fits(value.configuredSourceFingerprint, 128) &&
-                   Fits(value.actualSourceFingerprint, 128) &&
-                   Fits(value.sourceFingerprintStatus, 32) &&
+                   Fits(value.sourceHash, 128) &&
                    Fits(value.schemaSha256, 128);
         }
 
@@ -356,14 +353,6 @@ namespace CycloneGames.DataTable.Unity.Editor
                    string.Equals(value, "missing", StringComparison.Ordinal) ||
                    string.Equals(value, "mismatch", StringComparison.Ordinal) ||
                    string.Equals(value, "invalid", StringComparison.Ordinal);
-        }
-
-        private static bool IsSourceFingerprintStatus(string value)
-        {
-            return string.Equals(value, "current", StringComparison.Ordinal) ||
-                   string.Equals(value, "placeholder", StringComparison.Ordinal) ||
-                   string.Equals(value, "mismatch", StringComparison.Ordinal) ||
-                   string.Equals(value, "unavailable", StringComparison.Ordinal);
         }
 
         private static bool IsOutputState(string value)
@@ -460,9 +449,7 @@ namespace CycloneGames.DataTable.Unity.Editor
                 value.configuredSha256,
                 value.actualSha256,
                 value.lubanIdentityStatus,
-                value.configuredSourceFingerprint,
-                value.actualSourceFingerprint,
-                value.sourceFingerprintStatus,
+                value.sourceHash,
                 value.schemaSha256);
         }
 
@@ -545,9 +532,7 @@ namespace CycloneGames.DataTable.Unity.Editor
         public string configuredSha256 = string.Empty;
         public string actualSha256 = string.Empty;
         public string lubanIdentityStatus = string.Empty;
-        public string configuredSourceFingerprint = string.Empty;
-        public string actualSourceFingerprint = string.Empty;
-        public string sourceFingerprintStatus = string.Empty;
+        public string sourceHash = string.Empty;
         public string schemaSha256 = string.Empty;
     }
 

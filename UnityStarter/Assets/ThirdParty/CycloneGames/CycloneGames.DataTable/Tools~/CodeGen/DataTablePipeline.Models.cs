@@ -53,7 +53,7 @@ namespace CycloneGames.DataTable.CodeGen
                 public string Generation { get; set; } = string.Empty;
                 public string ToolSha256 { get; set; } = string.Empty;
                 public string LubanSha256 { get; set; } = string.Empty;
-                public string SourceFingerprint { get; set; } = string.Empty;
+                public string SourceHash { get; set; } = string.Empty;
                 public string SchemaSha256 { get; set; } = string.Empty;
                 public string CodeOutputSha256 { get; set; } = string.Empty;
                 public string DataOutputSha256 { get; set; } = string.Empty;
@@ -236,7 +236,7 @@ namespace CycloneGames.DataTable.CodeGen
                 if (receipt.Schema != ReceiptSchema || receipt.Version != PipelineStateVersion ||
                     !string.Equals(receipt.Profile, profile.Name, StringComparison.OrdinalIgnoreCase) ||
                     !IsSha256(receipt.Generation) || !IsSha256(receipt.ToolSha256) ||
-                    !IsSha256(receipt.LubanSha256) || !IsSha256(receipt.SourceFingerprint) ||
+                    !IsSha256(receipt.LubanSha256) || !IsSha256(receipt.SourceHash) ||
                     !IsSha256(receipt.SchemaSha256) || !IsSha256(receipt.CodeOutputSha256) ||
                     !IsSha256(receipt.DataOutputSha256) || receipt.Files.Length > PipelineMaximumFiles)
                 {

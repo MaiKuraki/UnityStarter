@@ -45,9 +45,7 @@ namespace CycloneGames.DataTable.Tests.Editor.Tools.Luban
             "\"lubanExecutableExists\":true,\"useDotNetHost\":true," +
             "\"configuredVersion\":\"3.0.0\",\"configuredSha256\":\"configured-sha\"," +
             "\"actualSha256\":\"\",\"lubanIdentityStatus\":\"approved\"," +
-            "\"configuredSourceFingerprint\":\"configured-source\"," +
-            "\"actualSourceFingerprint\":\"\"," +
-            "\"sourceFingerprintStatus\":\"unavailable\",\"schemaSha256\":\"schema-sha\"}," +
+            "\"sourceHash\":\"\",\"schemaSha256\":\"schema-sha\"}," +
             "\"output\":{" +
             "\"state\":\"unavailable\",\"receiptPath\":\"C:/repo/generated/receipt.json\"," +
             "\"receiptExists\":true,\"receiptValid\":false,\"generation\":\"\"}," +
