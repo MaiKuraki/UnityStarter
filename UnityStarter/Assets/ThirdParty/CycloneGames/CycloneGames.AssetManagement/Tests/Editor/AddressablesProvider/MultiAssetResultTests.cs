@@ -15,7 +15,7 @@ using AssetRuntime = CycloneGames.AssetManagement.Runtime;
 
 namespace CycloneGames.AssetManagement.Tests.Editor
 {
-    public sealed class AddressablesMultiAssetResultTests
+    public sealed class MultiAssetResultTests
     {
         private const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
         private const string Location = "UI/Prompts/keyboard_sheet";
@@ -124,9 +124,38 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             CreateHandle(out handle, new Texture2D[] { null, null, null });
 
             Assert.That(handle.Task.Status, Is.EqualTo(UniTaskStatus.Faulted));
-            Assert.That(handle.Error, Does.Contain("3 entries"));
+            Assert.That(handle.Error, Does.Contain("null or destroyed entry at index 0"));
+            Assert.That(handle.Assets.Count, Is.Zero);
 
             handle.Dispose();
+        }
+
+        [Test]
+        public void DestroyedEntry_FaultsHandle()
+        {
+            var destroyed = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            UnityEngine.Object.DestroyImmediate(destroyed);
+            AssetRuntime.AddressableMultiAssetHandle<Texture2D> handle;
+            CreateHandle(out handle, new[] { _textures[0], destroyed });
+
+            Assert.That(handle.Task.Status, Is.EqualTo(UniTaskStatus.Faulted));
+            Assert.That(handle.Error, Does.Contain("null or destroyed entry at index 1"));
+            Assert.That(handle.Assets.Count, Is.Zero);
+
+            handle.Dispose();
+        }
+
+        [Test]
+        public void FaultedHandle_ExposesNoAssetsAfterRelease()
+        {
+            AssetRuntime.AddressableMultiAssetHandle<Texture2D> handle;
+            CreateHandle(out handle, List(0, 0));
+
+            Assert.That(handle.Task.Status, Is.EqualTo(UniTaskStatus.Faulted));
+            handle.Dispose();
+            Assert.That(handle.Assets.Count, Is.Zero);
+            Assert.That(((AssetRuntime.IAssetBackendLifetime)handle).IsDisposed, Is.True);
+            Assert.That(handle.RefCount, Is.Zero);
         }
 
         [TestCase(0)]
@@ -176,7 +205,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public void FaultedMultiAssetHandle_NeverEntersIdleRetention()
         {
             AssetRuntime.AddressablesAssetPackage package = new AssetRuntime.AddressablesAssetPackage(
-                "AddressablesMultiAssetResultRetentionTests");
+                "MultiAssetResultRetentionTests");
             AssetRuntime.Cache.AssetCacheService cache =
                 (AssetRuntime.Cache.AssetCacheService)GetField(package, "_cacheService");
             AssetRuntime.Cache.AssetCacheKey key = AssetRuntime.Cache.AssetCacheService.BuildCacheKey(
@@ -254,7 +283,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
                 AssetRuntime.AssetRuntimeGuard.NextHandleId(),
                 cacheKey,
                 raw,
-                AssetRuntime.AddressablesMultiAssetResult.CreateScratch(),
+                AssetRuntime.MultiAssetResult.CreateScratch(),
                 onReleaseToCache,
                 new AssetRuntime.AssetOperationTailTracker());
         }

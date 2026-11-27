@@ -49,7 +49,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly Dictionary<long, AddressableSceneHandle> _sceneHandles =
             new Dictionary<long, AddressableSceneHandle>();
         private readonly List<long> _sceneUnloadScratchIds = new List<long>(4);
-        private readonly HashSet<object> _multiAssetResultScratch = AddressablesMultiAssetResult.CreateScratch();
+        private readonly HashSet<object> _multiAssetResultScratch = MultiAssetResult.CreateScratch();
         private readonly object _sceneOwnerToken = new object();
         private readonly Action<long> _onInstantiateDisposed;
         private readonly Action<AddressableDownloader> _onDownloaderDisposed;
