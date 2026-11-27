@@ -111,6 +111,7 @@ namespace UnityStarter.Editor
             DeleteFolder(TargetRoot + DefaultFontRelativePath);
             DeleteFolder(TargetRoot + "/Sprites");
             DeleteFolder(TargetRoot + "/Resources/Sprite Assets");
+            DeleteFolder(TargetRoot + "/Documentation");
         }
 
         private static void DeleteFolder(string assetPath)
