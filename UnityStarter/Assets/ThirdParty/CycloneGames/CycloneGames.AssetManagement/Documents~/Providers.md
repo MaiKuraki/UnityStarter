@@ -238,22 +238,25 @@ Resources and Addressables do not implement `IAssetRawFileLoader`; a product nee
 
 `IMultiAssetLoader.LoadMultipleAssetsAsync<T>(location)` loads every asset the location resolves to and returns one `IMultiAssetHandle<T>`.
 
-- The handle succeeds only when no entry repeats an object reference. A repeated reference faults the handle; the list is neither shortened nor deduplicated.
+- Both adapters run the same result check in the completion path. A successful handle lists distinct, live objects of the requested type.
+- A repeated reference, a null or destroyed object, or an entry that is not a `TAsset` faults the handle. The list is neither shortened nor deduplicated.
 - `Assets` is populated only after `Task` succeeds. A pending, faulted, or canceled handle reads as empty.
 - A faulted handle never enters idle retention. Its last lease release disposes the provider handle.
 
 Addressables gives every sub-asset of a texture imported as Multiple Sprite its own catalog location. Under the Editor asset-database provider each of those locations loads the first Sprite, so `LoadAssetsAsync<Sprite>(texturePath)` returns a list whose entries all point at one Sprite. Loading the same texture as `UnityEngine.Object` returns the main texture plus that one Sprite repeated for every sub-asset. The adapter inspects the result when the provider operation completes and fails the handle for both shapes.
 
+YooAsset resolves one AssetInfo and reads a group of objects from its bundle. Editor simulation iterates the bundle's main assets with `AssetDatabase.LoadAssetAtPath`; a Player build calls `AssetBundle.LoadAllAssets`. Both paths go through the same result check. The two modes can return different counts for one location, because the simulation returns main assets while a bundle returns main assets plus sub-assets. Product data must not assume a count that is stable across modes.
+
 ```mermaid
 flowchart TD
     Call["LoadMultipleAssetsAsync&lt;T&gt;(location)"] --> Cache{"Cache hit"}
     Cache -- yes --> Lease["Return caller lease"]
-    Cache -- no --> Load["Addressables.LoadAssetsAsync"]
+    Cache -- no --> Load["Provider load"]
     Load --> Await["Await provider operation"]
     Await -- failed --> Fault["Fault with the provider message"]
-    Await -- succeeded --> Inspect["Inspect result references"]
-    Inspect -- "all distinct" --> Succeed["Complete with the provider list"]
-    Inspect -- "repeated reference" --> Reject["Fault: N entries resolve to D distinct objects"]
+    Await -- succeeded --> Inspect["Check references, lifetime, type"]
+    Inspect -- "all valid" --> Succeed["Complete with the provider list"]
+    Inspect -- "repeated / null / wrong type" --> Reject["Fault with provider, count and index"]
     Fault --> Retire["Provider handle released with the last lease"]
     Reject --> Retire
     Succeed --> Idle["Eligible for idle retention"]
@@ -289,7 +292,7 @@ for (int i = 0; i < clips.Assets.Count; i++)
 }
 ```
 
-The reference inspection is one linear pass. Once the package's identity set has grown to the largest result it has validated, the check allocates nothing; the set stays reserved for the package lifetime.
+`MultiAssetResult` is a pure C# checker shared by both adapters. It reads the provider list in place, never copies it, and uses an identity set owned by the package. The pass is linear in the list length. Once that set has grown to the largest result it has validated, an accepted result allocates nothing; the set stays reserved for the package lifetime. The check is main-thread affine, matching handle completion and property access.
 
 ## Advanced Topics
 

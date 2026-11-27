@@ -8,7 +8,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
     public sealed class AssetCacheBoundedMaintenanceTests
     {
         [Test]
-        public void TrimIdleStep_IsBoundedAndLegacyTrimStillCompletesAllMatchingWork()
+        public void TrimIdleStep_IsBoundedAndFullTrimStillCompletesAllMatchingWork()
         {
             using var cache = new AssetCacheService(
                 new RecordingAssetPackage(),

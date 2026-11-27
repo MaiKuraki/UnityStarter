@@ -302,7 +302,7 @@ var packageOptions = new AssetPackageInitOptions(
 
 显式限制允许每个 idle 段 1-131,072 个条目，`IdleByteBudget` 至少 1 MiB。这些是安全边界。Active 内存不在驱逐权威内。
 
-每次 Active 到 idle 转换时，缓存使用 Unity runtime-size 查询与已知 texture、mesh、audio 类型的无分配 fallback 估算当前值。未知估算绕过 idle retention。多资产结果的每个成员必须可测量；一个未知成员让聚合绕过。大于完整 idle 预算的候选在准入前被拒绝。重复同一个对象引用的多资产结果到不了这一步：adapter 已让 handle 失败，缓存在最后一次释放时直接销毁它。
+每次 Active 到 idle 转换时，缓存使用 Unity runtime-size 查询与已知 texture、mesh、audio 类型的无分配 fallback 估算当前值。未知估算绕过 idle retention。多资产结果的每个成员必须可测量；一个未知成员让聚合绕过。大于完整 idle 预算的候选在准入前被拒绝。重复引用、含 null 或已销毁对象、类型不符的多资产结果到不了这一步：adapter 已让 handle 失败，缓存在最后一次释放时直接销毁它。
 
 估算可能误报传递性 bundle、共享依赖、native allocator overhead、GPU/driver 内存、mip streaming 与 provider metadata。`IdleByteBudget` 不是进程内存限制。使用 Memory Profiler、平台 GPU 工具、resident-set 测量与低内存测试。
 
