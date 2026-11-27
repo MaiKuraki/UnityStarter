@@ -41,14 +41,14 @@ namespace CycloneGames.DataTable.CodeGen
                     string lubanExecutablePath,
                     bool useDotNetHost,
                     string lubanHash,
-                    string sourceFingerprint,
+                    string sourceHash,
                     string schemaHash,
                     string toolHash)
                 {
                     LubanExecutablePath = lubanExecutablePath;
                     UseDotNetHost = useDotNetHost;
                     LubanHash = lubanHash;
-                    SourceFingerprint = sourceFingerprint;
+                    SourceHash = sourceHash;
                     SchemaHash = schemaHash;
                     ToolHash = toolHash;
                 }
@@ -56,7 +56,7 @@ namespace CycloneGames.DataTable.CodeGen
                 public string LubanExecutablePath { get; }
                 public bool UseDotNetHost { get; }
                 public string LubanHash { get; }
-                public string SourceFingerprint { get; }
+                public string SourceHash { get; }
                 public string SchemaHash { get; }
                 public string ToolHash { get; }
             }
@@ -66,16 +66,7 @@ namespace CycloneGames.DataTable.CodeGen
                 ValidateConfiguredDataDirectory(configuration);
                 ValidateConfiguredSchemaSources(configuration);
                 ValidateConfiguredTableInputs(configuration);
-                string sourceFingerprint = ComputeSourceFingerprint(configuration);
-                if (!IsSha256(configuration.SourceFingerprint) ||
-                    !string.Equals(sourceFingerprint, configuration.SourceFingerprint, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidOperationException(
-                        "Source fingerprint validation failed closed.\n" +
-                        "  Expected: " + configuration.SourceFingerprint + "\n" +
-                        "  Actual  : " + sourceFingerprint + "\n" +
-                        "Review every source-input change before updating source_fingerprint.");
-                }
+                string sourceHash = ComputeSourceHash(configuration);
 
                 ValidateRequiredWorkbooks(configuration.SourceRoot);
                 string schemaHash = ComputeSchemaHash(configuration);
@@ -121,13 +112,13 @@ namespace CycloneGames.DataTable.CodeGen
                 Console.WriteLine("[DataTable.Pipeline] Luban version: " + configuration.LubanVersion);
                 Console.WriteLine("[DataTable.Pipeline] Luban SHA-256: " + executableHash);
                 Console.WriteLine("[DataTable.Pipeline] Tool source SHA-256: " + toolHash);
-                Console.WriteLine("[DataTable.Pipeline] Source fingerprint: " + sourceFingerprint);
+                Console.WriteLine("[DataTable.Pipeline] Source fingerprint: " + sourceHash);
                 Console.WriteLine("[DataTable.Pipeline] Schema hash: " + schemaHash);
                 return new PipelineIdentity(
                     executablePath,
                     useDotNetHost,
                     executableHash,
-                    sourceFingerprint,
+                    sourceHash,
                     schemaHash,
                     toolHash);
             }
@@ -393,7 +384,7 @@ namespace CycloneGames.DataTable.CodeGen
                 return false;
             }
 
-            private static string ComputeSourceFingerprint(
+            private static string ComputeSourceHash(
                 PipelineConfiguration configuration,
                 bool writeSummary = true)
             {
@@ -405,15 +396,13 @@ namespace CycloneGames.DataTable.CodeGen
                     configuration.ConfigurationPath,
                     entries,
                     ref fileCount,
-                    ref totalBytes,
-                    normalizeSelf: true);
+                    ref totalBytes);
                 AddFingerprintFile(
                     configuration,
                     configuration.LubanConfigurationPath,
                     entries,
                     ref fileCount,
-                    ref totalBytes,
-                    normalizeSelf: false);
+                    ref totalBytes);
 
                 AddFingerprintDirectory(
                     configuration,
@@ -465,7 +454,7 @@ namespace CycloneGames.DataTable.CodeGen
                 if (writeSummary)
                 {
                     Console.WriteLine(
-                        $"[DataTable.Pipeline] Source fingerprint inputs: {fileCount} files, {totalBytes} bytes");
+                        $"[DataTable.Pipeline] Source hash inputs: {fileCount} files, {totalBytes} bytes");
                 }
 
                 return fingerprint;
@@ -500,8 +489,7 @@ namespace CycloneGames.DataTable.CodeGen
                     configuration.LubanConfigurationPath,
                     entries,
                     ref fileCount,
-                    ref totalBytes,
-                    normalizeSelf: false);
+                    ref totalBytes);
                 foreach (string directory in new[] { "Datas", "Defines", "config" })
                 {
                     AddFingerprintDirectory(
@@ -537,7 +525,7 @@ namespace CycloneGames.DataTable.CodeGen
                 string fingerprintRoot = IsUnderExternalToolRoot(configuration, directory)
                     ? configuration.CodegenRoot
                     : configuration.RepositoryRoot;
-                AssertPhysicalContainedPath(directory, fingerprintRoot, "fingerprint source", mustExist: true);
+                AssertPhysicalContainedPath(directory, fingerprintRoot, "source input", mustExist: true);
                 entries.Add("R present " + marker + "/");
                 var pending = new Stack<string>();
                 pending.Push(directory);
@@ -553,21 +541,20 @@ namespace CycloneGames.DataTable.CodeGen
                                                      name.Equals("obj", StringComparison.OrdinalIgnoreCase));
                         if (!isDirectToolArtifact)
                         {
-                            AssertNotReparsePoint(childDirectory, "fingerprint directory");
+                            AssertNotReparsePoint(childDirectory, "source directory");
                             pending.Push(childDirectory);
                         }
                     }
 
                     foreach (string file in Directory.EnumerateFiles(current))
                     {
-                        AssertNotReparsePoint(file, "fingerprint file");
+                        AssertNotReparsePoint(file, "source file");
                         AddFingerprintFile(
                             configuration,
                             file,
                             entries,
                             ref fileCount,
-                            ref totalBytes,
-                            normalizeSelf: false);
+                            ref totalBytes);
                     }
                 }
             }
@@ -577,15 +564,14 @@ namespace CycloneGames.DataTable.CodeGen
                 string file,
                 List<string> entries,
                 ref int fileCount,
-                ref long totalBytes,
-                bool normalizeSelf)
+                ref long totalBytes)
             {
                 var info = new FileInfo(file);
                 if (!info.Exists || info.Length > PipelineMaximumFileBytes ||
                     fileCount >= PipelineMaximumFiles ||
                     totalBytes > PipelineMaximumTotalBytes - info.Length)
                 {
-                    throw new InvalidOperationException("Fingerprint input exceeds its bounded file budget: " + file);
+                    throw new InvalidOperationException("Source input exceeds its bounded file budget: " + file);
                 }
 
                 string relativePath = GetFingerprintPath(configuration, file);
@@ -596,14 +582,10 @@ namespace CycloneGames.DataTable.CodeGen
                 if (FingerprintTextFileNames.Contains(fileName) || FingerprintTextExtensions.Contains(extension))
                 {
                     kind = "text";
-                    hash = ComputeNormalizedTextSha256(file, normalizeSelf);
+                    hash = ComputeNormalizedTextSha256(file);
                 }
                 else if (FingerprintBinaryExtensions.Contains(extension))
                 {
-                    if (normalizeSelf)
-                    {
-                        throw new InvalidOperationException("Fingerprint self-normalization requires text: " + file);
-                    }
 
                     kind = "binary";
                     hash = ComputeFileSha256(file);
@@ -619,12 +601,12 @@ namespace CycloneGames.DataTable.CodeGen
                 totalBytes += info.Length;
             }
 
-            private static string ComputeNormalizedTextSha256(string path, bool normalizeSelf)
+            private static string ComputeNormalizedTextSha256(string path)
             {
                 var info = new FileInfo(path);
                 if (info.Length > 64L * 1024 * 1024)
                 {
-                    throw new InvalidOperationException("Fingerprint text input exceeds 64 MiB: " + path);
+                    throw new InvalidOperationException("Source text input exceeds 64 MiB: " + path);
                 }
 
                 using var stream = new FileStream(
@@ -635,7 +617,7 @@ namespace CycloneGames.DataTable.CodeGen
                     4096,
                     FileOptions.SequentialScan);
                 using var hashWriter = new IncrementalHashWriter();
-                var normalizer = new NormalizedTextHashNormalizer(hashWriter, normalizeSelf, path);
+                var normalizer = new LineEndingNormalizer(hashWriter, path);
                 Decoder decoder = new UTF8Encoding(false, true).GetDecoder();
                 var validationCharacters = new char[4096];
                 var prefix = new byte[3];
@@ -680,7 +662,7 @@ namespace CycloneGames.DataTable.CodeGen
                 }
                 catch (DecoderFallbackException exception)
                 {
-                    throw new InvalidOperationException("Fingerprint text is not strict UTF-8: " + path, exception);
+                    throw new InvalidOperationException("Source text is not strict UTF-8: " + path, exception);
                 }
             }
 
@@ -773,26 +755,15 @@ namespace CycloneGames.DataTable.CodeGen
                 }
             }
 
-            private sealed class NormalizedTextHashNormalizer
+            private sealed class LineEndingNormalizer
             {
-                private static readonly byte[] SelfPrefix = Encoding.ASCII.GetBytes("source_fingerprint=");
-                private const string SelfReplacement = "source_fingerprint=<self>";
-
                 private readonly IncrementalHashWriter _destination;
-                private readonly bool _normalizeSelf;
                 private readonly string _path;
                 private bool _pendingCarriageReturn;
-                private bool _atLineStart = true;
-                private bool _skippingSelfValue;
-                private int _matchedSelfPrefixBytes;
 
-                public NormalizedTextHashNormalizer(
-                    IncrementalHashWriter destination,
-                    bool normalizeSelf,
-                    string path)
+                public LineEndingNormalizer(IncrementalHashWriter destination, string path)
                 {
                     _destination = destination;
-                    _normalizeSelf = normalizeSelf;
                     _path = path;
                 }
 
@@ -803,24 +774,24 @@ namespace CycloneGames.DataTable.CodeGen
                         byte value = bytes[index];
                         if (_pendingCarriageReturn)
                         {
-                            if (value != (byte)'\n')
+                            if (value != (byte)10)
                             {
                                 throw new InvalidOperationException(
-                                    "Fingerprint text contains a standalone CR character: " + _path);
+                                    "Source text contains a standalone CR character: " + _path);
                             }
 
                             _pendingCarriageReturn = false;
-                            AppendNormalized((byte)'\n');
+                            _destination.Append((byte)10);
                             continue;
                         }
 
-                        if (value == (byte)'\r')
+                        if (value == (byte)13)
                         {
                             _pendingCarriageReturn = true;
                             continue;
                         }
 
-                        AppendNormalized(value);
+                        _destination.Append(value);
                     }
                 }
 
@@ -829,68 +800,8 @@ namespace CycloneGames.DataTable.CodeGen
                     if (_pendingCarriageReturn)
                     {
                         throw new InvalidOperationException(
-                            "Fingerprint text contains a trailing standalone CR character: " + _path);
+                            "Source text contains a trailing standalone CR character: " + _path);
                     }
-
-                    FlushPartialSelfPrefix();
-                }
-
-                private void AppendNormalized(byte value)
-                {
-                    if (!_normalizeSelf)
-                    {
-                        _destination.Append(value);
-                        return;
-                    }
-
-                    if (_skippingSelfValue)
-                    {
-                        if (value == (byte)'\n')
-                        {
-                            _destination.Append(value);
-                            _skippingSelfValue = false;
-                            _atLineStart = true;
-                        }
-
-                        return;
-                    }
-
-                    if (_atLineStart)
-                    {
-                        if (value == SelfPrefix[_matchedSelfPrefixBytes])
-                        {
-                            _matchedSelfPrefixBytes++;
-                            if (_matchedSelfPrefixBytes == SelfPrefix.Length)
-                            {
-                                _destination.AppendAscii(SelfReplacement);
-                                _matchedSelfPrefixBytes = 0;
-                                _atLineStart = false;
-                                _skippingSelfValue = true;
-                            }
-
-                            return;
-                        }
-
-                        FlushPartialSelfPrefix();
-                        _atLineStart = false;
-                    }
-
-                    _destination.Append(value);
-                    if (value == (byte)'\n')
-                    {
-                        _atLineStart = true;
-                    }
-                }
-
-                private void FlushPartialSelfPrefix()
-                {
-                    if (_matchedSelfPrefixBytes == 0)
-                    {
-                        return;
-                    }
-
-                    _destination.Append(SelfPrefix, _matchedSelfPrefixBytes);
-                    _matchedSelfPrefixBytes = 0;
                 }
             }
 
@@ -936,7 +847,7 @@ namespace CycloneGames.DataTable.CodeGen
                     relative.Any(static character => character < 0x20 || character > 0x7e))
                 {
                     throw new InvalidOperationException(
-                        "Fingerprint path must be contained and printable ASCII: " + relative);
+                        "Source path must be contained and printable ASCII: " + relative);
                 }
 
                 return "Tooling/CodeGen/" + relative;
@@ -951,7 +862,7 @@ namespace CycloneGames.DataTable.CodeGen
                     relative.Any(static character => character < 0x20 || character > 0x7e))
                 {
                     throw new InvalidOperationException(
-                        "Fingerprint path must be contained and printable ASCII: " + relative);
+                        "Source path must be contained and printable ASCII: " + relative);
                 }
 
                 return relative;

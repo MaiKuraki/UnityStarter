@@ -243,7 +243,7 @@ The configured groups are `c` for client, `s` for server, and `c+s` for the `all
 The normal order is:
 
 1. Run `inspect` for the chosen profile and use `canGenerate`, `canCheck`, and `canRecover` as the authority.
-2. Validate the config, required workbooks, output containment, tool hash, Luban hash, and source fingerprint.
+2. Validate the config, required workbooks, output containment, tool hash, Luban hash, and source digest.
 3. Acquire the single writer lock and capture the live-output baseline.
 4. Run Luban and string-constant generation only into a transaction candidate directory.
 5. Require at least one code file and one data file, then hash the candidate and create a generation receipt.

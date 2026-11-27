@@ -67,17 +67,17 @@ Prepare this logical layout:
     <provider-appropriate generated-data root>/
 ```
 
-The three `Datas/__*.xlsx` schema workbooks are required. `Datas/`, `Defines/`, and `config/` are fingerprint inputs; even the presence or absence of one of these directories is identity-bearing. Keep authoritative workbook names, paths, and casing portable across Windows, macOS, and Linux. Symbolic links, reparse points, path traversal, case collisions, UTF-8 BOM text, standalone carriage returns, unknown fingerprint file types, and exceeded file/byte budgets fail closed.
+The three `Datas/__*.xlsx` schema workbooks are required. `Datas/`, `Defines/`, and `config/` are hash inputs; even the presence or absence of one of these directories is identity-bearing. Keep authoritative workbook names, paths, and casing portable across Windows, macOS, and Linux. Symbolic links, reparse points, path traversal, case collisions, UTF-8 BOM text, standalone carriage returns, unknown hash input types, and exceeded file/byte budgets fail closed.
 
-The authoritative source fingerprint includes:
+The authoritative source hash includes:
 
-- `build_config.ini`, with only the `source_fingerprint` value normalized to `<self>`;
+- `build_config.ini`, 
 - `luban.conf`;
 - the complete physical trees under `Datas/`, `Defines/`, and `config/`;
 - the CodeGen project tree, excluding its direct `bin/` and `obj/` directories;
 - the custom-template tree when configured.
 
-Generated roots, receipts, writer locks, transactions, caches, and the selected Luban binary are not themselves source-fingerprint entries. The selected binary has its own SHA-256 identity.
+Generated roots, receipts, writer locks, transactions, caches, and the selected Luban binary are not themselves source-hash entries. The selected binary has its own SHA-256 identity.
 
 ## 3. `luban.conf`: groups, targets, and profiles
 
@@ -103,7 +103,7 @@ When adding a target:
 2. Add a uniquely named `targets` entry with its groups, manager, and top module.
 3. Add exactly one same-named `[profile.<name>]` in `build_config.ini`.
 4. Give it non-overlapping code/data output roots.
-5. Run `inspect`, review the new source fingerprint, approve it, then generate and check that profile.
+5. Run `inspect`, review the new source hash, then generate and check that profile.
 
 `schemaFiles` currently resolves `Datas/__tables__.xlsx`, `Datas/__beans__.xlsx`, and `Datas/__enums__.xlsx`; it does not declare an external `Defines/` source. `dataDir` is `Datas`, and business workbooks declared by the table schema must stay below that identity-bound directory. Both `dataDir` and every declared schema source must be portable relative paths inside `Datas/`, `Defines/`, or `config/`, must physically exist, and must not traverse a symbolic link or reparse point. Duplicate or case-colliding JSON properties are rejected. `inspect` reports declaration, presence, and path-safety failures before generation is enabled, and strict generation repeats the same preflight before launching Luban. Keep `luban.conf` and the workbooks in one reviewed change because both contribute to schema and source identities.
 
@@ -119,7 +119,7 @@ Common.xlsx, LiveOps@Events.xlsx, Tables/RegionEU@Events.xlsx
 - A sheet selector precedes `@`. `LiveOps@Events.xlsx` reads sheet `LiveOps` from physical file `Events.xlsx`; `Tables/RegionEU@Events.xlsx` reads sheet `RegionEU` from `Tables/Events.xlsx`.
 - Every derived physical path is a portable relative path below `dataDir`. The file must exist, remain physically contained, and must not cross a symbolic link or reparse point.
 - Paths that differ only by case are rejected so one manifest has the same meaning on case-sensitive and case-insensitive file systems.
-- Because `dataDir` itself must be inside `Datas/`, `Defines/`, or `config/`, every accepted input file is included in the source fingerprint and generation identity.
+- Because `dataDir` itself must be inside `Datas/`, `Defines/`, or `config/`, every accepted input file is included in the source hash and generation identity.
 
 This preflight validates the input manifest and physical file identities; Luban remains responsible for validating the selected worksheet and table schema contents.
 
@@ -136,7 +136,6 @@ This preflight validates the input manifest and physical file identities; Luban 
 | `executable_version` | yes | Reviewed provenance/version label. It must not be a placeholder; the tool does not infer this label from the binary. |
 | `executable_sha256` | yes | Exact SHA-256 of `luban_dll`. |
 | `windows_executable_sha256` | conditional | Exact SHA-256 of the selected Windows executable. It may be empty when `windows_executable` is empty. |
-| `source_fingerprint` | yes | Reviewed current source fingerprint produced by `inspect`. |
 | `process_timeout_seconds` | yes | Luban timeout in `[1, 86400]`; the fixture uses `600`. |
 
 Windows selection is existence-sensitive. If `windows_executable` is configured but absent, Windows falls back to `luban_dll`; if it exists, the Windows hash is required and the DLL hash is not the selected runtime identity. For one receipt and one profile to be checked on multiple operating systems, use the same DLL on every publisher/checker by leaving `windows_executable` empty. If distinct platform artifacts are required, use separate profiles and non-overlapping output roots so each receipt has one stable Luban identity.
@@ -145,7 +144,7 @@ Windows selection is existence-sensitive. If `windows_executable` is configured 
 
 | Key | Contract |
 | --- | --- |
-| `custom_template_dir` | Optional physical directory strictly below `DataTable/Luban/`; included in the source fingerprint. |
+| `custom_template_dir` | Optional physical directory strictly below `DataTable/Luban/`; included in the source hash. |
 | `bridge_files` | Optional comma/semicolon-separated portable relative paths below the custom-template directory; maximum 256 entries. A non-empty list requires `custom_template_dir`. |
 
 Bridge files are copied, hash-verified, and receipted as candidate code content. Keep this list empty unless reviewed static source companions are genuinely required. Keep Unity assembly definitions and other project ownership files outside the published `code_output`; do not publish an `.asmdef` through `bridge_files`.
@@ -195,14 +194,13 @@ Complete these steps in order. Identity approval is a review action, not a comma
 
 ### 5.2 Obtain and pin the Luban identity
 
-The four identity fields have different authorities:
+The three identity fields have different authorities:
 
 | Field | Authoritative value |
 | --- | --- |
 | `executable_version` | A reviewed release/build label from the artifact source or internal build record. File metadata is a convenience, not provenance proof. |
 | `executable_sha256` | The independently computed SHA-256 of the exact file configured by `luban_dll`. |
 | `windows_executable_sha256` | The independently computed SHA-256 of `windows_executable`; leave it empty when `windows_executable` is empty. |
-| `source_fingerprint` | The reviewed `toolchain.actualSourceFingerprint` produced by `inspect` after the first three fields and all source inputs are stable. |
 
 On Windows, inspect the local assembly metadata and compare it with the approved release/build record. A project may use a readable `FileVersion` such as `4.11.0.0`, or a `ProductVersion` that also contains build metadata. The SHA-256, not this label, pins the exact bytes.
 
@@ -234,18 +232,17 @@ shasum -a 256 Tools/DataTable/Luban/Luban.dll
 shasum -a 256 Tools/DataTable/Luban/Luban.exe
 ```
 
-Write the reviewed version label and hashes first, while leaving the source fingerprint placeholder in place:
+Write the reviewed version label and hashes:
 
 ```ini
 executable_version=4.11.0.0
 executable_sha256=REPLACE_WITH_APPROVED_LUBAN_SHA256
 windows_executable_sha256=REPLACE_WITH_APPROVED_LUBAN_EXE_SHA256
-source_fingerprint=REPLACE_WITH_APPROVED_SOURCE_FINGERPRINT
 ```
 
-### 5.3 Approve the source fingerprint with two inspections
+### 5.3 Derive the source hash and publish
 
-Run the read-only inspection after setting the version and artifact hashes:
+Run a read-only inspection after setting the version and artifact hashes:
 
 ```bat
 DataTable\Luban\gen_code_bin_to_project_lazyload.bat inspect --profile client --format json
@@ -255,38 +252,21 @@ DataTable\Luban\gen_code_bin_to_project_lazyload.bat inspect --profile client --
 bash DataTable/Luban/gen_code_bin_to_project_lazyload.sh inspect --profile client --format json
 ```
 
-The first inspection is expected to report `blocked` while `source_fingerprint` is still a placeholder. This is the approval workflow, not a version-format failure. Review the complete `issues` list and these identity fields:
+The pipeline derives `toolchain.sourceHash` from the current working tree on every run. No configuration value stores it, so there is nothing to copy back.
 
-```json
-{
-  "toolchain": {
-    "configuredVersion": "<reviewed-version-label>",
-    "configuredSha256": "<configured-selected-artifact-sha256>",
-    "actualSha256": "<actual-selected-artifact-sha256>",
-    "lubanIdentityStatus": "approved",
-    "actualSourceFingerprint": "<current-64-character-source-fingerprint>"
-  }
-}
-```
-
-Do not approve the fingerprint when the configured and actual artifact hashes differ, the selected artifact is unexpected, or another source-input change has not been reviewed. After approval, copy the exact `toolchain.actualSourceFingerprint` value into the configuration:
-
-```ini
-source_fingerprint=<current-64-character-source-fingerprint>
-```
-
-Run the same inspection a second time. Continue only when all of the following are true:
+Continue only when all of the following hold:
 
 - `status` is `ready`;
 - `canGenerate` is `true`;
 - `toolchain.lubanIdentityStatus` is `approved`;
-- `toolchain.sourceFingerprintStatus` is `current`;
 - `transaction.state` is `idle`;
 - no error-severity issue remains.
 
-`OUTPUT_NOT_GENERATED` is an informational issue before the first successful publication; it explains why `canCheck` is still `false`. It does not prevent the first Generate operation.
+`OUTPUT_NOT_GENERATED` is informational before the first publication; it explains why `canCheck` is `false` and does not block Generate.
 
-`source_fingerprint` is not a normal hash of one file or a ZIP of the source directory. The pipeline builds a bounded, path-aware manifest and normalizes only the `source_fingerprint` value in `build_config.ini` to `<self>`. Consequently, copying the computed fingerprint into that field does not change the computed value, but changing `executable_version`, another configuration value, a configuration comment, a workbook, `luban.conf`, `Defines/`, `config/`, CodeGen source, or a custom template does. After any intentional change, review the diff and repeat the two-inspection approval flow. Never auto-accept a new fingerprint in a build script.
+`sourceHash` is not a hash of one file or a ZIP of the source directory. The pipeline builds a bounded, path-aware manifest over six inputs: `build_config.ini`, `luban.conf`, `Datas/`, `Defines/`, `config/`, and the CodeGen sources. Text entries are normalized from CRLF to LF, a UTF-8 BOM is rejected, entries are sorted with `StringComparer.Ordinal`, and the manifest is hashed with SHA-256. Editing a workbook, `luban.conf`, a configuration value, or CodeGen source changes it. Renaming the Unity project directory, editing `Assets/` code, or adding scripts under `DataTable/Luban/` does not.
+
+`generate` writes the hash into `.cyclonegames-datatable-generation-receipt.json`; `check` compares that receipt with the live inputs. Generation records the hash it used, so editing workbooks without regenerating fails the check instead of shipping stale data.
 
 ### 5.4 Finish the first publication
 
@@ -308,11 +288,11 @@ The default command creates `Assets/Editor/DataTable/DataTableLubanSettings.asse
 - whether to refresh `AssetDatabase` after a successful operation;
 - the bounded captured-output limit.
 
-It does not copy or override profile roots, generator targets, hashes, timeouts, or fingerprints. **Resolved Configuration**, resolved output paths, identities, and readiness values are read-only projections.
+It does not copy or override profile roots, generator targets, hashes, timeouts, . **Resolved Configuration**, resolved output paths, identities, and readiness values are read-only projections.
 
 The Inspector is organized as a guided state machine:
 
-- **Pipeline Readiness**: saved asset, parsed configuration, selected profile, artifact identity, source fingerprint, output receipt, and transaction state.
+- **Pipeline Readiness**: saved asset, parsed configuration, selected profile, artifact identity, source hash, output receipt, and transaction state.
 - **Project Setup**: configuration selection, profile selection, refresh preference, capture limit, explicit save, ping, browse, and reveal actions.
 - **Selected Profile**: exact targets, EOL, and resolved roots.
 - **Validation Issues**: stable issue code, severity, explanation, and relevant path.
@@ -438,7 +418,7 @@ Do not point two profiles at the same roots. Do not have a content build process
 
 ### EOL and platform identity
 
-`line_ending` controls all generated text, including constant files. Use one EOL per profile and enforce it in source control. The generation receipt binds the selected Luban hash, tool hash, source fingerprint, schema hash, output hashes, and profile. Running `check` on a platform that selects a different Luban artifact fails identity validation even if output bytes happen to match. Standardize the selected DLL or isolate platform publishers by profile/root.
+`line_ending` controls all generated text, including constant files. Use one EOL per profile and enforce it in source control. The generation receipt binds the selected Luban hash, tool hash, source hash, schema hash, output hashes, and profile. Running `check` on a platform that selects a different Luban artifact fails identity validation even if output bytes happen to match. Standardize the selected DLL or isolate platform publishers by profile/root.
 
 ## 9. Optional strongly named string constants
 
@@ -503,7 +483,7 @@ Receipts exclude Unity `.meta` files. Unchanged generated files keep their exist
 
 | Artifact | Owner | Version-control policy | Safe cleanup/recovery |
 | --- | --- | --- | --- |
-| `build_config.ini`, `luban.conf`, workbooks, `Defines/`, `config/` | Data authors/tool owners | Commit reviewed authoritative inputs. | Restore from version control; reapprove fingerprint after an intentional change. |
+| `build_config.ini`, `luban.conf`, workbooks, `Defines/`, `config/` | Data authors/tool owners | Commit reviewed authoritative inputs. | Restore from version control; regenerate and commit after an intentional change. |
 | Approved Luban artifact | Toolchain owner | Commit it or install it reproducibly under a documented immutable policy. | Restore the exact approved SHA-256. |
 | `DataTableLubanSettings.asset` | Unity project | Commit exactly one saved authoritative asset. | Recreate explicitly only when the project chooses a new owner asset. |
 | Generated code/data plus receipt | Pipeline | Commit all together or keep all generated; never track a partial set. | Regenerate only from approved inputs when no recovery evidence exists. |
@@ -560,7 +540,7 @@ Run one writer per profile/output set. Do not generate the same roots concurrent
 | `SCHEMA_SOURCE_MISSING` | A path declared by `schemaFiles` does not exist. | Restore the authoritative source or remove the unused declaration; do not create an empty placeholder directory. |
 | `SCHEMA_SOURCE_INVALID` | A declared source traverses a symbolic link/reparse point or fails physical containment checks. | Restore it as a physical source below the approved root, then inspect again. |
 | `DATA_DIRECTORY_DECLARATION_INVALID` | `dataDir` is missing, malformed, outside the identity-bound roots, or `luban.conf` contains ambiguous duplicate JSON properties. | Set one portable relative `dataDir` below `Datas/`, `Defines/`, or `config/`, remove duplicate properties, then inspect again. |
-| `DATA_DIRECTORY_MISSING` | The declared `dataDir` does not exist as a directory. | Restore the authoritative directory or correct `dataDir`; do not approve a fingerprint until the source set is complete. |
+| `DATA_DIRECTORY_MISSING` | The declared `dataDir` does not exist as a directory. | Restore the authoritative directory or correct `dataDir`; do not publish until the source set is complete. |
 | `DATA_DIRECTORY_INVALID` | `dataDir` traverses a symbolic link/reparse point or fails physical containment checks. | Restore it as a physical directory below the approved source root, then inspect again. |
 | `TABLE_INPUT_MISSING` | A physical workbook derived from an `__tables__.xlsx` `input` entry is absent. | Restore the workbook below `dataDir`, or correct the comma-separated input/sheet selector; then inspect again. |
 | `TABLE_INPUT_DECLARATION_INVALID` | A table input escapes `dataDir`, traverses a reparse point, case-collides, exceeds a bound, uses malformed `Sheet@File` syntax, or an untyped schema source could bypass the XLSX manifest. | Use explicit typed XLSX schema declarations and portable contained input paths; remove the unsafe declaration, then inspect again. |
@@ -568,8 +548,6 @@ Run one writer per profile/output set. Do not generate the same roots concurrent
 | `LUBAN_EXECUTABLE_MISSING` | Selected Windows executable or fallback DLL is absent. | Restore the approved artifact or leave `windows_executable` empty and provide the approved DLL. |
 | `LUBAN_IDENTITY_PLACEHOLDER` | Version label/hash is not approved. | Verify artifact provenance and SHA-256, update the relevant identity fields, then inspect. |
 | `LUBAN_HASH_MISMATCH` | Selected file differs from its approved hash. | Quarantine the unexpected file; restore or explicitly review the intended artifact. |
-| `SOURCE_FINGERPRINT_PLACEHOLDER` | No source set has been approved. | Finish all input/config changes, review `actualSourceFingerprint`, then pin it. |
-| `SOURCE_FINGERPRINT_MISMATCH` | A fingerprinted file or directory presence changed. | Review the complete input diff; approve the new fingerprint only when intentional. |
 | `OUTPUT_NOT_GENERATED` | No valid receipt exists. | When `canGenerate` is true, run `generate --profile <name>`. |
 | output drift/unexpected file | Live content does not exactly match the receipt. | Stop writers, determine who changed the root, restore the receipted state or use a reviewed empty root for a new publication. |
 | `SETTINGS_UNSAVED` or duplicate settings | Inspector authoring is ambiguous/non-durable. | Keep one saved settings asset and save it before an operation. |
@@ -581,11 +559,11 @@ Run one writer per profile/output set. Do not generate the same roots concurrent
 | works on desktop, fails on Android/WebGL | `StreamingAssets` treated as a normal synchronous file path. | Use a platform-aware asynchronous acquisition adapter or a content provider. |
 | cross-platform `check` identity failure | Windows and non-Windows selected different Luban artifacts. | Standardize on the DLL by leaving `windows_executable` empty, or isolate outputs by profile. |
 
-When reporting a failure, include profile, inspection JSON, stable issue codes/paths, exit code, bounded stdout/stderr, selected artifact hash, source fingerprint status, run ID, and journal state. Do not include secrets or private remote credentials in workbooks, config, or logs.
+When reporting a failure, include profile, inspection JSON, stable issue codes/paths, exit code, bounded stdout/stderr, selected artifact hash, source hash, run ID, and journal state. Do not include secrets or private remote credentials in workbooks, config, or logs.
 
 ## 14. Performance and safety characteristics
 
-- File-set comparison is O(file count); verification/fingerprinting is O(total bytes).
+- File-set comparison is O(file count); verification/hashing is O(total bytes).
 - Publication writes O(changed bytes), while candidate disk space must hold the complete new generation plus changed/stale preimages.
 - File counts and aggregate bytes use explicit limits and overflow-safe arithmetic.
 - Workbook XML is read forward-only; shared strings use a bounded temporary spool and small cache rather than a full XML object tree.

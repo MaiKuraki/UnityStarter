@@ -229,6 +229,30 @@ namespace Build.Pipeline.Editor
             return true;
         }
 
+        // Invocation IDs that a preset keeps in the recipe but disables, because no template produces them.
+        public static IReadOnlyList<string> GetNonStandardInvocationIds(BuildData profile)
+        {
+            if (profile == null)
+            {
+                return Array.Empty<string>();
+            }
+
+            IReadOnlyList<BuildRecipeInvocation> authored = profile.RecipeInvocations;
+            var disabled = new List<string>();
+            for (int index = 0; index < authored.Count; index++)
+            {
+                BuildRecipeInvocation invocation = authored[index];
+                if (invocation == null || IsBuiltInStepType(invocation.StepTypeId))
+                {
+                    continue;
+                }
+
+                disabled.Add(invocation.InvocationId);
+            }
+
+            return disabled;
+        }
+
         public static BuildRecipeAnalysis Analyze(
             IReadOnlyList<BuildRecipeInvocation> authoredInvocations,
             IReadOnlyCollection<string> selectedInvocationIds = null)

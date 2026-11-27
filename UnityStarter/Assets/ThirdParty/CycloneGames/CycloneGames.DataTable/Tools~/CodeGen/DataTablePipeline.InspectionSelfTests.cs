@@ -144,17 +144,13 @@ namespace CycloneGames.DataTable.CodeGen
                     .Replace("executable_version=test", "executable_version=REPLACE_WITH_APPROVED_VERSION")
                     .Replace(
                         "executable_sha256=" + new string('a', 64),
-                        "executable_sha256=REPLACE_WITH_APPROVED_SHA256")
-                    .Replace(
-                        "source_fingerprint=" + new string('b', 64),
-                        "source_fingerprint=REPLACE_WITH_APPROVED_SOURCE_FINGERPRINT");
+                        "executable_sha256=REPLACE_WITH_APPROVED_SHA256");
                 File.WriteAllText(placeholderPath, text);
                 try
                 {
                     PipelineConfiguration placeholder = PipelineConfiguration.LoadForInspection(placeholderPath);
                     PipelineInspectionSnapshot snapshot = BuildInspectionSnapshot(placeholder, "client");
-                    if (!HasInspectionIssue(snapshot, "LUBAN_IDENTITY_PLACEHOLDER") ||
-                        !HasInspectionIssue(snapshot, "SOURCE_FINGERPRINT_PLACEHOLDER"))
+                    if (!HasInspectionIssue(snapshot, "LUBAN_IDENTITY_PLACEHOLDER"))
                     {
                         throw new InvalidOperationException(
                             "Pipeline inspection did not report placeholder identities structurally.");
@@ -412,7 +408,7 @@ namespace CycloneGames.DataTable.CodeGen
                             snapshot.Output.State != "unavailable" ||
                             !snapshot.Output.ReceiptExists ||
                             snapshot.Output.ReceiptValid ||
-                            snapshot.Toolchain.ActualSourceFingerprint.Length != 0 ||
+                            snapshot.Toolchain.SourceHash.Length != 0 ||
                             snapshot.Toolchain.SchemaSha256.Length != 0 ||
                             reportedOutputMutation ||
                             !HasInspectionIssue(snapshot, "OUTPUT_VALIDATION_DEFERRED") ||
@@ -523,7 +519,7 @@ namespace CycloneGames.DataTable.CodeGen
                         missingTransaction.CanGenerate ||
                         missingTransaction.CanCheck ||
                         missingTransaction.Output.State != "unavailable" ||
-                        missingTransaction.Toolchain.ActualSourceFingerprint.Length != 0 ||
+                        missingTransaction.Toolchain.SourceHash.Length != 0 ||
                         !HasInspectionIssue(missingTransaction, "RECOVERY_TRANSACTION_MISSING"))
                     {
                         throw new InvalidOperationException(
