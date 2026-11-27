@@ -145,6 +145,16 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
+        /// <summary>
+        /// True once Awake has captured the lifecycle owner thread. Editor tooling uses this to
+        /// tell a live Actor from a prefab asset or a not-yet-Awoken instance while in Play Mode;
+        /// it reads a plain field so it never throws before the Actor joins a World.
+        /// </summary>
+        public bool HasLifecycleOwnerThread
+        {
+            get { return actorOwnerThreadId != 0; }
+        }
+
         public ActorLifecycleState LifecycleState
         {
             get

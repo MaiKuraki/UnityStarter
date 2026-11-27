@@ -197,10 +197,12 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             var cameraManager = (CameraManager)target;
             serializedObject.Update();
 
+            bool canReadRuntimeState = Application.isPlaying && cameraManager.HasLifecycleOwnerThread;
+
             EditorGUILayout.LabelField("Camera Manager Status", EditorStyles.boldLabel);
             EditorGUILayout.BeginVertical(GUI.skin.box);
 
-            if (Application.isPlaying)
+            if (canReadRuntimeState)
             {
                 ICameraOutput activeOutput = cameraManager.ActiveOutput;
 
@@ -246,7 +248,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             EditorGUILayout.Space(8);
             DrawEditableConfigurationSection(cameraManager);
 
-            if (Application.isPlaying)
+            if (canReadRuntimeState)
             {
                 DrawReadOnlyTelemetrySection(cameraManager);
             }
