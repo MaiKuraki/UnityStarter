@@ -30,7 +30,7 @@ namespace CycloneGames.DataTable.CodeGen
                     () => PipelineCommand.Parse(new[] { "recover", "--config", "x", "--run-id", "unsafe" }),
                     "invalid recovery run identifier");
                 AssertThrows<InvalidOperationException>(
-                    () => ParseSections("[luban]\nsource_fingerprint=a\nsource_fingerprint=b\n"),
+                    () => ParseSections("[luban]\nexecutable_version=a\nexecutable_version=b\n"),
                     "duplicate configuration key");
                 AssertThrows<InvalidOperationException>(
                     () => ParseSections("[profile.client]\ncode_output=a\n[PROFILE.CLIENT]\ncode_output=b\n"),
@@ -130,7 +130,6 @@ namespace CycloneGames.DataTable.CodeGen
                     "windows_executable_sha256=\n" +
                     "executable_version=test\n" +
                     "executable_sha256=" + new string('a', 64) + "\n" +
-                    "source_fingerprint=" + new string('b', 64) + "\n" +
                     "process_timeout_seconds=60\n" +
                     "[templates]\ncustom_template_dir=\nbridge_files=\n" +
                     "[codegen]\n" +
@@ -181,9 +180,9 @@ namespace CycloneGames.DataTable.CodeGen
                 Directory.CreateDirectory(namedCacheDirectory);
                 string namedCacheInput = Path.Combine(namedCacheDirectory, "input.txt");
                 File.WriteAllText(namedCacheInput, "first\n");
-                string fingerprintBeforeNamedDirectoryChange = ComputeSourceFingerprint(configuration);
+                string fingerprintBeforeNamedDirectoryChange = ComputeSourceHash(configuration);
                 File.WriteAllText(namedCacheInput, "second\n");
-                string fingerprintAfterNamedDirectoryChange = ComputeSourceFingerprint(configuration);
+                string fingerprintAfterNamedDirectoryChange = ComputeSourceHash(configuration);
                 if (fingerprintBeforeNamedDirectoryChange == fingerprintAfterNamedDirectoryChange)
                 {
                     throw new InvalidOperationException(
@@ -281,27 +280,12 @@ namespace CycloneGames.DataTable.CodeGen
                     }
 
                     string executableHash = ComputeFileSha256(lubanPath);
-                    string placeholderFingerprint = new string('0', 64);
                     string pendingConfiguration = configurationText
                         .Replace(
                             "executable_sha256=" + new string('a', 64),
                             "executable_sha256=" + executableHash,
-                            StringComparison.Ordinal)
-                        .Replace(
-                            "source_fingerprint=" + new string('b', 64),
-                            "source_fingerprint=" + placeholderFingerprint,
                             StringComparison.Ordinal);
                     File.WriteAllText(configurationPath, pendingConfiguration);
-                    PipelineConfiguration pending = PipelineConfiguration.Load(configurationPath);
-                    string approvedFingerprint = ComputeSourceFingerprint(
-                        pending,
-                        writeSummary: false);
-                    File.WriteAllText(
-                        configurationPath,
-                        pendingConfiguration.Replace(
-                            "source_fingerprint=" + placeholderFingerprint,
-                            "source_fingerprint=" + approvedFingerprint,
-                            StringComparison.Ordinal));
                     PipelineConfiguration approved = PipelineConfiguration.Load(configurationPath);
 
                     PipelineInspectionSnapshot snapshot = BuildInspectionSnapshot(

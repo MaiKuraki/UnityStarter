@@ -18,7 +18,7 @@ namespace CycloneGames.DataTable.CodeGen
                 Directory.CreateDirectory(temporaryRoot);
                 try
                 {
-                    RunStreamingFingerprintSelfTests(temporaryRoot);
+                    RunStreamingDigestSelfTests(temporaryRoot);
                     RunBoundedCleanupSelfTest(temporaryRoot);
                     RunProcessIdentitySelfTest();
                 }
@@ -31,43 +31,30 @@ namespace CycloneGames.DataTable.CodeGen
                 }
             }
 
-            private static void RunStreamingFingerprintSelfTests(string temporaryRoot)
+            private static void RunStreamingDigestSelfTests(string temporaryRoot)
             {
                 string crossChunkPath = Path.Combine(temporaryRoot, "cross-chunk.txt");
                 string crossChunkInput = new string('a', 4098) + "\r\nb";
                 File.WriteAllText(crossChunkPath, crossChunkInput, new UTF8Encoding(false));
                 string expectedCrossChunkHash = ComputeBytesSha256(
                     Encoding.UTF8.GetBytes(new string('a', 4098) + "\nb"));
-                if (ComputeNormalizedTextSha256(crossChunkPath, normalizeSelf: false) != expectedCrossChunkHash)
+                if (ComputeNormalizedTextSha256(crossChunkPath) != expectedCrossChunkHash)
                 {
                     throw new InvalidOperationException(
-                        "Streaming fingerprint self-test failed CRLF normalization across a read boundary.");
-                }
-
-                string selfPath = Path.Combine(temporaryRoot, "self.ini");
-                File.WriteAllText(
-                    selfPath,
-                    "before\r\nsource_fingerprint=" + new string('f', 9000) + "\r\nafter\n",
-                    new UTF8Encoding(false));
-                string expectedSelfHash = ComputeBytesSha256(
-                    Encoding.UTF8.GetBytes("before\nsource_fingerprint=<self>\nafter\n"));
-                if (ComputeNormalizedTextSha256(selfPath, normalizeSelf: true) != expectedSelfHash)
-                {
-                    throw new InvalidOperationException(
-                        "Streaming fingerprint self-test failed source_fingerprint normalization.");
+                        "Streaming digest self-test failed CRLF normalization across a read boundary.");
                 }
 
                 string bomPath = Path.Combine(temporaryRoot, "bom.txt");
                 File.WriteAllBytes(bomPath, new byte[] { 0xef, 0xbb, 0xbf, (byte)'x' });
                 AssertThrows<InvalidOperationException>(
-                    () => ComputeNormalizedTextSha256(bomPath, normalizeSelf: false),
-                    "fingerprint UTF-8 BOM");
+                    () => ComputeNormalizedTextSha256(bomPath),
+                    "source UTF-8 BOM");
 
                 string invalidUtf8Path = Path.Combine(temporaryRoot, "invalid-utf8.txt");
                 File.WriteAllBytes(invalidUtf8Path, new byte[] { 0xc3, 0x28 });
                 AssertThrows<InvalidOperationException>(
-                    () => ComputeNormalizedTextSha256(invalidUtf8Path, normalizeSelf: false),
-                    "invalid fingerprint UTF-8");
+                    () => ComputeNormalizedTextSha256(invalidUtf8Path),
+                    "invalid source UTF-8");
 
                 string standaloneCarriageReturnPath = Path.Combine(temporaryRoot, "standalone-cr.txt");
                 File.WriteAllBytes(
@@ -75,9 +62,8 @@ namespace CycloneGames.DataTable.CodeGen
                     new byte[] { (byte)'a', (byte)'\r', (byte)'b' });
                 AssertThrows<InvalidOperationException>(
                     () => ComputeNormalizedTextSha256(
-                        standaloneCarriageReturnPath,
-                        normalizeSelf: false),
-                    "standalone fingerprint carriage return");
+                        standaloneCarriageReturnPath),
+                    "standalone source carriage return");
             }
 
             private static void RunBoundedCleanupSelfTest(string temporaryRoot)

@@ -195,6 +195,16 @@ namespace Build.Pipeline.Editor
             BuildData profile = (BuildData)target;
             bool narrow = BuildInspectorUi.IsNarrowInspector();
             BuildInspectorUi.DrawSubsectionLabel("Quick Setup");
+            IReadOnlyList<string> disabledByPreset =
+                BuildRecipePresetCatalog.GetNonStandardInvocationIds(profile);
+            if (disabledByPreset.Count > 0)
+            {
+                BuildInspectorUi.DrawNotice(
+                    "Applying a preset keeps these invocations but sets enabled = false: " +
+                    string.Join(", ", disabledByPreset),
+                    BuildInspectorTone.Warning);
+            }
+
             var commands = new BuildInspectorCommand[RecipePresetOrder.Length];
             for (int index = 0; index < RecipePresetOrder.Length; index++)
             {
@@ -207,6 +217,12 @@ namespace Build.Pipeline.Editor
                 if (!enabled && !string.IsNullOrWhiteSpace(unavailableReason))
                 {
                     tooltip += "\n\n" + unavailableReason;
+                }
+
+                if (disabledByPreset.Count > 0)
+                {
+                    tooltip += "\n\nApplying this preset disables: " +
+                               string.Join(", ", disabledByPreset);
                 }
 
                 commands[index] = new BuildInspectorCommand(

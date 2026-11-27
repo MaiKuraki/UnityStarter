@@ -73,9 +73,7 @@ namespace CycloneGames.DataTable.CodeGen
                 public string ConfiguredSha256 { get; set; } = string.Empty;
                 public string ActualSha256 { get; set; } = string.Empty;
                 public string LubanIdentityStatus { get; set; } = "invalid";
-                public string ConfiguredSourceFingerprint { get; set; } = string.Empty;
-                public string ActualSourceFingerprint { get; set; } = string.Empty;
-                public string SourceFingerprintStatus { get; set; } = "unavailable";
+                public string SourceHash { get; set; } = string.Empty;
                 public string SchemaSha256 { get; set; } = string.Empty;
             }
 
@@ -294,7 +292,6 @@ namespace CycloneGames.DataTable.CodeGen
                     LubanConfigurationPath = configuration.LubanConfigurationPath,
                     LubanConfigurationExists = File.Exists(configuration.LubanConfigurationPath),
                     ConfiguredVersion = configuration.LubanVersion,
-                    ConfiguredSourceFingerprint = configuration.SourceFingerprint,
                 };
                 if (!result.CodegenProjectExists)
                 {
@@ -388,26 +385,13 @@ namespace CycloneGames.DataTable.CodeGen
                     result.LubanIdentityStatus = "placeholder";
                 }
 
-                bool configuredFingerprintApproved = IsSha256(configuration.SourceFingerprint) &&
-                                                     !IsPlaceholder(configuration.SourceFingerprint);
-                if (!configuredFingerprintApproved)
-                {
-                    result.SourceFingerprintStatus = "placeholder";
-                    issues.Add(
-                        "SOURCE_FINGERPRINT_PLACEHOLDER",
-                        "error",
-                        "source",
-                        "The source fingerprint has not been explicitly approved.",
-                        configuration.ConfigurationPath);
-                }
-
                 if (!includeDeepValidation)
                 {
                     issues.Add(
                         "TOOLCHAIN_DEEP_VALIDATION_DEFERRED",
                         "info",
                         "transaction",
-                        "Toolchain hashes and the bounded source fingerprint were not computed while transaction state is non-idle.",
+                        "Toolchain hashes and the bounded source hash were not computed while transaction state is non-idle.",
                         configuration.LockDirectory);
                     return result;
                 }
@@ -453,39 +437,14 @@ namespace CycloneGames.DataTable.CodeGen
 
                 try
                 {
-                    result.ActualSourceFingerprint = ComputeSourceFingerprint(
+                    result.SourceHash = ComputeSourceHash(
                         configuration,
                         writeSummary: false);
-                    if (configuredFingerprintApproved)
-                    {
-                        if (string.Equals(
-                                result.ActualSourceFingerprint,
-                                configuration.SourceFingerprint,
-                                StringComparison.OrdinalIgnoreCase))
-                        {
-                            result.SourceFingerprintStatus = "current";
-                        }
-                        else
-                        {
-                            result.SourceFingerprintStatus = "mismatch";
-                            issues.Add(
-                                "SOURCE_FINGERPRINT_MISMATCH",
-                                "error",
-                                "source",
-                                "The current bounded source fingerprint differs from the approved value.",
-                                configuration.ConfigurationPath);
-                        }
-                    }
                 }
                 catch (Exception exception) when (IsRecoverableException(exception))
                 {
-                    if (configuredFingerprintApproved)
-                    {
-                        result.SourceFingerprintStatus = "unavailable";
-                    }
-
                     issues.Add(
-                        "SOURCE_FINGERPRINT_UNAVAILABLE",
+                        "SOURCE_HASH_UNAVAILABLE",
                         "error",
                         "source",
                         exception.Message,
@@ -525,7 +484,6 @@ namespace CycloneGames.DataTable.CodeGen
                                      workbooksReady && configuredDataDirectoryReady &&
                                      configuredSchemaSourcesReady && configuredTableInputsReady &&
                                      result.LubanIdentityStatus == "approved" &&
-                                     result.SourceFingerprintStatus == "current" &&
                                      result.SchemaSha256.Length != 0 && toolHash.Length != 0 &&
                                      (configuration.CustomTemplateRoot.Length == 0 ||
                                       Directory.Exists(configuration.CustomTemplateRoot));
@@ -535,7 +493,7 @@ namespace CycloneGames.DataTable.CodeGen
                         executablePath,
                         useDotNetHost,
                         result.ActualSha256,
-                        result.ActualSourceFingerprint,
+                        result.SourceHash,
                         result.SchemaSha256,
                         toolHash);
                     result.State = "ready";

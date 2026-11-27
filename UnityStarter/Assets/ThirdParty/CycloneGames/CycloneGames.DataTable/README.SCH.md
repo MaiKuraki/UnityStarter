@@ -242,7 +242,7 @@ Key 或 contract 不存在时 `Get` 抛出 `KeyNotFoundException`，`TryGet` 是
 正常顺序如下：
 
 1. 对所选 profile 执行 `inspect`，并以 `canGenerate`、`canCheck` 和 `canRecover` 作为操作依据。
-2. 校验 config、必需 workbook、输出 containment、tool hash、Luban hash 和 source fingerprint。
+2. 校验 config、必需 workbook、输出 containment、tool hash、Luban hash 和 source digest。
 3. 取得单 writer lock 并捕获 live-output baseline。
 4. 只在 transaction candidate 目录运行 Luban 和 string-constant generation。
 5. 要求至少一个 code file 和一个 data file，然后 hash candidate 并创建 generation receipt。
