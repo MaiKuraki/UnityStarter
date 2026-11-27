@@ -188,7 +188,6 @@ namespace CycloneGames.DataTable.CodeGen
                     string lubanSha256,
                     string windowsLubanPath,
                     string windowsLubanSha256,
-                    string sourceFingerprint,
                     int processTimeoutSeconds,
                     string codegenProjectPath,
                     StringConstantConfiguration stringConstants,
@@ -205,7 +204,6 @@ namespace CycloneGames.DataTable.CodeGen
                     LubanSha256 = lubanSha256;
                     WindowsLubanPath = windowsLubanPath;
                     WindowsLubanSha256 = windowsLubanSha256;
-                    SourceFingerprint = sourceFingerprint;
                     ProcessTimeoutSeconds = processTimeoutSeconds;
                     CodegenProjectPath = codegenProjectPath;
                     CodegenRoot = Path.GetDirectoryName(codegenProjectPath) ?? string.Empty;
@@ -235,7 +233,6 @@ namespace CycloneGames.DataTable.CodeGen
                 public string LubanSha256 { get; }
                 public string WindowsLubanPath { get; }
                 public string WindowsLubanSha256 { get; }
-                public string SourceFingerprint { get; }
                 public int ProcessTimeoutSeconds { get; }
                 public string CodegenProjectPath { get; }
                 public string CodegenRoot { get; }
@@ -299,7 +296,7 @@ namespace CycloneGames.DataTable.CodeGen
                         luban,
                         "luban",
                         "luban_dll", "executable_version", "executable_sha256",
-                        "windows_executable", "windows_executable_sha256", "source_fingerprint",
+                        "windows_executable", "windows_executable_sha256",
                         "process_timeout_seconds");
                     ValidateKnownKeys(templates, "templates", "custom_template_dir", "bridge_files");
                     ValidateKnownKeys(
@@ -439,7 +436,6 @@ namespace CycloneGames.DataTable.CodeGen
                         RequireValue(luban, "executable_sha256", "luban"),
                         windowsLubanPath,
                         GetOptionalValue(luban, "windows_executable_sha256"),
-                        RequireValue(luban, "source_fingerprint", "luban"),
                         timeoutSeconds,
                         codegenProjectPath,
                         stringConstants,

@@ -271,7 +271,7 @@ namespace CycloneGames.DataTable.CodeGen
                 string dataHash = ComputeOutputAggregate(dataFiles.Values);
                 string generation = ComputeBytesSha256(Encoding.UTF8.GetBytes(
                     profile.Name + "\n" + identity.ToolHash + "\n" + identity.LubanHash + "\n" +
-                    identity.SourceFingerprint + "\n" + identity.SchemaHash + "\n" + codeHash + "\n" + dataHash + "\n"));
+                    identity.SourceHash + "\n" + identity.SchemaHash + "\n" + codeHash + "\n" + dataHash + "\n"));
                 var files = codeFiles.Values.Concat(dataFiles.Values)
                     .OrderBy(static file => file.Root, StringComparer.Ordinal)
                     .ThenBy(static file => file.Path, StringComparer.Ordinal)
@@ -282,7 +282,7 @@ namespace CycloneGames.DataTable.CodeGen
                     Generation = generation,
                     ToolSha256 = identity.ToolHash,
                     LubanSha256 = identity.LubanHash,
-                    SourceFingerprint = identity.SourceFingerprint,
+                    SourceHash = identity.SourceHash,
                     SchemaSha256 = identity.SchemaHash,
                     CodeOutputSha256 = codeHash,
                     DataOutputSha256 = dataHash,
@@ -610,11 +610,11 @@ namespace CycloneGames.DataTable.CodeGen
                 if (requireCurrentIdentity &&
                     (identity == null || receipt.ToolSha256 != identity.ToolHash ||
                      receipt.LubanSha256 != identity.LubanHash ||
-                     receipt.SourceFingerprint != identity.SourceFingerprint ||
+                     receipt.SourceHash != identity.SourceHash ||
                      receipt.SchemaSha256 != identity.SchemaHash))
                 {
                     throw new InvalidOperationException(
-                        "Live output receipt does not match the current approved tool/source/schema identity.");
+                        "Live output receipt does not match the current tool/source/schema identity.");
                 }
 
                 Dictionary<string, ReceiptFile> actualCode = EnumerateOutputFiles(

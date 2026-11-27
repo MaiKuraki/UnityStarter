@@ -67,17 +67,17 @@ UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGe
     <与 Provider 匹配的生成数据根目录>/
 ```
 
-三个 `Datas/__*.xlsx` schema 工作簿是必需输入。`Datas/`、`Defines/` 与 `config/` 都属于 fingerprint 输入；这些目录是否存在也会影响身份。权威工作簿名、路径与大小写必须可在 Windows、macOS 和 Linux 间移植。符号链接、reparse point、路径穿越、大小写冲突、带 UTF-8 BOM 的文本、独立 CR、无法分类的 fingerprint 文件类型，以及超出文件/字节预算都会失败关闭。
+三个 `Datas/__*.xlsx` schema 工作簿是必需输入。`Datas/`、`Defines/` 与 `config/` 都属于 hash 输入；这些目录是否存在也会影响身份。权威工作簿名、路径与大小写必须可在 Windows、macOS 和 Linux 间移植。符号链接、reparse point、路径穿越、大小写冲突、带 UTF-8 BOM 的文本、独立 CR、无法分类的 hash 输入类型，以及超出文件/字节预算都会失败关闭。
 
-权威 source fingerprint 包含：
+权威 source hash 包含：
 
-- `build_config.ini`，仅将其中的 `source_fingerprint` 值规范化为 `<self>`；
+- `build_config.ini`；
 - `luban.conf`；
 - `Datas/`、`Defines/` 与 `config/` 下的完整物理目录树；
 - CodeGen 项目目录树，但排除其直接子目录 `bin/` 与 `obj/`；
 - 配置后启用的 custom-template 目录树。
 
-生成根目录、receipt、writer lock、transaction、cache 与选中的 Luban 二进制文件不属于 source fingerprint 条目。选中的二进制文件使用独立 SHA-256 身份。
+生成根目录、receipt、writer lock、transaction、cache 与选中的 Luban 二进制文件不属于 source hash 条目。选中的二进制文件使用独立 SHA-256 身份。
 
 ## 3. `luban.conf`：group、target 与 profile
 
@@ -103,7 +103,7 @@ UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGe
 2. 新增名称唯一的 `targets` 条目，并设置 group、manager 与 top module。
 3. 在 `build_config.ini` 中新增且只新增一个同名 `[profile.<name>]`。
 4. 为其设置互不重叠的代码与数据输出根目录。
-5. 运行 `inspect`，评审新的 source fingerprint，批准后再对该 profile 执行 generate 与 check。
+5. 运行 `inspect`，评审新的 source hash，批准后再对该 profile 执行 generate 与 check。
 
 `schemaFiles` 当前解析 `Datas/__tables__.xlsx`、`Datas/__beans__.xlsx` 与 `Datas/__enums__.xlsx`，没有声明外部 `Defines/` source。`dataDir` 为 `Datas`，table schema 声明的业务工作簿必须保持在这个已绑定身份的目录下。`dataDir` 与每个已声明 schema source 都必须是 `Datas/`、`Defines/` 或 `config/` 内的 portable 相对路径，必须物理存在，且不得经过符号链接或 reparse point；重复或大小写冲突的 JSON property 会被拒绝。`inspect` 会在允许生成前报告声明、存在性和路径安全错误，strict generation 也会在启动 Luban 前重复同一 preflight。`luban.conf` 与工作簿都参与 schema 和 source 身份，应该在同一个已评审变更中维护。
 
@@ -119,7 +119,7 @@ Common.xlsx, LiveOps@Events.xlsx, Tables/RegionEU@Events.xlsx
 - Sheet selector 位于 `@` 前。`LiveOps@Events.xlsx` 表示读取物理文件 `Events.xlsx` 的 `LiveOps` sheet；`Tables/RegionEU@Events.xlsx` 表示读取 `Tables/Events.xlsx` 的 `RegionEU` sheet。
 - 每个派生物理路径都必须是 `dataDir` 下的 portable 相对路径；文件必须存在、保持物理包含，且不得经过符号链接或 reparse point。
 - 仅大小写不同的路径会被拒绝，确保同一 manifest 在大小写敏感与不敏感文件系统上具有相同含义。
-- `dataDir` 本身必须位于 `Datas/`、`Defines/` 或 `config/` 中，因此每个已接受 input 文件都会计入 source fingerprint 与 generation identity。
+- `dataDir` 本身必须位于 `Datas/`、`Defines/` 或 `config/` 中，因此每个已接受 input 文件都会计入 source hash 与 generation identity。
 
 该 preflight 校验 input manifest 与物理文件身份；所选 worksheet 与 table schema 内容仍由 Luban 负责校验。
 
@@ -136,7 +136,6 @@ Common.xlsx, LiveOps@Events.xlsx, Tables/RegionEU@Events.xlsx
 | `executable_version` | 是 | 已评审的来源/版本标签，不得为占位值；工具不会从二进制自动推导该标签。 |
 | `executable_sha256` | 是 | `luban_dll` 的精确 SHA-256。 |
 | `windows_executable_sha256` | 条件必需 | 所选 Windows 可执行文件的精确 SHA-256；`windows_executable` 为空时可为空。 |
-| `source_fingerprint` | 是 | 从 `inspect` 获取并经过评审的当前 source fingerprint。 |
 | `process_timeout_seconds` | 是 | Luban 超时范围 `[1, 86400]`，仓库配置为 `600`。 |
 
 Windows 选择逻辑与文件是否存在相关。若配置了 `windows_executable` 但文件不存在，Windows 会 fallback 到 `luban_dll`；若文件存在，则必须提供 Windows hash，DLL hash 不再是该次运行选中的身份。若同一个 receipt/profile 需要在多个操作系统上检查，请将 `windows_executable` 置空，让所有发布者和检查者使用同一 DLL。若必须使用不同平台工件，应设置不同 profile 与互不重叠的输出根目录，使每个 receipt 只有一个稳定 Luban 身份。
@@ -145,7 +144,7 @@ Windows 选择逻辑与文件是否存在相关。若配置了 `windows_executab
 
 | Key | 契约 |
 | --- | --- |
-| `custom_template_dir` | 可选的物理目录，必须严格位于 `DataTable/Luban/` 下，并计入 source fingerprint。 |
+| `custom_template_dir` | 可选的物理目录，必须严格位于 `DataTable/Luban/` 下，并计入 source hash。 |
 | `bridge_files` | 可选的逗号/分号分隔 portable 相对路径，最多 256 项，路径相对于 custom-template 目录；非空时必须设置 `custom_template_dir`。 |
 
 Bridge 文件会被复制到 code candidate，并进行哈希校验和 receipt 登记。除非确实需要已评审的静态源代码配套文件，否则保持空列表。Unity 程序集定义与其他项目所有权文件应位于已发布 `code_output` 之外；不要通过 `bridge_files` 发布 `.asmdef`。
@@ -195,14 +194,13 @@ Bridge 文件会被复制到 code candidate，并进行哈希校验和 receipt �
 
 ### 5.2 获取并固定 Luban 身份
 
-四个身份字段具有不同的权威来源：
+三个身份字段具有不同的权威来源：
 
 | 字段 | 权威值来源 |
 | --- | --- |
 | `executable_version` | 来自工件来源或内部构建记录、经过评审的 release/build 标签。文件元数据只是读取便利，不能证明来源。 |
 | `executable_sha256` | 对 `luban_dll` 配置的精确文件独立计算得到的 SHA-256。 |
 | `windows_executable_sha256` | 对 `windows_executable` 独立计算得到的 SHA-256；`windows_executable` 为空时也保持为空。 |
-| `source_fingerprint` | 前三个字段和全部源输入稳定后，由 `inspect` 生成并经过评审的 `toolchain.actualSourceFingerprint`。 |
 
 在 Windows 上，可以查看本地 assembly 元数据，并与已批准的 release/build 记录核对。项目可以使用 `4.11.0.0` 这样的可读 `FileVersion`，也可以使用包含 build metadata 的 `ProductVersion`。固定精确字节的是 SHA-256，而不是这个标签。
 
@@ -234,16 +232,15 @@ shasum -a 256 Tools/DataTable/Luban/Luban.dll
 shasum -a 256 Tools/DataTable/Luban/Luban.exe
 ```
 
-先写入经过评审的版本标签和 hash，同时保留 source fingerprint 占位值：
+先写入经过评审的版本标签和 hash：
 
 ```ini
 executable_version=4.11.0.0
 executable_sha256=REPLACE_WITH_APPROVED_LUBAN_SHA256
 windows_executable_sha256=REPLACE_WITH_APPROVED_LUBAN_EXE_SHA256
-source_fingerprint=REPLACE_WITH_APPROVED_SOURCE_FINGERPRINT
 ```
 
-### 5.3 通过两次 inspection 批准 source fingerprint
+### 5.3 派生 source hash 并发布
 
 设置版本和工件 hash 后，运行只读 inspection：
 
@@ -255,38 +252,21 @@ DataTable\Luban\gen_code_bin_to_project_lazyload.bat inspect --profile client --
 bash DataTable/Luban/gen_code_bin_to_project_lazyload.sh inspect --profile client --format json
 ```
 
-`source_fingerprint` 仍是占位值时，第一次 inspection 按预期报告 `blocked`。这是审批工作流，不是版本格式错误。评审完整 `issues` 列表和以下身份字段：
+管线每次运行都从当前工作树派生 `toolchain.sourceHash`。配置里不保存这个值，也没有需要回填的字段。
 
-```json
-{
-  "toolchain": {
-    "configuredVersion": "<reviewed-version-label>",
-    "configuredSha256": "<configured-selected-artifact-sha256>",
-    "actualSha256": "<actual-selected-artifact-sha256>",
-    "lubanIdentityStatus": "approved",
-    "actualSourceFingerprint": "<current-64-character-source-fingerprint>"
-  }
-}
-```
-
-configured 与 actual 工件 hash 不同、选择的工件不符合预期，或者存在尚未评审的其他源输入变更时，不得批准 fingerprint。评审通过后，将精确的 `toolchain.actualSourceFingerprint` 复制到配置：
-
-```ini
-source_fingerprint=<current-64-character-source-fingerprint>
-```
-
-第二次运行相同 inspection。只有以下条件全部成立时才能继续：
+只有以下条件全部成立时才能继续：
 
 - `status` 为 `ready`；
 - `canGenerate` 为 `true`；
 - `toolchain.lubanIdentityStatus` 为 `approved`；
-- `toolchain.sourceFingerprintStatus` 为 `current`；
 - `transaction.state` 为 `idle`；
 - 不存在 error severity issue。
 
 首次成功发布前，`OUTPUT_NOT_GENERATED` 是信息类 issue，用于解释 `canCheck` 为什么仍为 `false`，不会阻止第一次 Generate。
 
-`source_fingerprint` 不是对单个文件或源码目录 ZIP 计算的普通 hash。管线会创建有界且感知路径的 manifest，并只把 `build_config.ini` 中 `source_fingerprint` 的值规范化为 `<self>`。因此，将计算结果复制到该字段不会再次改变计算值；修改 `executable_version`、其他配置值、配置注释、workbook、`luban.conf`、`Defines/`、`config/`、CodeGen 源码或 custom template 则会改变它。任何有意变更后都应评审 diff，并重复两次 inspection 审批流程。禁止在构建脚本中自动接受新的 fingerprint。
+`sourceHash` 不是对单个文件或源码目录 ZIP 计算的普通 hash。管线对六类输入构建有界且感知路径的 manifest：`build_config.ini`、`luban.conf`、`Datas/`、`Defines/`、`config/`、CodeGen 源码。文本条目先由 CRLF 归一化为 LF，拒绝 UTF-8 BOM，条目按 `StringComparer.Ordinal` 排序后用 SHA-256 计算。修改 workbook、`luban.conf`、配置值或 CodeGen 源码会改变它；修改 Unity 项目目录名、`Assets/` 下的代码，或在 `DataTable/Luban/` 下增删脚本不会。
+
+`generate` 把 hash 写入 `.cyclonegames-datatable-generation-receipt.json`，`check` 用回执与当前输入比对。生成会记录当时使用的 hash，因此改了表格却不重新生成时，`check` 会失败，而不是让过期数据进入构建。
 
 ### 5.4 完成首次发布
 
@@ -306,11 +286,11 @@ source_fingerprint=<current-64-character-source-fingerprint>
 - 成功后是否刷新 `AssetDatabase`；
 - 有界 captured-output 限制。
 
-它不会复制或覆盖 profile 输出根目录、生成器 target、hash、timeout 或 fingerprint。**Resolved Configuration**、已解析输出路径、身份与 readiness 值都是只读投影。
+它不会复制或覆盖 profile 输出根目录、生成器 target、hash、timeout 或 hash。**Resolved Configuration**、已解析输出路径、身份与 readiness 值都是只读投影。
 
 Inspector 是按状态引导的工作流：
 
-- **Pipeline Readiness**：已保存 asset、配置解析、所选 profile、工件身份、source fingerprint、输出 receipt 与 transaction 状态。
+- **Pipeline Readiness**：已保存 asset、配置解析、所选 profile、工件身份、source hash、输出 receipt 与 transaction 状态。
 - **Project Setup**：选择配置与 profile，设置刷新偏好和捕获限制，显式保存、ping、browse 与 reveal。
 - **Selected Profile**：精确 target、EOL 与已解析根目录。
 - **Validation Issues**：稳定 issue code、严重级别、说明与相关路径。
@@ -436,7 +416,7 @@ UnityStarter/Assets/UnityStarter/Scripts/Generated/
 
 ### EOL 与平台身份
 
-`line_ending` 控制全部生成文本，包括常量文件。每个 profile 只使用一种 EOL，并通过版本控制规则保持它。Generation receipt 绑定所选 Luban hash、tool hash、source fingerprint、schema hash、output hash 与 profile。即使输出字节恰好相同，在选择了不同 Luban 工件的平台运行 `check` 仍会因身份校验失败。应统一所选 DLL，或按 profile/root 隔离平台发布者。
+`line_ending` 控制全部生成文本，包括常量文件。每个 profile 只使用一种 EOL，并通过版本控制规则保持它。Generation receipt 绑定所选 Luban hash、tool hash、source hash、schema hash、output hash 与 profile。即使输出字节恰好相同，在选择了不同 Luban 工件的平台运行 `check` 仍会因身份校验失败。应统一所选 DLL，或按 profile/root 隔离平台发布者。
 
 ## 9. 可选强命名字符串常量
 
@@ -501,7 +481,7 @@ Receipt 不包含 Unity `.meta`。未变化生成文件会保留已有 metadata�
 
 | 工件 | Owner | 版本控制策略 | 安全清理/恢复 |
 | --- | --- | --- | --- |
-| `build_config.ini`、`luban.conf`、工作簿、`Defines/`、`config/` | 数据作者/工具 owner | 提交已评审权威输入。 | 从版本控制恢复；有意变更后重新批准 fingerprint。 |
+| `build_config.ini`、`luban.conf`、工作簿、`Defines/`、`config/` | 数据作者/工具 owner | 提交已评审权威输入。 | 从版本控制恢复；有意变更后重新生成并提交。 |
 | 已批准 Luban 工件 | 工具链 owner | 提交到仓库，或按有文档且不可变的策略可复现安装。 | 恢复精确批准的 SHA-256。 |
 | `DataTableLubanSettings.asset` | Unity 项目 | 提交且只提交一个已保存权威 asset。 | 仅在项目决定新的 owner asset 时显式重建。 |
 | 生成代码/数据与 receipt | 管线 | 一起提交或全部不提交；不得只跟踪部分集合。 | 不存在 recovery 证据时，可从批准输入重新生成。 |
@@ -558,7 +538,7 @@ Generate/check 后：
 | `SCHEMA_SOURCE_MISSING` | `schemaFiles` 声明的路径不存在。 | 恢复权威 source 或删除未使用声明；不要创建空占位目录。 |
 | `SCHEMA_SOURCE_INVALID` | 声明的 source 经过符号链接/reparse point，或未通过物理 containment 校验。 | 将其恢复为批准根目录下的物理 source，再次 inspect。 |
 | `DATA_DIRECTORY_DECLARATION_INVALID` | `dataDir` 缺失、格式错误、位于 identity-bound roots 之外，或 `luban.conf` 包含有歧义的重复 JSON property。 | 设置一个位于 `Datas/`、`Defines/` 或 `config/` 下的 portable 相对 `dataDir`，移除重复 property，再次 inspect。 |
-| `DATA_DIRECTORY_MISSING` | 声明的 `dataDir` 不是一个存在的目录。 | 恢复权威目录或修正 `dataDir`；源集合完整前不要批准 fingerprint。 |
+| `DATA_DIRECTORY_MISSING` | 声明的 `dataDir` 不是一个存在的目录。 | 恢复权威目录或修正 `dataDir`；源集合完整前不要重新生成。 |
 | `DATA_DIRECTORY_INVALID` | `dataDir` 经过符号链接/reparse point，或未通过物理 containment 校验。 | 将其恢复为批准 source root 下的物理目录，再次 inspect。 |
 | `TABLE_INPUT_MISSING` | 从 `__tables__.xlsx` 的 `input` 条目派生出的物理工作簿不存在。 | 在 `dataDir` 下恢复工作簿，或修正逗号分隔 input/sheet selector，然后再次 inspect。 |
 | `TABLE_INPUT_DECLARATION_INVALID` | Table input 逃逸 `dataDir`、经过 reparse point、存在大小写冲突、超出限制、使用畸形 `Sheet@File` 语法，或无类型 schema source 可能绕过 XLSX manifest。 | 使用显式 typed XLSX schema 声明与 portable contained input 路径；移除不安全声明，然后再次 inspect。 |
@@ -566,8 +546,6 @@ Generate/check 后：
 | `LUBAN_EXECUTABLE_MISSING` | 所选 Windows executable 或 fallback DLL 不存在。 | 恢复批准工件，或将 `windows_executable` 置空并提供批准 DLL。 |
 | `LUBAN_IDENTITY_PLACEHOLDER` | 版本标签/hash 未批准。 | 校验工件来源与 SHA-256，更新对应身份字段，再次 inspect。 |
 | `LUBAN_HASH_MISMATCH` | 所选文件与批准 hash 不同。 | 隔离意外文件；恢复批准工件，或显式评审预期工件。 |
-| `SOURCE_FINGERPRINT_PLACEHOLDER` | 尚未批准源集合。 | 完成所有输入/配置变更，评审 `actualSourceFingerprint` 后固定。 |
-| `SOURCE_FINGERPRINT_MISMATCH` | Fingerprint 文件或目录存在性发生变化。 | 评审完整输入 diff，只在变更有意时批准新 fingerprint。 |
 | `OUTPUT_NOT_GENERATED` | 不存在有效 receipt。 | `canGenerate` 为 true 时执行 `generate --profile <name>`。 |
 | Output drift/意外文件 | Live 内容与 receipt 不精确一致。 | 停止 writer，查明修改者，恢复 receipted 状态，或为新发布使用已评审空根目录。 |
 | `SETTINGS_UNSAVED` 或重复 settings | Inspector 配置歧义或未持久化。 | 只保留一个 settings asset，并在操作前保存。 |
@@ -579,11 +557,11 @@ Generate/check 后：
 | Desktop 正常但 Android/WebGL 失败 | 将 `StreamingAssets` 当作普通同步文件路径。 | 使用平台感知的异步获取 adapter 或内容 Provider。 |
 | 跨平台 `check` 身份失败 | Windows 与非 Windows 选择了不同 Luban 工件。 | 将 `windows_executable` 置空并统一 DLL，或按 profile 隔离输出。 |
 
-报告失败时应包含 profile、inspection JSON、稳定 issue code/path、退出码、有界 stdout/stderr、所选工件 hash、source fingerprint 状态、run ID 与 journal state。不要在工作簿、配置或日志中写入 secret 或私有远程凭据。
+报告失败时应包含 profile、inspection JSON、稳定 issue code/path、退出码、有界 stdout/stderr、所选工件 hash、source hash 状态、run ID 与 journal state。不要在工作簿、配置或日志中写入 secret 或私有远程凭据。
 
 ## 14. 性能与安全特性
 
-- 文件集合比较复杂度为 O(file count)，验证/fingerprint 复杂度为 O(total bytes)。
+- 文件集合比较复杂度为 O(file count)，验证/hash 复杂度为 O(total bytes)。
 - 发布只写 O(changed bytes)；candidate 磁盘空间必须容纳完整新 generation，以及变化/stale 文件的 preimage。
 - 文件数量与 aggregate byte 均有显式限制，并使用防溢出运算。
 - Workbook XML 使用 forward-only 读取；shared string 使用有界临时 spool 与小型 cache，不构建完整 XML object tree。
