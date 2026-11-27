@@ -5,10 +5,10 @@ using System.Runtime.CompilerServices;
 namespace CycloneGames.AssetManagement.Runtime
 {
     /// <summary>
-    /// Validates an Addressables multi-asset result before it becomes caller-visible.
+    /// Enforces the <see cref="IMultiAssetLoader"/> result contract for every provider adapter.
     /// A list that maps several entries onto one object is a failed load, not a shorter success.
     /// </summary>
-    internal static class AddressablesMultiAssetResult
+    internal static class MultiAssetResult
     {
         /// <summary>
         /// Identity comparer. UnityEngine.Object equality treats destroyed instances as equal to each other
@@ -35,21 +35,33 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         /// <summary>
-        /// Returns the failure for <paramref name="items"/> when two entries reference the same object;
-        /// null counts as one object. Returns null when the list holds fewer than two entries or every entry is
-        /// distinct. <paramref name="scratch"/> is cleared and reused. Main thread only.
+        /// Returns the failure when <paramref name="items"/> repeats an object reference or holds a null
+        /// entry. Provider adapters run a Unity-lifetime scan first so destroyed instances are rejected too.
+        /// Returns null for an empty list or a list of distinct objects.
+        /// <paramref name="scratch"/> is cleared and reused. Main thread only.
         /// </summary>
-        public static Exception Inspect<TAsset>(IList<TAsset> items, string location, HashSet<object> scratch)
+        public static Exception Inspect<T>(IReadOnlyList<T> items, string provider, string location, HashSet<object> scratch)
+            where T : class
         {
             int count = items != null ? items.Count : 0;
-            if (count < 2)
+            if (count == 0)
+            {
+                return null;
+            }
+
+            T first = items[0];
+            if (ReferenceEquals(first, null))
+            {
+                return CreateDanglingFailure(provider, location, 0);
+            }
+
+            if (count == 1)
             {
                 return null;
             }
 
             // A list whose entries all alias one object is the common sub-asset shape. This pass reads one
             // reference per entry, stops at the first different one and never touches the scratch set.
-            TAsset first = items[0];
             int index = 1;
             while (index < count && ReferenceEquals(items[index], first))
             {
@@ -58,7 +70,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
             if (index == count)
             {
-                return CreateFailure(location, count, 1);
+                return CreateFailure(provider, location, count, 1);
             }
 
             // A mix of distinct and repeated entries cannot be mapped back to the requested entries either.
@@ -70,7 +82,13 @@ namespace CycloneGames.AssetManagement.Runtime
             bool repeated = index > 1;
             for (; index < count; index++)
             {
-                if (scratch.Add(items[index]))
+                T item = items[index];
+                if (ReferenceEquals(item, null))
+                {
+                    return CreateDanglingFailure(provider, location, index);
+                }
+
+                if (scratch.Add(item))
                 {
                     distinct++;
                 }
@@ -80,15 +98,28 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
             }
 
-            return repeated ? CreateFailure(location, count, distinct) : null;
+            return repeated ? CreateFailure(provider, location, count, distinct) : null;
         }
 
-        private static Exception CreateFailure(string location, int count, int distinct)
+        public static Exception CreateTypeError(string provider, string location, int index, Type expected)
         {
             return new InvalidOperationException(
-                $"Addressables resolved {count} entries of '{location}' to {distinct} distinct object(s). " +
+                $"{provider} returned an entry at index {index} of '{location}' that is not a {expected.Name}.");
+        }
+
+        /// <summary>Reports an entry that is null or a destroyed UnityEngine.Object.</summary>
+        public static Exception CreateDanglingFailure(string provider, string location, int index)
+        {
+            return new InvalidOperationException(
+                $"{provider} returned a null or destroyed entry at index {index} of '{location}'.");
+        }
+
+        private static Exception CreateFailure(string provider, string location, int count, int distinct)
+        {
+            return new InvalidOperationException(
+                $"{provider} resolved {count} entries of '{location}' to {distinct} distinct object(s). " +
                 "The result cannot be mapped to the requested entries; " +
-                "load sub-assets individually with LoadAssetAsync<T>(location[subAssetName]).");
+                "load the entries individually with LoadAssetAsync<T>.");
         }
     }
 }

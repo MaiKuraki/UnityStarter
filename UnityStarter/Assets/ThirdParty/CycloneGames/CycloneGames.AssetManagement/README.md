@@ -281,7 +281,7 @@ using IMultiAssetHandle<AudioClip> clips = multiAssetLoader.LoadMultipleAssetsAs
 await clips.Task;
 ```
 
-A successful handle lists distinct objects. If the provider maps several entries to one object, the handle faults with `InvalidOperationException` and `Assets` stays empty. Textures imported as Multiple Sprite take this path: load their sprites one at a time with `LoadAssetAsync<Sprite>(texturePath[subSpriteName])`. [Providers and integrations](Documents~/Providers.md#multi-asset-loading) covers the check and cache behavior.
+A successful handle lists distinct, live objects of the requested type. Both adapters run the same check in the completion path: repeated references, null or destroyed objects, and wrong types fault the handle with `InvalidOperationException` and leave `Assets` empty. Textures imported as Multiple Sprite take this path: load their sprites one at a time with `LoadAssetAsync<Sprite>(texturePath[subSpriteName])`. [Providers and integrations](Documents~/Providers.md#multi-asset-loading) covers the check and cache behavior.
 
 ### Scene lifecycle
 

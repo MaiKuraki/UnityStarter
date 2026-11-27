@@ -281,7 +281,7 @@ using IMultiAssetHandle<AudioClip> clips = multiAssetLoader.LoadMultipleAssetsAs
 await clips.Task;
 ```
 
-成功的 handle 列出的对象互不相同。provider 把多个条目映射到同一个对象时，handle 以 `InvalidOperationException` 失败，`Assets` 保持为空。按 Multiple Sprite 导入的贴图会走到这里：用 `LoadAssetAsync<Sprite>(texturePath[subSpriteName])` 逐张加载 Sprite。[Provider 与集成](Documents~/Providers.SCH.md#多资产加载) 说明检查方式和缓存行为。
+成功的 handle 列出互不相同的、仍存活的、类型符合请求的对象。两个 adapter 在完成路径执行同一检查：重复引用、null 或已销毁对象、类型不符都会让 handle 以 `InvalidOperationException` 失败，`Assets` 保持为空。按 Multiple Sprite 导入的贴图会走到这里：用 `LoadAssetAsync<Sprite>(texturePath[subSpriteName])` 逐张加载 Sprite。[Provider 与集成](Documents~/Providers.SCH.md#多资产加载) 说明检查方式和缓存行为。
 
 ### Scene 生命周期
 

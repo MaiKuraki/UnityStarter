@@ -443,12 +443,44 @@ namespace CycloneGames.AssetManagement.Runtime
 
             // Several entries that resolve to one object describe none of the requested content;
             // the handle fails instead of publishing them.
-            Exception failure = AddressablesMultiAssetResult.Inspect(_raw.Result, _cacheKey.Location, _multiAssetResultScratch);
+            _assets.SetSource(_raw.Result);
+            Exception failure;
+            try
+            {
+                failure = ScanLifetime("Addressables");
+                if (failure == null)
+                {
+                    failure = MultiAssetResult.Inspect(
+                        _assets, "Addressables", _cacheKey.Location, _multiAssetResultScratch);
+                }
+            }
+            finally
+            {
+                _assets.Clear();
+            }
+
             if (failure != null)
             {
                 _resultFailure = failure;
                 throw failure;
             }
+        }
+
+        // Unity's == null covers destroyed instances, which ReferenceEquals inside the identity cannot see.
+        private Exception ScanLifetime(string provider)
+        {
+            IList<TAsset> items = _raw.Result;
+            int count = items != null ? items.Count : 0;
+            for (int i = 0; i < count; i++)
+            {
+                UnityEngine.Object item = items[i];
+                if (item == null)
+                {
+                    return MultiAssetResult.CreateDanglingFailure(provider, _cacheKey.Location, i);
+                }
+            }
+
+            return null;
         }
 
         public override void WaitForAsyncComplete()

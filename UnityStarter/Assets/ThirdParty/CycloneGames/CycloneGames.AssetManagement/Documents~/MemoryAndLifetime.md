@@ -302,7 +302,7 @@ var packageOptions = new AssetPackageInitOptions(
 
 Explicit limits allow 1-131,072 entries per idle segment and require at least 1 MiB for `IdleByteBudget`. These are safety bounds. Active memory is outside eviction authority.
 
-On every Active-to-idle transition, the cache estimates the current value using Unity's runtime-size query and allocation-free fallbacks for known texture, mesh, and audio types. Unknown estimates bypass idle retention. Every member of a multi-asset result must be measurable; one unknown member makes the aggregate bypass. A candidate larger than the complete idle budget is rejected before admission. A multi-asset result that repeats one object reference never reaches this estimate: the adapter faults the handle, and the cache disposes it on final release.
+On every Active-to-idle transition, the cache estimates the current value using Unity's runtime-size query and allocation-free fallbacks for known texture, mesh, and audio types. Unknown estimates bypass idle retention. Every member of a multi-asset result must be measurable; one unknown member makes the aggregate bypass. A candidate larger than the complete idle budget is rejected before admission. A multi-asset result with a repeated reference, a null or destroyed object, or a wrong type never reaches this estimate: the adapter faults the handle, and the cache disposes it on final release.
 
 The estimate can misstate transitive bundles, shared dependencies, native allocator overhead, GPU/driver memory, mip streaming, and provider metadata. `IdleByteBudget` is not a process-memory limit. Use Memory Profiler, platform GPU tools, resident-set measurements, and low-memory testing.
 

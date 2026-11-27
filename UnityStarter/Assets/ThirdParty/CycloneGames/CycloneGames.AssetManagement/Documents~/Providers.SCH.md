@@ -238,22 +238,25 @@ Resources 与 Addressables 不实现 `IAssetRawFileLoader`；需要可移植数�
 
 `IMultiAssetLoader.LoadMultipleAssetsAsync<T>(location)` 加载该 location 解析到的全部资产，返回一个 `IMultiAssetHandle<T>`。
 
-- 只有 `Assets` 中没有条目重复同一个对象引用时 handle 才成功；出现重复引用时 handle 失败，列表既不被缩短也不被去重。
+- 两个 adapter 在完成路径执行同一结果检查。成功的 handle 列出互不相同的、仍存活的、类型符合 `TAsset` 的对象。
+- 出现重复引用、null 或已销毁对象、类型不是 `TAsset` 的条目时 handle 失败，列表既不被缩短也不被去重。
 - `Assets` 只在 `Task` 成功后填充。pending、faulted 或 canceled 的 handle 读到空列表。
 - 失败的 handle 不进入 idle retention。最后一个 lease 释放时随之释放 provider handle。
 
 Addressables 会为按 Multiple Sprite 导入的贴图的每个子资产建立独立的 catalog location。在 Editor 的 asset-database provider 下，这些 location 加载到的都是第一张 Sprite，所以 `LoadAssetsAsync<Sprite>(texturePath)` 返回的列表里所有元素指向同一个 Sprite。把同一张贴图按 `UnityEngine.Object` 加载，得到的是主贴图，加上为每个子资产重复的那一张 Sprite。adapter 在 provider 操作完成时检查结果，两种形态都会让 handle 失败。
 
+YooAsset 解析一个 AssetInfo，从它所在的 bundle 读取一组对象。Editor 模拟模式用 `AssetDatabase.LoadAssetAtPath` 遍历 bundle 的主资产；Player 构建调用 `AssetBundle.LoadAllAssets`。两条路径都经过同一结果检查。同一个 location 在两种模式下返回的数量可能不同：模拟模式只返回主资产，bundle 返回主资产加子资产。产品数据不能假设数量跨模式稳定。
+
 ```mermaid
 flowchart TD
     Call["LoadMultipleAssetsAsync&lt;T&gt;(location)"] --> Cache{"缓存命中"}
     Cache -- 是 --> Lease["返回调用方 lease"]
-    Cache -- 否 --> Load["Addressables.LoadAssetsAsync"]
+    Cache -- 否 --> Load["Provider 加载"]
     Load --> Await["等待 provider 操作"]
     Await -- 失败 --> Fault["以 provider 消息失败"]
-    Await -- 成功 --> Inspect["检查结果引用"]
-    Inspect -- "全部不同" --> Succeed["以 provider 列表完成"]
-    Inspect -- "出现重复引用" --> Reject["失败：N 个条目解析为 D 个不同对象"]
+    Await -- 成功 --> Inspect["检查引用、存活、类型"]
+    Inspect -- "全部合法" --> Succeed["以 provider 列表完成"]
+    Inspect -- "重复 / null / 类型不符" --> Reject["失败：消息含 provider、数量与索引"]
     Fault --> Retire["最后一个 lease 释放 provider handle"]
     Reject --> Retire
     Succeed --> Idle["可进入 idle retention"]
@@ -289,7 +292,7 @@ for (int i = 0; i < clips.Assets.Count; i++)
 }
 ```
 
-引用检查线性遍历一次；identity set 扩容到已校验过的最大结果后不再分配，容量保留到 package 生命周期结束。
+`MultiAssetResult` 是两个 adapter 共用的纯 C# 检查器。它原地读取 provider 列表，不做拷贝，使用 package 持有的 identity set。遍历复杂度与列表长度线性相关。该集合扩容到已校验过的最大结果后，接受路径不再分配；容量保留到 package 生命周期结束。检查受主线程约束，与 handle 完成态和属性读取一致。
 
 ## 进阶主题
 
