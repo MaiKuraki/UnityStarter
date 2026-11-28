@@ -45,6 +45,7 @@
 - [技术栈](#技术栈)
 - [文档入口](#文档入口)
 - [验证状态](#验证状态)
+- [完整示例项目 GameJamTemplate\_Unity](#完整示例项目-gamejamtemplate_unity)
 - [相关项目](#相关项目)
 
 ## 如何使用这个仓库
@@ -55,6 +56,8 @@ UnityStarter 提供玩法代码出现之前就需要的结构：资源所有权�
 
 - **作为项目模板**：在 Unity 中打开 `UnityStarter/`，用内置工具改名，让项目自有的 `Assets/Build/` 层随着你的游戏继续演进。
 - **以 Package（UPM）形式**（推荐）：把 `CycloneGames` 目录下的包移到项目外，再用 Package Manager 引入。各包相互独立，项目只引入自己引用的部分，依赖由各包的 `package.json` 声明。
+
+UPM 方式的完整可运行示例见[完整示例项目 GameJamTemplate_Unity](#完整示例项目-gamejamtemplate_unity)。
 
 ## 项目内容概览
 
@@ -372,8 +375,23 @@ Unity -batchmode -nographics -projectPath UnityStarter -runTests \
 - 修改 BuildData 或 CI settings 前，使用 `Build > Pipeline > Print Selected Profile`。
 - Networking 模块仍属实验性；生产使用需要对选定的 transport、serializer 与 authority model 做端到端验证。
 
+## 完整示例项目 GameJamTemplate_Unity
+
+**[GameJamTemplate_Unity](https://github.com/MaiKuraki/GameJamTemplate_Unity)** 是一个独立、不包含玩法的完整游戏框架，面向 Game Jam 与中大型商业项目。它同时也是本仓库的实战示例：把所需的 `CycloneGames` 包以 UPM Git 依赖的形式固定到 UnityStarter 的某个 revision，组合出一条完整可运行的游戏流程。
+
+| 组合方式 | 包与集成 | 对应源码 |
+| --- | --- | --- |
+| 启动与玩法流程 | `GameplayFramework`（`GameInstance` / `World`，类 Unreal 拆分）+ Navigathena 场景流程：`Scene_Launch` → `Scene_Initial` → `Scene_Splash` → `Scene_Title` → `Scene_Gameplay` | `GameInstance.cs`、`SceneEntryPointLaunch.cs`、`SceneEntryPointGameplay.cs` |
+| 资源与配置 | `AssetManagement`（Addressables provider、按域释放的 runtime labels）+ `DataTable`（Luban 方案） | `AssetPackageBootstrap.cs`、`GameJamAssetRuntimeLabels.cs`、`Services/Config/`、`DataTable/` |
+| UI、输入与表现 | `UIFramework` + `InputSystem`（本地单玩家，键鼠 / 手柄自动切换）+ Unity Localization，配合 YarnSpinner 对话与可跳过的 VideoPlayer 过场 | `UI/Window/`、`Input/`、`UIWindowDialogue.cs`、`UIWindowFullScreenMovie.cs` |
+| 项目服务 | `Settings` + `Persistence`（SystemIO / VYaml）+ `Logging` / `Logging.Pipeline` / `Logging.Unity` + `Cheat` + `FontAssets`，由幂等的 `GameBootstrap` 与可插拔的 `AssetResolver` prefab 装配 | `GameBootstrap.cs`、`Services/Settings/`、`_CHEAT/` |
+| 构建与热更新 | 项目自有的 `Assets/Build/` 层：BuildData 依赖图（Luban 校验 → Addressables 内容 → Player）、`GameJam.AOT` / `GameJam.HotUpdate` 分层，以及可选的 HybridCLR / YooAsset / Obfuz 适配器 | `BuildData.asset`、`Assets/Build/Editor/BuildPipeline/Integrations/` |
+
+整个流程可以跑通：Play Mode 能走到标题界面，玩法场景播放开场视频、打开 HUD 与 BattleInfo 窗口，并运行 `Dialogue_Test` 对话节点。该项目 README 的「UnityStarter 特性展示」表把每项能力对应到具体源码，「关键类文件」一节给出一次启动的阅读顺序。其中用到的部分 CycloneGames 包已在中国大陆的中大型商业游戏中经过生产验证。
+
 ## 相关项目
 
+- **[GameJamTemplate_Unity](https://github.com/MaiKuraki/GameJamTemplate_Unity)** - 由 CycloneGames UPM 包组合出的完整游戏框架，展示多个模块如何拼成可运行的启动流程。
 - **[Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse)** - Rhythm game mechanics collection
 - **[Unity GAS Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)** - GAS demonstration project
 
