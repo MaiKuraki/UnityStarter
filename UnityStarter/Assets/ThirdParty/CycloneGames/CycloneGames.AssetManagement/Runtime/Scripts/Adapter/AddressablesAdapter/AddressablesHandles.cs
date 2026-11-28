@@ -1430,7 +1430,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             try
             {
-                _sizeOperation = Addressables.GetDownloadSizeAsync(_keys);
+                _sizeOperation = Addressables.GetDownloadSizeAsync((System.Collections.IEnumerable)_keys);
                 await _sizeOperation.ToUniTask();
                 if (_cancelled)
                 {
@@ -1513,7 +1513,7 @@ namespace CycloneGames.AssetManagement.Runtime
             try
             {
                 _downloadOperation = Addressables.DownloadDependenciesAsync(
-                    _keys,
+                    (System.Collections.IEnumerable)_keys,
                     Addressables.MergeMode.Union,
                     autoReleaseHandle: false);
                 await _downloadOperation.ToUniTask();
