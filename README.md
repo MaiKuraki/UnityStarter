@@ -45,6 +45,7 @@ The repository targets medium and large Unity projects that keep one codebase fo
 - [Technology Stack](#technology-stack)
 - [Documentation](#documentation)
 - [Validation Status](#validation-status)
+- [Reference Project: GameJamTemplate\_Unity](#reference-project-gamejamtemplate_unity)
 - [Related Projects](#related-projects)
 
 ## How to use this repository
@@ -55,6 +56,8 @@ Use the repository in two ways:
 
 - **As a project template**: open `UnityStarter/` in Unity, rename it with the bundled tools, and let the project-owned `Assets/Build/` layer evolve with your game.
 - **As a package (UPM)** (recommended): move out folders under `CycloneGames` and add them from Package Manager. Packages are independent, so a project imports only the ones it references; each declares its own dependencies.
+
+For a complete, runnable example of the UPM route, see [Reference Project: GameJamTemplate_Unity](#reference-project-gamejamtemplate_unity).
 
 ## What Is Inside
 
@@ -371,8 +374,23 @@ Unity -batchmode -nographics -projectPath UnityStarter -runTests   -testPlatform
 - Use `Build > Pipeline > Print Selected Profile` before changing BuildData or CI settings.
 - Networking modules remain experimental; production use needs end-to-end validation against the chosen transport, serializer and authority model.
 
+## Reference Project: GameJamTemplate_Unity
+
+**[GameJamTemplate_Unity](https://github.com/MaiKuraki/GameJamTemplate_Unity)** is a standalone, gameplay-free game framework for Game Jams and mid-size to large commercial projects. It is also the worked example for this repository: a complete, runnable game flow assembled from `CycloneGames` packages installed as UPM Git dependencies pinned to a UnityStarter revision. 
+
+| Composition | Packages and integrations | Where to read |
+| --- | --- | --- |
+| Startup and gameplay flow | `GameplayFramework` (`GameInstance` / `World`, Unreal-style split) + Navigathena scene flow: `Scene_Launch` → `Scene_Initial` → `Scene_Splash` → `Scene_Title` → `Scene_Gameplay` | `GameInstance.cs`, `SceneEntryPointLaunch.cs`, `SceneEntryPointGameplay.cs` |
+| Assets and config | `AssetManagement` (Addressables provider, runtime release labels) + `DataTable` (Luban backend) | `AssetPackageBootstrap.cs`, `GameJamAssetRuntimeLabels.cs`, `Services/Config/`, `DataTable/` |
+| UI, input and presentation | `UIFramework` + `InputSystem` (single local player, automatic keyboard/mouse and gamepad switching) + Unity Localization, with YarnSpinner dialogue and a skippable VideoPlayer cutscene | `UI/Window/`, `Input/`, `UIWindowDialogue.cs`, `UIWindowFullScreenMovie.cs` |
+| Project services | `Settings` + `Persistence` (SystemIO / VYaml) + `Logging` / `Logging.Pipeline` / `Logging.Unity` + `Cheat` + `FontAssets`, wired by an idempotent `GameBootstrap` on a pluggable `AssetResolver` prefab | `GameBootstrap.cs`, `Services/Settings/`, `_CHEAT/` |
+| Build and hot update | The project-owned `Assets/Build/` layer: a BuildData graph (Luban validation → Addressables content → Player), a `GameJam.AOT` / `GameJam.HotUpdate` assembly split, and optional HybridCLR / YooAsset / Obfuz adapters | `BuildData.asset`, `Assets/Build/Editor/BuildPipeline/Integrations/` |
+
+The template runs end to end: Play Mode reaches the title screen, then the gameplay scene plays an intro video, opens HUD and BattleInfo windows, and runs the `Dialogue_Test` Yarn node. Its README has a `UnityStarter capabilities` table that maps each capability to source files and a `Key source files` section giving a reading order for one full launch. Several of the CycloneGames packages wired up there are also in production use in mid-size and large commercial games in mainland China.
+
 ## Related Projects
 
+- **[GameJamTemplate_Unity](https://github.com/MaiKuraki/GameJamTemplate_Unity)** - A complete game framework composed from CycloneGames UPM packages; the reference for combining modules into a runnable startup flow.
 - **[Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse)** - Rhythm game mechanics collection
 - **[Unity GAS Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)** - GAS demonstration project
 
